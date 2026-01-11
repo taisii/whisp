@@ -1,0 +1,45 @@
+use std::env;
+
+fn main() {
+    if let Err(err) = run() {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
+    let mut args = env::args().skip(1);
+    let file = args
+        .next()
+        .ok_or_else(|| "wavファイルのパスが必要です".to_string())?;
+    let deepgram_key = args
+        .next()
+        .or_else(|| env::var("DEEPGRAM_API_KEY").ok())
+        .ok_or_else(|| "DEEPGRAM_API_KEYが必要です".to_string())?;
+    let gemini_key = args
+        .next()
+        .or_else(|| env::var("GEMINI_API_KEY").ok())
+        .ok_or_else(|| "GEMINI_API_KEYが必要です".to_string())?;
+
+    let audio = whisp_lib::audio_file::read_wav_as_mono_i16(std::path::Path::new(&file))
+        .map_err(|e| e.to_string())?;
+
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    let stt = rt
+        .block_on(whisp_lib::stt_client::run_deepgram_bytes(
+            &deepgram_key,
+            audio.sample_rate,
+            audio.pcm_bytes,
+            false,
+            None,
+            None,
+        ))
+        .map_err(|e| e.to_string())?;
+
+    let output = rt
+        .block_on(whisp_lib::post_processor::post_process(&gemini_key, &stt, "auto"))
+        .map_err(|e| e.to_string())?;
+
+    println!("--- STT ---\n{stt}\n\n--- OUTPUT ---\n{output}");
+    Ok(())
+}
