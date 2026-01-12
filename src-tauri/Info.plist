@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Whisp needs microphone access to transcribe your voice to text.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Whisp needs accessibility access to automatically paste transcriptions into your applications.</string>
+</dict>
+</plist>
