@@ -23,6 +23,7 @@ type Config = {
   api_keys: ApiKeys;
   shortcut: string;
   auto_paste: boolean;
+  avoid_clipboard_history: boolean;
   input_language: string;
   recording_mode: RecordingMode;
   context_rules: ContextRule[];
@@ -57,6 +58,7 @@ const emptyConfig: Config = {
   api_keys: { deepgram: "", gemini: "", openai: "" },
   shortcut: "Cmd+J",
   auto_paste: true,
+  avoid_clipboard_history: true,
   input_language: "ja",
   recording_mode: "toggle",
   context_rules: [],
@@ -490,6 +492,23 @@ export default function Settings() {
             />
             <small>ONで変換後にCmd+Vを送信します。</small>
           </label>
+          {config.auto_paste ? (
+            <label className="field toggle">
+              <span>クリップボード履歴を汚染しない</span>
+              <input
+                type="checkbox"
+                checked={config.avoid_clipboard_history}
+                onChange={(e) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    avoid_clipboard_history: e.target.checked,
+                  }))
+                }
+                disabled={loading}
+              />
+              <small>履歴アプリに残らないようマーカーを付与します。</small>
+            </label>
+          ) : null}
         </div>
 
         <div className="actions">

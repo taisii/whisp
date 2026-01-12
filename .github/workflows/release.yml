@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            arch: arm64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            arch: x64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Whisp ${{ github.ref_name }}"
+          releaseBody: |
+            ## インストール方法
+
+            1. `.dmg` ファイルをダウンロード
+            2. Whisp.app を `/Applications` にドラッグ
+            3. **重要**: 初回起動前にターミナルで以下を実行:
+               ```
+               xattr -r -d com.apple.quarantine /Applications/Whisp.app
+               ```
+            4. アプリを起動
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}

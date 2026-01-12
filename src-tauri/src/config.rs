@@ -63,6 +63,7 @@ pub struct Config {
     pub api_keys: ApiKeys,
     pub shortcut: String,
     pub auto_paste: bool,
+    pub avoid_clipboard_history: bool,
     pub input_language: String,
     pub recording_mode: RecordingMode,
     pub context_rules: Vec<ContextRule>,
@@ -81,6 +82,7 @@ impl Default for Config {
             },
             shortcut: "Cmd+J".to_string(),
             auto_paste: true,
+            avoid_clipboard_history: true,
             input_language: "ja".to_string(),
             recording_mode: RecordingMode::Toggle,
             context_rules: Vec::new(),
@@ -156,6 +158,7 @@ mod tests {
             },
             shortcut: "Option+Space".to_string(),
             auto_paste: false,
+            avoid_clipboard_history: true,
             input_language: "ja".to_string(),
             recording_mode: RecordingMode::PushToTalk,
             context_rules: vec![ContextRule {

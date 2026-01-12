@@ -2,7 +2,8 @@
 name = "whisp"
 version = "0.1.0"
 description = "A Tauri App"
-authors = ["you"]
+authors = ["Taisii"]
+license = "MIT"
 edition = "2021"
 default-run = "whisp"
 
@@ -38,8 +39,8 @@ rodio = { version = "0.17", features = ["symphonia-all"] }
 dirs = "5"
 hound = "3"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
-objc2-foundation = { version = "0.3", features = ["NSString"] }
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSRunningApplication", "NSWorkspace"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString"] }
 core-foundation-sys = "0.8"
 
 [dev-dependencies]

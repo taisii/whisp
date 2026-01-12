@@ -464,7 +464,7 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 
         emit_state(app, PipelineState::Clipboard);
         emit_log(app, "info", "clipboard", "クリップボードへ書き込み");
-        clipboard::write_text(app, &processed)?;
+        clipboard::write_text(app, &processed, config.avoid_clipboard_history)?;
 
         if config.auto_paste {
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
