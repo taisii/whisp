@@ -1,88 +1,88 @@
 # Whisp
 
-macOSメニューバーアプリ。音声をリアルタイムでテキストに変換し、AIで後処理を行います。
+A macOS menu bar app that transcribes speech in real time and applies AI post-processing.
 
-- **リアルタイム音声認識**: Deepgramによるストリーミング文字起こし
-- **AI後処理**: Google Geminiでフィラーワード除去、句読点追加、専門用語修正
-- **低遅延**: 発話終了からクリップボードまで500ms以下を目標
+- **Real-time speech recognition**: Streaming transcription via Deepgram
+- **AI post-processing**: Remove filler words, add punctuation, and fix technical terms with Google Gemini
+- **Low latency**: Targeting ≤500 ms from end of speech to clipboard
 
-## インストール
+## Installation
 
-### 1. アプリのダウンロード
+### 1. Download the app
 
-[Releases](https://github.com/your-repo/whisp/releases)から最新の`.dmg`ファイルをダウンロードし、`Whisp.app`をApplicationsフォルダにドラッグしてください。
+Download the latest `.dmg` from [Releases](https://github.com/your-repo/whisp/releases) and drag `Whisp.app` to the Applications folder.
 
-### 2. 初回起動時の設定（未署名アプリのため必要）
+### 2. First launch setup (required for unsigned apps)
 
-このアプリはApple Developer Programに登録していないため、初回起動時にmacOSのGatekeeperによってブロックされます。以下のいずれかの方法で起動してください。
+Because this app is not enrolled in the Apple Developer Program, macOS Gatekeeper will block it on first launch. Use either method below to open it.
 
-#### 方法A: システム設定から許可する（推奨）
+#### Method A: Allow from System Settings (recommended)
 
-1. Whisp.appをダブルクリックして開こうとする
-2. 「開発元を確認できないため開けません」というダイアログが表示されたら「OK」をクリック
-3. **システム設定** → **プライバシーとセキュリティ** を開く
-4. 下にスクロールすると「"Whisp"は開発元を確認できないため、使用がブロックされました」と表示されている
-5. **このまま開く** をクリック
-6. パスワードを入力して許可
+1. Double-click Whisp.app to open it
+2. When the dialog says it cannot be opened because the developer cannot be verified, click **OK**
+3. Open **System Settings** → **Privacy & Security**
+4. Scroll down to see “\"Whisp\" was blocked because it is not from an identified developer”
+5. Click **Open Anyway**
+6. Enter your password to allow
 
-#### 方法B: ターミナルから拡張属性を削除する
+#### Method B: Remove extended attributes from Terminal
 
-ターミナルで以下のコマンドを実行してください：
+Run the following command in Terminal:
 
 ```bash
 xattr -cr /Applications/Whisp.app
 ```
 
-その後、通常通りアプリを開けます。
+Then open the app as usual.
 
-### 3. マイクのアクセス許可
+### 3. Microphone permission
 
-初回起動時にマイクへのアクセス許可を求めるダイアログが表示されます。**許可**をクリックしてください。
+On first launch, you will be asked for microphone access. Click **Allow**.
 
-後から変更する場合は、**システム設定** → **プライバシーとセキュリティ** → **マイク** でWhispを有効にしてください。
+To change it later: **System Settings** → **Privacy & Security** → **Microphone**, then enable Whisp.
 
-## 設定
+## Configuration
 
-### APIキーの取得と設定
+### Get and set API keys
 
-Whispを使用するには、以下の2つのAPIキーが必要です。
+Whisp requires two API keys.
 
-#### Deepgram（音声認識）
+#### Deepgram (speech recognition)
 
-1. [Deepgram](https://deepgram.com/)でアカウントを作成
-2. ダッシュボードからAPIキーを生成
-3. Whispの設定画面で入力
+1. Create an account at [Deepgram](https://deepgram.com/)
+2. Generate an API key from the dashboard
+3. Enter it in Whisp’s settings
 
-#### Google Gemini（AI後処理）
+#### Google Gemini (AI post-processing)
 
-1. [Google AI Studio](https://aistudio.google.com/)にアクセス
-2. **Get API key** → **Create API key** でキーを生成
-3. Whispの設定画面で入力
+1. Go to [Google AI Studio](https://aistudio.google.com/)
+2. **Get API key** → **Create API key**
+3. Enter it in Whisp’s settings
 
-### グローバルショートカット
+### Global shortcut
 
-デフォルトは `Cmd+J` です。設定画面から変更できます。
+Default is `Cmd+J`. You can change it in the settings screen.
 
-## 使い方
+## Usage
 
-1. メニューバーのWhispアイコンをクリックするか、ショートカットキー（デフォルト: `Cmd+J`）を押して録音開始
-2. 話し終わったら再度クリックまたはショートカットキーで録音停止
-3. 自動的にテキストがクリップボードにコピーされます（設定で自動ペーストも可能）
+1. Click the Whisp menu bar icon or press the shortcut (default: `Cmd+J`) to start recording
+2. Click again or press the shortcut to stop
+3. The text is automatically copied to the clipboard (auto-paste is optional)
 
-## 開発
+## Development
 
 ```bash
-# 依存関係のインストール
+# Install dependencies
 bun install
 
-# 開発モードで起動
+# Start in development mode
 bun run tauri dev
 
-# プロダクションビルド
+# Production build
 bun run tauri build
 ```
 
-## 技術スタック
+## Tech stack
 
 - **Frontend**: React + TypeScript + Vite
 - **Backend**: Rust + Tauri v2

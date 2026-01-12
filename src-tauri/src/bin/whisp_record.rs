@@ -22,7 +22,7 @@ fn run() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let (audio_tx, mut audio_rx) = tokio::sync::mpsc::channel(8);
     let mut recorder =
-        whisp_lib::recorder::RecorderHandle::spawn(audio_tx).map_err(|e| e.to_string())?;
+        whisp_lib::recorder::RecorderHandle::spawn(audio_tx, None).map_err(|e| e.to_string())?;
     let sample_rate = recorder.sample_rate();
 
     let bytes = rt.block_on(async move {

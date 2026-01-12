@@ -9,7 +9,10 @@ pub struct RecorderHandle {
 }
 
 impl RecorderHandle {
-    pub fn spawn(audio_tx: Sender<Vec<u8>>) -> AppResult<Self> {
+    pub fn spawn(
+        audio_tx: Sender<Vec<u8>>,
+        meter_tx: Option<Sender<u16>>,
+    ) -> AppResult<Self> {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<AppResult<u32>>();
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
 
@@ -29,9 +32,15 @@ impl RecorderHandle {
                 let stream_config: StreamConfig = input_config.clone().into();
 
                 let stream = match input_config.sample_format() {
-                    SampleFormat::F32 => build_stream_f32(&device, &stream_config, channels, audio_tx)?,
-                    SampleFormat::I16 => build_stream_i16(&device, &stream_config, channels, audio_tx)?,
-                    SampleFormat::U16 => build_stream_u16(&device, &stream_config, channels, audio_tx)?,
+                    SampleFormat::F32 => {
+                        build_stream_f32(&device, &stream_config, channels, audio_tx, meter_tx)?
+                    }
+                    SampleFormat::I16 => {
+                        build_stream_i16(&device, &stream_config, channels, audio_tx, meter_tx)?
+                    }
+                    SampleFormat::U16 => {
+                        build_stream_u16(&device, &stream_config, channels, audio_tx, meter_tx)?
+                    }
                     _ => {
                         return Err(AppError::Audio(format!(
                             "unsupported sample format: {:?}",
@@ -92,13 +101,18 @@ fn build_stream_f32(
     config: &StreamConfig,
     channels: usize,
     audio_tx: Sender<Vec<u8>>,
+    meter_tx: Option<Sender<u16>>,
 ) -> AppResult<cpal::Stream> {
     let err_fn = |err| eprintln!("cpal stream error: {err}");
+    let meter_tx = meter_tx.clone();
     let stream = device
         .build_input_stream(
             config,
             move |data: &[f32], _| {
-                let bytes = encode_f32(data, channels);
+                let (bytes, peak) = encode_f32(data, channels);
+                if let Some(tx) = &meter_tx {
+                    let _ = tx.try_send(peak);
+                }
                 let _ = audio_tx.try_send(bytes);
             },
             err_fn,
@@ -113,13 +127,18 @@ fn build_stream_i16(
     config: &StreamConfig,
     channels: usize,
     audio_tx: Sender<Vec<u8>>,
+    meter_tx: Option<Sender<u16>>,
 ) -> AppResult<cpal::Stream> {
     let err_fn = |err| eprintln!("cpal stream error: {err}");
+    let meter_tx = meter_tx.clone();
     let stream = device
         .build_input_stream(
             config,
             move |data: &[i16], _| {
-                let bytes = encode_i16(data, channels);
+                let (bytes, peak) = encode_i16(data, channels);
+                if let Some(tx) = &meter_tx {
+                    let _ = tx.try_send(peak);
+                }
                 let _ = audio_tx.try_send(bytes);
             },
             err_fn,
@@ -134,13 +153,18 @@ fn build_stream_u16(
     config: &StreamConfig,
     channels: usize,
     audio_tx: Sender<Vec<u8>>,
+    meter_tx: Option<Sender<u16>>,
 ) -> AppResult<cpal::Stream> {
     let err_fn = |err| eprintln!("cpal stream error: {err}");
+    let meter_tx = meter_tx.clone();
     let stream = device
         .build_input_stream(
             config,
             move |data: &[u16], _| {
-                let bytes = encode_u16(data, channels);
+                let (bytes, peak) = encode_u16(data, channels);
+                if let Some(tx) = &meter_tx {
+                    let _ = tx.try_send(peak);
+                }
                 let _ = audio_tx.try_send(bytes);
             },
             err_fn,
@@ -150,31 +174,48 @@ fn build_stream_u16(
     Ok(stream)
 }
 
-fn encode_f32(data: &[f32], channels: usize) -> Vec<u8> {
+fn encode_f32(data: &[f32], channels: usize) -> (Vec<u8>, u16) {
     let mono = downmix_f32(data, channels);
     let mut bytes = Vec::with_capacity(mono.len() * 2);
+    let mut peak = 0u16;
     for sample in mono {
-        bytes.extend_from_slice(&f32_to_i16(sample).to_le_bytes());
+        let sample_i16 = f32_to_i16(sample);
+        let abs = i32::from(sample_i16).abs() as u16;
+        if abs > peak {
+            peak = abs;
+        }
+        bytes.extend_from_slice(&sample_i16.to_le_bytes());
     }
-    bytes
+    (bytes, peak)
 }
 
-fn encode_i16(data: &[i16], channels: usize) -> Vec<u8> {
+fn encode_i16(data: &[i16], channels: usize) -> (Vec<u8>, u16) {
     let mono = downmix_i16(data, channels);
     let mut bytes = Vec::with_capacity(mono.len() * 2);
+    let mut peak = 0u16;
     for sample in mono {
+        let abs = i32::from(sample).abs() as u16;
+        if abs > peak {
+            peak = abs;
+        }
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
-    bytes
+    (bytes, peak)
 }
 
-fn encode_u16(data: &[u16], channels: usize) -> Vec<u8> {
+fn encode_u16(data: &[u16], channels: usize) -> (Vec<u8>, u16) {
     let mono = downmix_u16(data, channels);
     let mut bytes = Vec::with_capacity(mono.len() * 2);
+    let mut peak = 0u16;
     for sample in mono {
-        bytes.extend_from_slice(&u16_to_i16(sample).to_le_bytes());
+        let sample_i16 = u16_to_i16(sample);
+        let abs = i32::from(sample_i16).abs() as u16;
+        if abs > peak {
+            peak = abs;
+        }
+        bytes.extend_from_slice(&sample_i16.to_le_bytes());
     }
-    bytes
+    (bytes, peak)
 }
 
 fn downmix_f32(data: &[f32], channels: usize) -> Vec<f32> {

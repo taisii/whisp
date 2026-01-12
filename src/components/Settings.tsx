@@ -26,6 +26,7 @@ type Config = {
   input_language: string;
   recording_mode: RecordingMode;
   context_rules: ContextRule[];
+  known_apps: string[];
   custom_prompt: string | null;
   llm_model: LlmModel;
 };
@@ -59,6 +60,7 @@ const emptyConfig: Config = {
   input_language: "ja",
   recording_mode: "toggle",
   context_rules: [],
+  known_apps: [],
   custom_prompt: null,
   llm_model: "gemini-2.5-flash-lite",
 };
@@ -66,6 +68,25 @@ const emptyConfig: Config = {
 const normalizeCustomPrompt = (value: string | null) => {
   const trimmed = value?.trim();
   return trimmed ? value : null;
+};
+
+const DEFAULT_CONTEXT_RULES = [
+  {
+    patterns: ["Visual Studio Code", "VSCode", "Cursor", "Xcode", "Terminal"],
+    label: "コード形式",
+  },
+  { patterns: ["Claude Code"], label: "コード形式" },
+  { patterns: ["Codex"], label: "コード形式" },
+];
+
+const getDefaultRuleLabel = (appName: string) => {
+  const lower = appName.toLowerCase();
+  for (const rule of DEFAULT_CONTEXT_RULES) {
+    if (rule.patterns.some((pattern) => lower.includes(pattern.toLowerCase()))) {
+      return rule.label;
+    }
+  }
+  return null;
 };
 
 export default function Settings() {
@@ -113,6 +134,7 @@ export default function Settings() {
     let unlistenState: (() => void) | null = null;
     let unlistenLog: (() => void) | null = null;
     let unlistenOutput: (() => void) | null = null;
+    let unlistenConfig: (() => void) | null = null;
 
     const setup = async () => {
       unlistenState = await listen("pipeline-state", (event) => {
@@ -126,6 +148,10 @@ export default function Settings() {
         const payload = event.payload as PipelineResult;
         setLastOutput(payload);
       });
+      unlistenConfig = await listen("config-updated", (event) => {
+        const payload = event.payload as Config;
+        setConfig(payload);
+      });
     };
 
     setup();
@@ -133,6 +159,7 @@ export default function Settings() {
       if (unlistenState) unlistenState();
       if (unlistenLog) unlistenLog();
       if (unlistenOutput) unlistenOutput();
+      if (unlistenConfig) unlistenConfig();
     };
   }, [tauriReady]);
 
@@ -184,32 +211,75 @@ export default function Settings() {
     }));
   };
 
-  const updateContextRule = (
-    index: number,
-    field: keyof ContextRule,
-    value: string,
-  ) => {
+  const contextRuleMap = useMemo(() => {
+    const map = new Map<string, ContextRule>();
+    for (const rule of config.context_rules) {
+      const key = rule.app_name.trim().toLowerCase();
+      if (!key) continue;
+      if (!map.has(key)) {
+        map.set(key, rule);
+      }
+    }
+    return map;
+  }, [config.context_rules]);
+
+  const contextApps = useMemo(() => {
+    const names = new Map<string, string>();
+    const add = (value: string) => {
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      const key = trimmed.toLowerCase();
+      if (!names.has(key)) {
+        names.set(key, trimmed);
+      }
+    };
+    config.known_apps.forEach(add);
+    config.context_rules.forEach((rule) => add(rule.app_name));
+    return Array.from(names.values()).sort((a, b) =>
+      a.localeCompare(b, "en", { sensitivity: "base" }),
+    );
+  }, [config.known_apps, config.context_rules]);
+
+  const updateContextInstruction = (appName: string, value: string) => {
+    const trimmed = appName.trim();
+    if (!trimmed) return;
     setConfig((prev) => {
-      const next = [...prev.context_rules];
-      next[index] = { ...next[index], [field]: value };
-      return { ...prev, context_rules: next };
+      const nextRules = prev.context_rules.filter(
+        (rule) => rule.app_name.trim() !== "",
+      );
+      const key = trimmed.toLowerCase();
+      const index = nextRules.findIndex(
+        (rule) => rule.app_name.trim().toLowerCase() === key,
+      );
+      const instruction = value.trim();
+      if (!instruction) {
+        if (index !== -1) {
+          nextRules.splice(index, 1);
+        }
+      } else {
+        const entry = { app_name: trimmed, instruction: value };
+        if (index === -1) {
+          nextRules.push(entry);
+        } else {
+          nextRules[index] = entry;
+        }
+      }
+      return { ...prev, context_rules: nextRules };
     });
   };
 
-  const addContextRule = () => {
+  const removeKnownApp = (appName: string) => {
+    const trimmed = appName.trim();
+    if (!trimmed) return;
+    const key = trimmed.toLowerCase();
     setConfig((prev) => ({
       ...prev,
-      context_rules: [
-        ...prev.context_rules,
-        { app_name: "", instruction: "" },
-      ],
-    }));
-  };
-
-  const removeContextRule = (index: number) => {
-    setConfig((prev) => ({
-      ...prev,
-      context_rules: prev.context_rules.filter((_, idx) => idx !== index),
+      known_apps: prev.known_apps.filter(
+        (name) => name.trim().toLowerCase() !== key,
+      ),
+      context_rules: prev.context_rules.filter(
+        (rule) => rule.app_name.trim().toLowerCase() !== key,
+      ),
     }));
   };
 
@@ -485,42 +555,45 @@ export default function Settings() {
         </div>
         <div className="context-rules">
           <div className="context-list">
-            {config.context_rules.length === 0 ? (
-              <p className="context-empty">ルールがありません</p>
+            {contextApps.length === 0 ? (
+              <p className="context-empty">履歴にアプリがありません</p>
             ) : (
-              config.context_rules.map((rule, index) => (
-                <div className="context-row" key={`context-${index}`}>
-                  <input
-                    type="text"
-                    placeholder="アプリ名（例: VSCode）"
-                    value={rule.app_name}
-                    onChange={(e) =>
-                      updateContextRule(index, "app_name", e.target.value)
-                    }
-                    disabled={loading}
-                  />
-                  <textarea
-                    placeholder="指示（例: コード形式で簡潔に）"
-                    value={rule.instruction}
-                    onChange={(e) =>
-                      updateContextRule(index, "instruction", e.target.value)
-                    }
-                    disabled={loading}
-                  />
-                  <button
-                    className="ghost"
-                    onClick={() => removeContextRule(index)}
-                    disabled={loading}
-                  >
-                    削除
-                  </button>
-                </div>
-              ))
+              contextApps.map((appName) => {
+                const rule = contextRuleMap.get(appName.toLowerCase());
+                const instruction = rule?.instruction ?? "";
+                const hasInstruction = instruction.trim().length > 0;
+                const defaultLabel =
+                  hasInstruction ? null : getDefaultRuleLabel(appName);
+                return (
+                  <div className="context-row" key={`context-${appName}`}>
+                    <div className="context-app">
+                      <span className="context-app-name">{appName}</span>
+                      {defaultLabel ? (
+                        <span className="context-default">
+                          （デフォルト: {defaultLabel}）
+                        </span>
+                      ) : null}
+                    </div>
+                    <textarea
+                      placeholder="指示を入力..."
+                      value={instruction}
+                      onChange={(e) =>
+                        updateContextInstruction(appName, e.target.value)
+                      }
+                      disabled={loading}
+                    />
+                    <button
+                      className="ghost"
+                      onClick={() => removeKnownApp(appName)}
+                      disabled={loading}
+                    >
+                      削除
+                    </button>
+                  </div>
+                );
+              })
             )}
           </div>
-          <button className="ghost" onClick={addContextRule} disabled={loading}>
-            ルールを追加
-          </button>
         </div>
       </section>
 

@@ -214,9 +214,9 @@ mod tests {
 
     #[test]
     fn prompt_includes_context_block() {
-        let prompt = build_prompt("テストです", "ja", None, Some("アプリ: Xcode"));
+        let prompt = build_prompt("テストです", "ja", None, Some("追加指示: コード形式"));
         assert!(prompt.contains("コンテキスト:"));
-        assert!(prompt.contains("アプリ: Xcode"));
+        assert!(prompt.contains("追加指示: コード形式"));
     }
 
     #[test]

@@ -226,6 +226,26 @@ textarea:focus {
   align-items: start;
 }
 
+.context-app {
+  background: #fffaf2;
+  border-radius: 10px;
+  border: 1px solid #eadcc7;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.context-app-name {
+  font-weight: 600;
+  color: #2c241c;
+}
+
+.context-default {
+  font-size: 11px;
+  color: #8b7b68;
+}
+
 .context-empty {
   margin: 0;
   font-size: 12px;

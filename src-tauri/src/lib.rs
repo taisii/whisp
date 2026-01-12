@@ -17,22 +17,31 @@ use crate::config::{Config, ConfigManager, LlmModel, RecordingMode};
 use crate::error::{AppError, AppResult};
 use crate::tray::TrayState;
 use serde::Serialize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::ShortcutState;
+use tokio::sync::mpsc::Receiver;
+
+const MAX_RECORDING_SECS: u64 = 120;
+const SILENCE_TIMEOUT_SECS: u64 = 30;
+// Peak i16 amplitude threshold used to treat input as silence.
+const SILENCE_THRESHOLD: u16 = 500;
 
 struct RecordingSession {
     recorder: recorder::RecorderHandle,
     stt_task: tauri::async_runtime::JoinHandle<AppResult<String>>,
     started_at: Instant,
+    session_id: u64,
 }
 
 struct AppState {
     config_manager: ConfigManager,
     config: Mutex<Config>,
     recording: Mutex<Option<RecordingSession>>,
+    recording_counter: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -105,6 +114,7 @@ async fn save_config(app: AppHandle, state: State<'_, AppState>, config: Config)
     }
 
     *state.config.lock().unwrap() = config.clone();
+    let _ = app.emit("config-updated", config.clone());
     emit_log(&app, "info", "config", "保存完了");
 
     Ok(())
@@ -170,6 +180,28 @@ async fn start_recording_if_idle(app: &AppHandle, state: &AppState) -> AppResult
     start_recording(app, state).await
 }
 
+fn record_known_app(app: &AppHandle, state: &AppState) {
+    let Some(app_name) = context::capture_app_name() else {
+        return;
+    };
+    let trimmed = app_name.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    let mut config = state.config.lock().unwrap();
+    if config.known_apps.iter().any(|name| name == trimmed) {
+        return;
+    }
+    config.known_apps.push(trimmed.to_string());
+    let updated = config.clone();
+    drop(config);
+    if let Err(err) = state.config_manager.save(&updated) {
+        emit_log(app, "error", "config", format!("known_apps保存失敗: {err}"));
+        return;
+    }
+    let _ = app.emit("config-updated", updated);
+}
+
 async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
     let config = state.config.lock().unwrap().clone();
     if config.api_keys.deepgram.trim().is_empty() {
@@ -180,8 +212,11 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         return Err(err);
     }
 
+    record_known_app(app, state);
+
     let (audio_tx, audio_rx) = tokio::sync::mpsc::channel(8);
-    let recorder = match recorder::RecorderHandle::spawn(audio_tx) {
+    let (meter_tx, meter_rx) = tokio::sync::mpsc::channel(32);
+    let recorder = match recorder::RecorderHandle::spawn(audio_tx, Some(meter_tx)) {
         Ok(recorder) => recorder,
         Err(err) => {
             if matches!(err, AppError::Audio(_)) {
@@ -228,10 +263,12 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         .await
     });
 
+    let session_id = state.recording_counter.fetch_add(1, Ordering::Relaxed) + 1;
     *state.recording.lock().unwrap() = Some(RecordingSession {
         recorder,
         stt_task,
         started_at: Instant::now(),
+        session_id,
     });
 
     tray::set_tray_state(app, TrayState::Recording)?;
@@ -244,6 +281,10 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         format!("録音開始 (sample_rate={}Hz)", sample_rate),
     );
     let _ = app.emit("recording-state-changed", true);
+
+    spawn_max_duration_watchdog(app.clone(), session_id);
+    spawn_silence_watchdog(app.clone(), session_id, meter_rx);
+
     Ok(())
 }
 
@@ -262,6 +303,79 @@ fn language_param(value: &str) -> Option<String> {
         "en" => Some("en".to_string()),
         _ => None,
     }
+}
+
+fn spawn_max_duration_watchdog(app: AppHandle, session_id: u64) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(MAX_RECORDING_SECS)).await;
+        let state = app.state::<AppState>();
+        if let Err(err) = stop_recording_if_current(
+            &app,
+            &state,
+            session_id,
+            "録音が2分に達したため自動停止します",
+        )
+        .await
+        {
+            emit_log(
+                &app,
+                "error",
+                "recording",
+                format!("自動停止失敗: {err}"),
+            );
+        }
+    });
+}
+
+fn spawn_silence_watchdog(app: AppHandle, session_id: u64, mut meter_rx: Receiver<u16>) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_sound = Instant::now();
+        while let Some(peak) = meter_rx.recv().await {
+            if peak >= SILENCE_THRESHOLD {
+                last_sound = Instant::now();
+                continue;
+            }
+
+            if last_sound.elapsed().as_secs() >= SILENCE_TIMEOUT_SECS {
+                let state = app.state::<AppState>();
+                if let Err(err) = stop_recording_if_current(
+                    &app,
+                    &state,
+                    session_id,
+                    "無音が30秒続いたため自動停止します",
+                )
+                .await
+                {
+                    emit_log(
+                        &app,
+                        "error",
+                        "recording",
+                        format!("自動停止失敗: {err}"),
+                    );
+                }
+                break;
+            }
+        }
+    });
+}
+
+async fn stop_recording_if_current(
+    app: &AppHandle,
+    state: &AppState,
+    session_id: u64,
+    reason: &str,
+) -> AppResult<()> {
+    let is_current = {
+        let guard = state.recording.lock().unwrap();
+        guard
+            .as_ref()
+            .is_some_and(|session| session.session_id == session_id)
+    };
+    if !is_current {
+        return Ok(());
+    }
+    emit_log(app, "info", "recording", reason);
+    stop_recording(app, state).await
 }
 
 async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
@@ -560,6 +674,7 @@ pub fn run() {
                 config_manager,
                 config: Mutex::new(config.clone()),
                 recording: Mutex::new(None),
+                recording_counter: AtomicU64::new(0),
             });
 
             let _ = notification::request_permission(app.app_handle());

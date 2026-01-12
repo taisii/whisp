@@ -26,12 +26,12 @@ pub fn build_context_info(config: &Config) -> ContextInfo {
     }
 }
 
+pub fn capture_app_name() -> Option<String> {
+    platform::frontmost_app_name()
+}
+
 pub fn format_context_block(info: &ContextInfo) -> Option<String> {
     let mut sections = Vec::new();
-
-    if let Some(app) = info.app_name.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
-        sections.push(format!("アプリ: {app}"));
-    }
 
     if let Some(text) = info
         .selected_text
@@ -120,7 +120,7 @@ mod platform {
         (frontmost_app_name(), selected_text())
     }
 
-    fn frontmost_app_name() -> Option<String> {
+    pub fn frontmost_app_name() -> Option<String> {
         autoreleasepool(|_| {
             let workspace = NSWorkspace::sharedWorkspace();
             let app = workspace.frontmostApplication()?;
@@ -224,5 +224,9 @@ mod platform {
 mod platform {
     pub fn capture_context() -> (Option<String>, Option<String>) {
         (None, None)
+    }
+
+    pub fn frontmost_app_name() -> Option<String> {
+        None
     }
 }

@@ -66,6 +66,7 @@ pub struct Config {
     pub input_language: String,
     pub recording_mode: RecordingMode,
     pub context_rules: Vec<ContextRule>,
+    pub known_apps: Vec<String>,
     pub custom_prompt: Option<String>,
     pub llm_model: LlmModel,
 }
@@ -83,6 +84,7 @@ impl Default for Config {
             input_language: "ja".to_string(),
             recording_mode: RecordingMode::Toggle,
             context_rules: Vec::new(),
+            known_apps: Vec::new(),
             custom_prompt: None,
             llm_model: LlmModel::Gemini25FlashLite,
         }
@@ -160,6 +162,7 @@ mod tests {
                 app_name: "VSCode".to_string(),
                 instruction: "コード形式で簡潔に".to_string(),
             }],
+            known_apps: vec!["Slack".to_string(), "VSCode".to_string()],
             custom_prompt: Some("入力: {STT結果}".to_string()),
             llm_model: LlmModel::Gpt5Nano,
         };
