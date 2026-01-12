@@ -12,7 +12,6 @@ mod sound;
 pub mod stt_client;
 mod tray;
 
-use crate::audio_file::read_wav_as_mono_i16;
 use crate::config::{Config, ConfigManager, LlmModel, RecordingMode};
 use crate::error::{AppError, AppResult};
 use crate::tray::TrayState;
@@ -378,6 +377,23 @@ async fn stop_recording_if_current(
     stop_recording(app, state).await
 }
 
+fn is_empty_stt(text: &str) -> bool {
+    text.trim().is_empty()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_empty_stt;
+
+    #[test]
+    fn is_empty_stt_treats_whitespace_as_empty() {
+        assert!(is_empty_stt(""));
+        assert!(is_empty_stt("   "));
+        assert!(is_empty_stt("\n\t"));
+        assert!(!is_empty_stt("テスト"));
+    }
+}
+
 async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
     let session = state.recording.lock().unwrap().take();
     let Some(session) = session else {
@@ -400,6 +416,16 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
             format!("STT完了: {} chars", stt_result.chars().count()),
         );
         emit_log(app, "info", "stt", format!("STT結果: {stt_result}"));
+        if is_empty_stt(&stt_result) {
+            emit_log(
+                app,
+                "info",
+                "pipeline",
+                "STT結果が空のためLLM処理をスキップします",
+            );
+            emit_state(app, PipelineState::Done);
+            return Ok(());
+        }
 
         let config = state.config.lock().unwrap().clone();
         let context_info = context::build_context_info(&config);
@@ -528,104 +554,6 @@ struct PipelineResult {
     output: String,
 }
 
-#[tauri::command]
-async fn process_audio_file(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    path: String,
-) -> Result<PipelineResult, String> {
-    if path.trim().is_empty() {
-        return Err("音声ファイルのパスが空です".to_string());
-    }
-    let config = state.config.lock().unwrap().clone();
-    if config.api_keys.deepgram.trim().is_empty() {
-        return Err("Deepgram APIキーが未設定です".to_string());
-    }
-    if required_llm_key(&config).is_err() {
-        let message = match config.llm_model {
-            LlmModel::Gemini25FlashLite => "Gemini APIキーが未設定です",
-            LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => "OpenAI APIキーが未設定です",
-        };
-        return Err(message.to_string());
-    }
-
-    emit_log(&app, "info", "playground", format!("WAV読み込み: {path}"));
-    let audio = read_wav_as_mono_i16(std::path::Path::new(&path))
-        .map_err(|e| e.to_string())?;
-    emit_log(
-        &app,
-        "info",
-        "playground",
-        format!(
-            "WAV読み込み完了: {}Hz / {:.2}s",
-            audio.sample_rate, audio.duration_secs
-        ),
-    );
-
-    emit_state(&app, PipelineState::SttStreaming);
-    emit_log(&app, "info", "stt", "Deepgram解析開始");
-    let stt = stt_client::run_deepgram_bytes(
-        &config.api_keys.deepgram,
-        audio.sample_rate,
-        audio.pcm_bytes,
-        false,
-        None,
-        language_param(&config.input_language),
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    emit_log(
-        &app,
-        "info",
-        "stt",
-        format!("Deepgram解析完了: {} chars", stt.chars().count()),
-    );
-    emit_log(&app, "info", "stt", format!("STT結果: {stt}"));
-
-    emit_state(&app, PipelineState::PostProcessing);
-    emit_log(
-        &app,
-        "info",
-        "postprocess",
-        format!("LLM後処理開始: {}", config.llm_model.as_str()),
-    );
-    let llm_started = Instant::now();
-    let llm_key = required_llm_key(&config).map_err(|_| {
-        match config.llm_model {
-            LlmModel::Gemini25FlashLite => "Gemini APIキーが未設定です".to_string(),
-            LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => {
-                "OpenAI APIキーが未設定です".to_string()
-            }
-        }
-    })?;
-    let output = post_processor::post_process(
-        config.llm_model,
-        llm_key,
-        &stt,
-        &config.input_language,
-        config.custom_prompt.as_deref(),
-        None,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-    emit_log(
-        &app,
-        "info",
-        "postprocess",
-        format!("LLM処理時間: {}ms", llm_started.elapsed().as_millis()),
-    );
-    emit_log(
-        &app,
-        "info",
-        "postprocess",
-        format!("後処理完了: {} chars", output.chars().count()),
-    );
-    emit_log(&app, "info", "postprocess", format!("整形結果: {output}"));
-
-    emit_state(&app, PipelineState::Done);
-    Ok(PipelineResult { stt, output })
-}
-
 fn required_llm_key(config: &Config) -> AppResult<&str> {
     match config.llm_model {
         LlmModel::Gemini25FlashLite => {
@@ -698,8 +626,7 @@ pub fn run() {
             save_config,
             toggle_recording,
             open_microphone_settings,
-            open_accessibility_settings,
-            process_audio_file
+            open_accessibility_settings
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

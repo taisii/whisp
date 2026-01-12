@@ -43,10 +43,6 @@ AquaVoiceはこの方法も採用している（Changelogより）。
 - **動作**: TransientTypeマーカーを付与してクリップボードに書き込み
 
 ### 実装タスク
-- [x] `objc2`クレートを追加してNSPasteboardにアクセス
-- [x] クリップボード書き込み時にTransientTypeマーカーを付与する関数を実装
-- [x] 設定項目「avoid_clipboard_history」を追加
-- [x] フロントエンドに設定UIを追加（auto_paste有効時のみ表示）
 - [ ] 動作確認：Maccy等のクリップボードマネージャーで履歴に残らないことを確認
 
 ## 3. GitHub Actions リリースワークフロー
@@ -141,8 +137,6 @@ git push origin main --tags
 ```
 
 ### 実装タスク
-- [x] `.github/workflows/` ディレクトリを作成
-- [x] `release.yml` ワークフローファイルを作成
 - [ ] テストタグをプッシュして動作を確認
 - [ ] GitHub ReleasesページでDraftリリースとアーティファクトを確認
 
@@ -163,8 +157,5 @@ git push origin main --tags
 OSSとして公開するための最低限の体裁とメタ情報を整える。
 
 ### 実装タスク
-- [x] ルートに `LICENSE` を追加（MIT）
-- [x] `package.json` に `license` を明記
-- [x] `src-tauri/Cargo.toml` に `license` を明記
 - [ ] READMEのリリースURLを実際のリポジトリに差し替え
 - [ ] 依存ライセンスの一覧化（必要なら `NOTICE` 追加）

@@ -63,7 +63,6 @@ Events emitted to frontend: `pipeline-state`, `debug-log`, `recording-state-chan
 
 - `get_config()` / `save_config(config)` - Config management
 - `toggle_recording()` - Start/stop recording
-- `process_audio_file(path)` - Playground: process WAV file
 
 ## Configuration
 
