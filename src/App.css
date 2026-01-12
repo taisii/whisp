@@ -60,11 +60,33 @@ h1 {
   font-size: 15px;
 }
 
+.meta-row {
+  margin-top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 12px;
+  color: #5c4f41;
+}
+
+.meta-row span {
+  border: 1px dashed #e4d6c3;
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: #fffaf2;
+}
+
 .status-panel {
   background: linear-gradient(140deg, #fff, #fdf6ea);
   border-radius: 16px;
   padding: 18px 20px;
   box-shadow: 0 10px 24px rgba(46, 38, 27, 0.12);
+}
+
+.status-panel-line {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #efe1cc;
 }
 
 .status-title {
@@ -136,6 +158,17 @@ input[type="password"] {
   color: #1f1b16;
 }
 
+textarea {
+  border-radius: 12px;
+  border: 1px solid #e6dbc9;
+  padding: 10px 12px;
+  font-size: 14px;
+  background: #fffaf2;
+  color: #1f1b16;
+  resize: vertical;
+  min-height: 72px;
+}
+
 select {
   border-radius: 12px;
   border: 1px solid #e6dbc9;
@@ -147,7 +180,8 @@ select {
 
 input[type="text"]:focus,
 input[type="password"]:focus,
-select:focus {
+select:focus,
+textarea:focus {
   outline: 2px solid #d9a441;
   border-color: transparent;
 }
@@ -170,6 +204,32 @@ select:focus {
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 22px;
+}
+
+.context-rules {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.context-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.context-row {
+  display: grid;
+  grid-template-columns: 1fr 2fr auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.context-empty {
+  margin: 0;
+  font-size: 12px;
+  color: #7c6e5e;
 }
 
 button {
@@ -281,21 +341,33 @@ button.ghost {
   white-space: pre-wrap;
 }
 
-.playground {
-  margin-top: 20px;
-  display: grid;
+.shortcut-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.shortcut-row input {
+  min-width: 140px;
+  flex: 1;
+}
+
+.shortcut-hint {
+  margin-top: 4px;
+}
+
+.prompt-body {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
 
-.playground-result {
-  margin: 0;
-  padding: 12px;
-  background: #111;
-  color: #f6f1e9;
-  border-radius: 12px;
-  font-size: 12px;
-  max-height: 220px;
-  overflow: auto;
+.prompt-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 @keyframes fadeUp {
@@ -316,5 +388,9 @@ button.ghost {
 
   .app {
     padding: 20px;
+  }
+
+  .context-row {
+    grid-template-columns: 1fr;
   }
 }

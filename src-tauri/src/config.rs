@@ -8,6 +8,53 @@ use std::path::PathBuf;
 pub struct ApiKeys {
     pub deepgram: String,
     pub gemini: String,
+    pub openai: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingMode {
+    Toggle,
+    PushToTalk,
+}
+
+impl Default for RecordingMode {
+    fn default() -> Self {
+        Self::Toggle
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LlmModel {
+    #[serde(rename = "gemini-2.5-flash-lite")]
+    Gemini25FlashLite,
+    #[serde(rename = "gpt-4o-mini")]
+    Gpt4oMini,
+    #[serde(rename = "gpt-5-nano")]
+    Gpt5Nano,
+}
+
+impl LlmModel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Gemini25FlashLite => "gemini-2.5-flash-lite",
+            Self::Gpt4oMini => "gpt-4o-mini",
+            Self::Gpt5Nano => "gpt-5-nano",
+        }
+    }
+}
+
+impl Default for LlmModel {
+    fn default() -> Self {
+        Self::Gemini25FlashLite
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct ContextRule {
+    pub app_name: String,
+    pub instruction: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -17,6 +64,10 @@ pub struct Config {
     pub shortcut: String,
     pub auto_paste: bool,
     pub input_language: String,
+    pub recording_mode: RecordingMode,
+    pub context_rules: Vec<ContextRule>,
+    pub custom_prompt: Option<String>,
+    pub llm_model: LlmModel,
 }
 
 impl Default for Config {
@@ -25,10 +76,15 @@ impl Default for Config {
             api_keys: ApiKeys {
                 deepgram: String::new(),
                 gemini: String::new(),
+                openai: String::new(),
             },
             shortcut: "Cmd+J".to_string(),
             auto_paste: true,
             input_language: "ja".to_string(),
+            recording_mode: RecordingMode::Toggle,
+            context_rules: Vec::new(),
+            custom_prompt: None,
+            llm_model: LlmModel::Gemini25FlashLite,
         }
     }
 }
@@ -39,7 +95,10 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     pub fn new() -> AppResult<Self> {
-        let base = dirs::config_dir().ok_or(AppError::ConfigDirMissing)?;
+        let base = std::env::var("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".config"))
+            .map_err(|_| AppError::ConfigDirMissing)?;
         Ok(Self {
             path: base.join("whisp").join("config.toml"),
         })
@@ -91,10 +150,18 @@ mod tests {
             api_keys: ApiKeys {
                 deepgram: "dg".to_string(),
                 gemini: "gm".to_string(),
+                openai: "oa".to_string(),
             },
             shortcut: "Option+Space".to_string(),
             auto_paste: false,
             input_language: "ja".to_string(),
+            recording_mode: RecordingMode::PushToTalk,
+            context_rules: vec![ContextRule {
+                app_name: "VSCode".to_string(),
+                instruction: "コード形式で簡潔に".to_string(),
+            }],
+            custom_prompt: Some("入力: {STT結果}".to_string()),
+            llm_model: LlmModel::Gpt5Nano,
         };
 
         manager.save(&config).expect("save");

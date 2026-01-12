@@ -37,6 +37,10 @@ enigo = "0.2"
 rodio = "0.17"
 dirs = "5"
 hound = "3"
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
+objc2-foundation = { version = "0.3", features = ["NSString"] }
+core-foundation-sys = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

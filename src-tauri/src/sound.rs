@@ -1,18 +1,44 @@
 use crate::error::AppResult;
-use rodio::{OutputStream, Sink, Source};
-use std::time::Duration;
+use rodio::{Decoder, OutputStream, Sink};
+use std::fs::File;
+use std::io::BufReader;
 
-pub fn play_completion_sound() -> AppResult<()> {
+const TINK_PATH: &str = "/System/Library/Sounds/Tink.aiff";
+
+fn play_tink() -> AppResult<()> {
     std::thread::spawn(|| {
-        if let Ok((_stream, handle)) = OutputStream::try_default() {
-            if let Ok(sink) = Sink::try_new(&handle) {
-                let source = rodio::source::SineWave::new(880.0)
-                    .take_duration(Duration::from_millis(120))
-                    .amplify(0.18);
-                sink.append(source);
-                sink.sleep_until_end();
-            }
-        }
+        let Ok((_stream, handle)) = OutputStream::try_default() else {
+            return;
+        };
+        let Ok(sink) = Sink::try_new(&handle) else {
+            return;
+        };
+        let Ok(file) = File::open(TINK_PATH) else {
+            return;
+        };
+        let Ok(source) = Decoder::new(BufReader::new(file)) else {
+            return;
+        };
+        sink.append(source);
+        sink.sleep_until_end();
     });
     Ok(())
+}
+
+pub fn play_completion_sound() -> AppResult<()> {
+    play_tink()
+}
+
+pub fn play_start_sound() -> AppResult<()> {
+    play_tink()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tink_path_is_system_sound() {
+        assert_eq!(TINK_PATH, "/System/Library/Sounds/Tink.aiff");
+    }
 }

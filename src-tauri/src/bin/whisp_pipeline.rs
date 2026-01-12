@@ -1,4 +1,5 @@
 use std::env;
+use whisp_lib::config::LlmModel;
 
 fn main() {
     if let Err(err) = run() {
@@ -37,7 +38,14 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let output = rt
-        .block_on(whisp_lib::post_processor::post_process(&gemini_key, &stt, "auto"))
+        .block_on(whisp_lib::post_processor::post_process(
+            LlmModel::Gemini25FlashLite,
+            &gemini_key,
+            &stt,
+            "auto",
+            None,
+            None,
+        ))
         .map_err(|e| e.to_string())?;
 
     println!("--- STT ---\n{stt}\n\n--- OUTPUT ---\n{output}");

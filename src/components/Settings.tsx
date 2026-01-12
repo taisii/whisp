@@ -2,10 +2,21 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { buildShortcutString, formatShortcutDisplay } from "@/lib/shortcut";
 
 type ApiKeys = {
   deepgram: string;
   gemini: string;
+  openai: string;
+};
+
+type RecordingMode = "toggle" | "push_to_talk";
+
+type LlmModel = "gemini-2.5-flash-lite" | "gpt-4o-mini" | "gpt-5-nano";
+
+type ContextRule = {
+  app_name: string;
+  instruction: string;
 };
 
 type Config = {
@@ -13,6 +24,10 @@ type Config = {
   shortcut: string;
   auto_paste: boolean;
   input_language: string;
+  recording_mode: RecordingMode;
+  context_rules: ContextRule[];
+  custom_prompt: string | null;
+  llm_model: LlmModel;
 };
 
 type DebugLog = {
@@ -27,11 +42,30 @@ type PipelineResult = {
   output: string;
 };
 
+const DEFAULT_PROMPT_TEMPLATE = `以下の音声認識結果を修正してください。修正後のテキストのみを出力してください。
+
+修正ルール:
+1. フィラー（えーと、あのー、えー、なんか、こう、まあ、ちょっと）を除去
+2. 技術用語の誤認識を修正（例: "リアクト"→"React", "ユーズステート"→"useState"）
+3. 句読点を適切に追加
+4. 出力は{言語}にしてください
+
+入力: {STT結果}`;
+
 const emptyConfig: Config = {
-  api_keys: { deepgram: "", gemini: "" },
+  api_keys: { deepgram: "", gemini: "", openai: "" },
   shortcut: "Cmd+J",
   auto_paste: true,
   input_language: "ja",
+  recording_mode: "toggle",
+  context_rules: [],
+  custom_prompt: null,
+  llm_model: "gemini-2.5-flash-lite",
+};
+
+const normalizeCustomPrompt = (value: string | null) => {
+  const trimmed = value?.trim();
+  return trimmed ? value : null;
 };
 
 export default function Settings() {
@@ -43,8 +77,8 @@ export default function Settings() {
   const [pipelineState, setPipelineState] = useState("idle");
   const [logs, setLogs] = useState<DebugLog[]>([]);
   const [lastOutput, setLastOutput] = useState<PipelineResult | null>(null);
-  const [playgroundPath, setPlaygroundPath] = useState("");
-  const [playgroundResult, setPlaygroundResult] = useState<string | null>(null);
+  const [captureActive, setCaptureActive] = useState(false);
+  const [shortcutHint, setShortcutHint] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -102,6 +136,43 @@ export default function Settings() {
     };
   }, [tauriReady]);
 
+  useEffect(() => {
+    if (!captureActive) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.key === "Escape") {
+        setCaptureActive(false);
+        setShortcutHint("ショートカットの変更をキャンセルしました");
+        return;
+      }
+
+      const shortcut = buildShortcutString({
+        key: event.key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+      });
+
+      if (!shortcut) {
+        setShortcutHint("修飾キー（Cmd/Ctrl/Alt/Shift）+ 通常キーを入力してください");
+        return;
+      }
+
+      setConfig((prev) => ({ ...prev, shortcut }));
+      setCaptureActive(false);
+      setShortcutHint(`ショートカットを ${formatShortcutDisplay(shortcut)} に変更しました`);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, [captureActive]);
+
   const canSave = useMemo(() => {
     return tauriReady && !loading && !saving;
   }, [loading, saving, tauriReady]);
@@ -113,6 +184,35 @@ export default function Settings() {
     }));
   };
 
+  const updateContextRule = (
+    index: number,
+    field: keyof ContextRule,
+    value: string,
+  ) => {
+    setConfig((prev) => {
+      const next = [...prev.context_rules];
+      next[index] = { ...next[index], [field]: value };
+      return { ...prev, context_rules: next };
+    });
+  };
+
+  const addContextRule = () => {
+    setConfig((prev) => ({
+      ...prev,
+      context_rules: [
+        ...prev.context_rules,
+        { app_name: "", instruction: "" },
+      ],
+    }));
+  };
+
+  const removeContextRule = (index: number) => {
+    setConfig((prev) => ({
+      ...prev,
+      context_rules: prev.context_rules.filter((_, idx) => idx !== index),
+    }));
+  };
+
   const save = async () => {
     if (!tauriReady) {
       setStatus("Tauriで起動していないため保存できません");
@@ -121,7 +221,11 @@ export default function Settings() {
     setSaving(true);
     setStatus(null);
     try {
-      await invoke("save_config", { config });
+      const payload = {
+        ...config,
+        custom_prompt: normalizeCustomPrompt(config.custom_prompt),
+      };
+      await invoke("save_config", { config: payload });
       setStatus("保存しました");
     } catch (error) {
       const message =
@@ -133,32 +237,6 @@ export default function Settings() {
       setStatus(message);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const runPlayground = async () => {
-    if (!tauriReady) {
-      setStatus("Tauriで起動していないため実行できません");
-      return;
-    }
-    setStatus(null);
-    setPlaygroundResult(null);
-    try {
-      const result = await invoke<{ stt: string; output: string }>(
-        "process_audio_file",
-        { path: playgroundPath },
-      );
-      setPlaygroundResult(
-        `--- STT ---\n${result.stt}\n\n--- OUTPUT ---\n${result.output}`,
-      );
-    } catch (error) {
-      const message =
-        typeof error === "string"
-          ? error
-          : error && typeof error === "object" && "message" in error
-            ? String((error as { message?: unknown }).message)
-            : "実行に失敗しました";
-      setStatus(message);
     }
   };
 
@@ -185,13 +263,21 @@ export default function Settings() {
           <p className="badge">Whisp</p>
           <h1>声から即座に、整ったテキストへ。</h1>
           <p className="subtitle">
-            Option+Spaceで録音を切り替え、完了後にクリップボードへ。句読点とフィラー除去は自動です。
+            ショートカットで録音を切り替え、完了後にクリップボードへ。句読点とフィラー除去は自動です。
           </p>
+          <div className="meta-row">
+            <span>現在のショートカット: {formatShortcutDisplay(config.shortcut)}</span>
+            <span>入力言語: {config.input_language.toUpperCase()}</span>
+          </div>
         </div>
         <div className="status-panel">
           <p className="status-title">録音状態</p>
-          <p className="status-value">メニューバーの色で確認</p>
+          <p className="status-value">メニューバーの色で確認できます。</p>
           <p className="status-hint">赤: 録音中 / グレー: 待機中</p>
+          <div className="status-panel-line">
+            <p className="status-title">パイプライン</p>
+            <p className="status-value">{pipelineState}</p>
+          </div>
         </div>
       </header>
 
@@ -223,18 +309,49 @@ export default function Settings() {
             />
           </label>
           <label className="field">
-            <span>ショートカット</span>
+            <span>OpenAI APIキー</span>
             <input
-              type="text"
-              value={config.shortcut}
-              onChange={(e) =>
-                setConfig((prev) => ({ ...prev, shortcut: e.target.value }))
-              }
-              placeholder="Cmd+J"
+              type="password"
+              value={config.api_keys.openai}
+              onChange={(e) => updateApiKey("openai", e.target.value)}
+              placeholder="sk-..."
               disabled={loading}
             />
-            <small>例: CmdOrCtrl+Shift+V / Cmd+J</small>
           </label>
+          <div className="field">
+            <span>ショートカット</span>
+            <div className="shortcut-row">
+              <input type="text" value={config.shortcut} readOnly />
+              <button
+                className="ghost"
+                onClick={() => {
+                  setShortcutHint(null);
+                  setCaptureActive((prev) => !prev);
+                }}
+                disabled={loading}
+              >
+                {captureActive ? "キーを押してください..." : "ショートカットを変更"}
+              </button>
+              {captureActive ? (
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    setCaptureActive(false);
+                    setShortcutHint("ショートカットの変更をキャンセルしました");
+                  }}
+                  disabled={loading}
+                >
+                  キャンセル
+                </button>
+              ) : null}
+            </div>
+            <small>
+              修飾キー（Cmd/Ctrl/Alt/Shift）+ 通常キーの組み合わせが必須です。
+            </small>
+            {shortcutHint ? (
+              <small className="shortcut-hint">{shortcutHint}</small>
+            ) : null}
+          </div>
           <label className="field">
             <span>入力言語</span>
             <select
@@ -252,6 +369,41 @@ export default function Settings() {
               <option value="auto">自動判定</option>
             </select>
             <small>Deepgramと後処理の言語を指定します。</small>
+          </label>
+          <label className="field">
+            <span>LLMモデル</span>
+            <select
+              value={config.llm_model}
+              onChange={(e) =>
+                setConfig((prev) => ({
+                  ...prev,
+                  llm_model: e.target.value as LlmModel,
+                }))
+              }
+              disabled={loading}
+            >
+              <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
+              <option value="gpt-4o-mini">GPT-4o mini</option>
+              <option value="gpt-5-nano">GPT-5 nano</option>
+            </select>
+            <small>モデルに応じたAPIキーが必要です。</small>
+          </label>
+          <label className="field">
+            <span>録音モード</span>
+            <select
+              value={config.recording_mode}
+              onChange={(e) =>
+                setConfig((prev) => ({
+                  ...prev,
+                  recording_mode: e.target.value as RecordingMode,
+                }))
+              }
+              disabled={loading}
+            >
+              <option value="toggle">トグル（押すたびに開始/停止）</option>
+              <option value="push_to_talk">長押し（押下中のみ録音）</option>
+            </select>
+            <small>長押しはアクセシビリティ許可が必要です。</small>
           </label>
           <label className="field toggle">
             <span>自動ペースト</span>
@@ -294,6 +446,86 @@ export default function Settings() {
 
       <section className="card">
         <div className="card-header">
+          <h2>カスタムプロンプト</h2>
+          <p>{`{STT結果}`}/{`{言語}`} を使って出力スタイルを調整できます。</p>
+        </div>
+        <div className="prompt-body">
+          <textarea
+            value={config.custom_prompt ?? DEFAULT_PROMPT_TEMPLATE}
+            onChange={(e) =>
+              setConfig((prev) => ({
+                ...prev,
+                custom_prompt: e.target.value,
+              }))
+            }
+            disabled={loading}
+            rows={8}
+          />
+          <small>{`{STT結果}`}が含まれない場合、末尾に入力を自動追加します。</small>
+          <div className="prompt-actions">
+            <button
+              className="ghost"
+              onClick={() =>
+                setConfig((prev) => ({ ...prev, custom_prompt: null }))
+              }
+              disabled={loading}
+            >
+              デフォルトに戻す
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-header">
+          <h2>コンテキストルール</h2>
+          <p>
+            アプリ別に後処理の指示を追加できます（選択テキスト取得にはアクセシビリティ許可が必要です）。
+          </p>
+        </div>
+        <div className="context-rules">
+          <div className="context-list">
+            {config.context_rules.length === 0 ? (
+              <p className="context-empty">ルールがありません</p>
+            ) : (
+              config.context_rules.map((rule, index) => (
+                <div className="context-row" key={`context-${index}`}>
+                  <input
+                    type="text"
+                    placeholder="アプリ名（例: VSCode）"
+                    value={rule.app_name}
+                    onChange={(e) =>
+                      updateContextRule(index, "app_name", e.target.value)
+                    }
+                    disabled={loading}
+                  />
+                  <textarea
+                    placeholder="指示（例: コード形式で簡潔に）"
+                    value={rule.instruction}
+                    onChange={(e) =>
+                      updateContextRule(index, "instruction", e.target.value)
+                    }
+                    disabled={loading}
+                  />
+                  <button
+                    className="ghost"
+                    onClick={() => removeContextRule(index)}
+                    disabled={loading}
+                  >
+                    削除
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+          <button className="ghost" onClick={addContextRule} disabled={loading}>
+            ルールを追加
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-header">
           <h2>デバッグ</h2>
           <p>現在の状態とログを可視化します。</p>
         </div>
@@ -332,27 +564,6 @@ export default function Settings() {
               <p className="log-empty">まだ出力がありません</p>
             )}
           </div>
-        </div>
-
-        <div className="playground">
-          <p className="debug-label">統合プレイグラウンド（WAV 16-bit PCM）</p>
-          <input
-            type="text"
-            placeholder="/path/to/audio.wav"
-            value={playgroundPath}
-            onChange={(e) => setPlaygroundPath(e.target.value)}
-            disabled={!tauriReady}
-          />
-          <button
-            className="ghost"
-            onClick={runPlayground}
-            disabled={!tauriReady || playgroundPath.trim().length === 0}
-          >
-            ファイルでテスト実行
-          </button>
-          {playgroundResult ? (
-            <pre className="playground-result">{playgroundResult}</pre>
-          ) : null}
         </div>
       </section>
     </div>

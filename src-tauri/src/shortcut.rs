@@ -6,14 +6,12 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutEvent, ShortcutSta
 pub fn register_shortcut(
     app: &AppHandle,
     shortcut: &str,
-    handler: impl Fn(AppHandle) + Send + Sync + 'static,
+    handler: impl Fn(AppHandle, ShortcutState) + Send + Sync + 'static,
 ) -> AppResult<()> {
     let handler = Arc::new(handler);
     app.global_shortcut()
         .on_shortcut(shortcut, move |app, _shortcut, event: ShortcutEvent| {
-            if event.state == ShortcutState::Pressed {
-                handler(app.clone());
-            }
+            handler(app.clone(), event.state);
         })
         .map_err(|e| AppError::Shortcut(e.to_string()))
 }

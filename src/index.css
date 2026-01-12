@@ -1,0 +1,116 @@
+@tailwind base;
+
+@plugin "tailwindcss-animate";
+
+@custom-variant dark (&:is(.dark *));
+@tailwind components;
+@tailwind utilities;
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+:root {
+  --background: 35 60% 96%;
+  --foreground: 24 20% 16%;
+  --card: 0 0% 100%;
+  --card-foreground: 24 20% 16%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 24 20% 16%;
+  --primary: 26 78% 45%;
+  --primary-foreground: 34 80% 96%;
+  --secondary: 33 55% 90%;
+  --secondary-foreground: 24 18% 22%;
+  --muted: 32 44% 92%;
+  --muted-foreground: 24 12% 40%;
+  --accent: 28 60% 88%;
+  --accent-foreground: 24 20% 20%;
+  --destructive: 0 70% 50%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 30 30% 85%;
+  --input: 30 30% 85%;
+  --ring: 26 78% 45%;
+  --chart-1: 25 75% 55%;
+  --chart-2: 190 45% 40%;
+  --chart-3: 14 65% 45%;
+  --chart-4: 44 60% 50%;
+  --chart-5: 210 35% 35%;
+  --sidebar: 35 52% 94%;
+  --sidebar-foreground: 24 20% 16%;
+  --sidebar-primary: 26 78% 45%;
+  --sidebar-primary-foreground: 34 80% 96%;
+  --sidebar-accent: 33 55% 90%;
+  --sidebar-accent-foreground: 24 20% 20%;
+  --sidebar-border: 30 30% 85%;
+  --sidebar-ring: 26 78% 45%;
+  --radius: 1.3rem;
+  --font-sans: "Hiragino Sans", "Avenir Next", "Yu Gothic", sans-serif;
+  --font-display: "Hiragino Mincho ProN", "Yu Mincho", "Avenir Next", serif;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply text-foreground;
+    min-height: 100vh;
+    font-family: var(--font-sans);
+    background-color: hsl(var(--background));
+    background-image: radial-gradient(circle at top left, #fff5dc 0%, #f6f1e9 40%, #efe8dc 100%);
+  }
+
+  #root {
+    min-height: 100vh;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}

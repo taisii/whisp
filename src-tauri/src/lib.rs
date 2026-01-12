@@ -1,4 +1,5 @@
 mod clipboard;
+mod context;
 pub mod config;
 pub mod error;
 pub mod audio_file;
@@ -12,7 +13,7 @@ pub mod stt_client;
 mod tray;
 
 use crate::audio_file::read_wav_as_mono_i16;
-use crate::config::{Config, ConfigManager};
+use crate::config::{Config, ConfigManager, LlmModel, RecordingMode};
 use crate::error::{AppError, AppResult};
 use crate::tray::TrayState;
 use serde::Serialize;
@@ -20,6 +21,7 @@ use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_global_shortcut::ShortcutState;
 
 struct RecordingSession {
     recorder: recorder::RecorderHandle,
@@ -89,7 +91,7 @@ async fn save_config(app: AppHandle, state: State<'_, AppState>, config: Config)
         emit_log(&app, "error", "config", err.to_string());
         if config.shortcut != old_shortcut {
             let _ = shortcut::unregister_shortcut(&app, &config.shortcut);
-            if shortcut::is_registered(&app, &old_shortcut) == false {
+            if !shortcut::is_registered(&app, &old_shortcut) {
                 let _ = register_global_shortcut(&app, &old_shortcut);
             }
         }
@@ -135,15 +137,47 @@ async fn toggle_recording_internal(app: &AppHandle) -> AppResult<()> {
     }
 }
 
+async fn handle_shortcut_event(app: &AppHandle, state: ShortcutState) -> AppResult<()> {
+    match state {
+        ShortcutState::Pressed => handle_shortcut_pressed(app).await,
+        ShortcutState::Released => handle_shortcut_released(app).await,
+    }
+}
+
+async fn handle_shortcut_pressed(app: &AppHandle) -> AppResult<()> {
+    let state = app.state::<AppState>();
+    let recording_mode = state.config.lock().unwrap().recording_mode.clone();
+    match recording_mode {
+        RecordingMode::Toggle => toggle_recording_internal(app).await,
+        RecordingMode::PushToTalk => start_recording_if_idle(app, &state).await,
+    }
+}
+
+async fn handle_shortcut_released(app: &AppHandle) -> AppResult<()> {
+    let state = app.state::<AppState>();
+    let recording_mode = state.config.lock().unwrap().recording_mode.clone();
+    if recording_mode == RecordingMode::PushToTalk {
+        stop_recording(app, &state).await
+    } else {
+        Ok(())
+    }
+}
+
+async fn start_recording_if_idle(app: &AppHandle, state: &AppState) -> AppResult<()> {
+    if state.recording.lock().unwrap().is_some() {
+        return Ok(());
+    }
+    start_recording(app, state).await
+}
+
 async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
     let config = state.config.lock().unwrap().clone();
     if config.api_keys.deepgram.trim().is_empty() {
         emit_log(app, "error", "recording", "Deepgram APIキーが未設定です");
         return Err(AppError::MissingApiKey("deepgram"));
     }
-    if config.api_keys.gemini.trim().is_empty() {
-        emit_log(app, "error", "recording", "Gemini APIキーが未設定です");
-        return Err(AppError::MissingApiKey("gemini"));
+    if let Err(err) = validate_llm_api_key(app, &config) {
+        return Err(err);
     }
 
     let (audio_tx, audio_rx) = tokio::sync::mpsc::channel(8);
@@ -202,6 +236,7 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 
     tray::set_tray_state(app, TrayState::Recording)?;
     emit_state(app, PipelineState::Recording);
+    let _ = sound::play_start_sound();
     emit_log(
         app,
         "info",
@@ -253,13 +288,43 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         emit_log(app, "info", "stt", format!("STT結果: {stt_result}"));
 
         let config = state.config.lock().unwrap().clone();
+        let context_info = context::build_context_info(&config);
+        if let Some(app_name) = context_info.app_name.as_ref() {
+            emit_log(app, "info", "context", format!("アクティブアプリ: {app_name}"));
+        }
+        if let Some(text) = context_info.selected_text.as_ref() {
+            emit_log(
+                app,
+                "info",
+                "context",
+                format!("選択テキスト: {} chars", text.chars().count()),
+            );
+        }
+        if let Some(instruction) = context_info.instruction.as_ref() {
+            emit_log(
+                app,
+                "info",
+                "context",
+                format!("適用ルール: {instruction}"),
+            );
+        }
+        let context_block = context::format_context_block(&context_info);
         emit_state(app, PipelineState::PostProcessing);
-        emit_log(app, "info", "postprocess", "Gemini後処理開始");
+        emit_log(
+            app,
+            "info",
+            "postprocess",
+            format!("LLM後処理開始: {}", config.llm_model.as_str()),
+        );
         let llm_started = Instant::now();
+        let llm_key = required_llm_key(&config)?;
         let processed = post_processor::post_process(
-            &config.api_keys.gemini,
+            config.llm_model,
+            llm_key,
             &stt_result,
             &config.input_language,
+            config.custom_prompt.as_deref(),
+            context_block.as_deref(),
         )
         .await?;
         emit_log(
@@ -289,12 +354,22 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 
         if config.auto_paste {
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-            if let Err(err) = key_sender::send_paste() {
+            let app_for_paste = app.clone();
+            if let Err(err) = app.run_on_main_thread(move || {
+                if let Err(err) = key_sender::send_paste() {
+                    emit_log(
+                        &app_for_paste,
+                        "error",
+                        "paste",
+                        format!("自動ペースト失敗: {err}"),
+                    );
+                }
+            }) {
                 emit_log(
                     app,
                     "error",
                     "paste",
-                    format!("自動ペースト失敗: {err}"),
+                    format!("自動ペースト実行失敗: {err}"),
                 );
             }
         }
@@ -322,9 +397,9 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 }
 
 fn register_global_shortcut(app: &AppHandle, shortcut: &str) -> AppResult<()> {
-    shortcut::register_shortcut(app, shortcut, move |app| {
+    shortcut::register_shortcut(app, shortcut, move |app, state| {
         tauri::async_runtime::spawn(async move {
-            if let Err(err) = toggle_recording_internal(&app).await {
+            if let Err(err) = handle_shortcut_event(&app, state).await {
                 emit_state(&app, PipelineState::Error);
                 emit_log(&app, "error", "pipeline", err.to_string());
                 let _ = notification::notify_error(&app, &err.to_string());
@@ -352,8 +427,12 @@ async fn process_audio_file(
     if config.api_keys.deepgram.trim().is_empty() {
         return Err("Deepgram APIキーが未設定です".to_string());
     }
-    if config.api_keys.gemini.trim().is_empty() {
-        return Err("Gemini APIキーが未設定です".to_string());
+    if required_llm_key(&config).is_err() {
+        let message = match config.llm_model {
+            LlmModel::Gemini25FlashLite => "Gemini APIキーが未設定です",
+            LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => "OpenAI APIキーが未設定です",
+        };
+        return Err(message.to_string());
     }
 
     emit_log(&app, "info", "playground", format!("WAV読み込み: {path}"));
@@ -390,11 +469,31 @@ async fn process_audio_file(
     emit_log(&app, "info", "stt", format!("STT結果: {stt}"));
 
     emit_state(&app, PipelineState::PostProcessing);
-    emit_log(&app, "info", "postprocess", "Gemini後処理開始");
+    emit_log(
+        &app,
+        "info",
+        "postprocess",
+        format!("LLM後処理開始: {}", config.llm_model.as_str()),
+    );
     let llm_started = Instant::now();
-    let output = post_processor::post_process(&config.api_keys.gemini, &stt, &config.input_language)
-        .await
-        .map_err(|e| e.to_string())?;
+    let llm_key = required_llm_key(&config).map_err(|_| {
+        match config.llm_model {
+            LlmModel::Gemini25FlashLite => "Gemini APIキーが未設定です".to_string(),
+            LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => {
+                "OpenAI APIキーが未設定です".to_string()
+            }
+        }
+    })?;
+    let output = post_processor::post_process(
+        config.llm_model,
+        llm_key,
+        &stt,
+        &config.input_language,
+        config.custom_prompt.as_deref(),
+        None,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     emit_log(
         &app,
         "info",
@@ -411,6 +510,35 @@ async fn process_audio_file(
 
     emit_state(&app, PipelineState::Done);
     Ok(PipelineResult { stt, output })
+}
+
+fn required_llm_key(config: &Config) -> AppResult<&str> {
+    match config.llm_model {
+        LlmModel::Gemini25FlashLite => {
+            if config.api_keys.gemini.trim().is_empty() {
+                return Err(AppError::MissingApiKey("gemini"));
+            }
+            Ok(config.api_keys.gemini.as_str())
+        }
+        LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => {
+            if config.api_keys.openai.trim().is_empty() {
+                return Err(AppError::MissingApiKey("openai"));
+            }
+            Ok(config.api_keys.openai.as_str())
+        }
+    }
+}
+
+fn validate_llm_api_key(app: &AppHandle, config: &Config) -> AppResult<()> {
+    if let Err(err) = required_llm_key(config) {
+        let message = match config.llm_model {
+            LlmModel::Gemini25FlashLite => "Gemini APIキーが未設定です",
+            LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => "OpenAI APIキーが未設定です",
+        };
+        emit_log(app, "error", "recording", message);
+        return Err(err);
+    }
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

@@ -1,5 +1,6 @@
 use std::env;
 use std::io::{self, Read};
+use whisp_lib::config::LlmModel;
 
 fn main() {
     if let Err(err) = run() {
@@ -26,7 +27,14 @@ fn run() -> Result<(), String> {
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     let output = rt
-        .block_on(whisp_lib::post_processor::post_process(&api_key, input.trim(), "auto"))
+        .block_on(whisp_lib::post_processor::post_process(
+            LlmModel::Gemini25FlashLite,
+            &api_key,
+            input.trim(),
+            "auto",
+            None,
+            None,
+        ))
         .map_err(|e| e.to_string())?;
     println!("{output}");
     Ok(())

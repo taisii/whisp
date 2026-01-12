@@ -89,7 +89,3 @@ bun run tauri build
 - **Audio**: CPAL
 - **STT**: Deepgram WebSocket API
 - **Post-processing**: Google Gemini API
-
-## ライセンス
-
-MIT
