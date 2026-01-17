@@ -35,7 +35,7 @@ toml = "0.8"
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 cpal = "0.15"
 enigo = "0.2"
-rodio = { version = "0.17", features = ["symphonia-all"] }
+rodio = { version = "0.21", features = ["symphonia-all"] }
 dirs = "5"
 hound = "3"
 objc2 = "0.6"

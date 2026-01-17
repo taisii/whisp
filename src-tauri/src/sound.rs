@@ -1,5 +1,5 @@
 use crate::error::AppResult;
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, OutputStreamBuilder, Sink};
 use std::fs::File;
 use std::io::BufReader;
 
@@ -7,16 +7,17 @@ const TINK_PATH: &str = "/System/Library/Sounds/Tink.aiff";
 
 fn play_tink() -> AppResult<()> {
     std::thread::spawn(|| {
-        let Ok((_stream, handle)) = OutputStream::try_default() else {
+        let Ok(stream) = OutputStreamBuilder::open_default_stream() else {
+            eprintln!("[sound] Failed to open default stream");
             return;
         };
-        let Ok(sink) = Sink::try_new(&handle) else {
-            return;
-        };
+        let sink = Sink::connect_new(&stream.mixer());
         let Ok(file) = File::open(TINK_PATH) else {
+            eprintln!("[sound] Failed to open file: {}", TINK_PATH);
             return;
         };
         let Ok(source) = Decoder::new(BufReader::new(file)) else {
+            eprintln!("[sound] Failed to decode file: {}", TINK_PATH);
             return;
         };
         sink.append(source);
