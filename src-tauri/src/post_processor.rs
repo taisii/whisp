@@ -1,6 +1,7 @@
 use crate::config::{AppPromptRule, LlmModel};
 use crate::error::{AppError, AppResult};
 use crate::usage::LlmUsage;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
@@ -23,8 +24,16 @@ struct GeminiContent {
 }
 
 #[derive(Debug, Serialize)]
-struct GeminiPart {
-    text: String,
+#[serde(untagged)]
+enum GeminiPart {
+    Text { text: String },
+    InlineData { inline_data: GeminiInlineData },
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiInlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -139,6 +148,8 @@ pub fn build_prompt(
     apply_template(template, stt_result, language_hint)
 }
 
+const AUDIO_TRANSCRIBE_INSTRUCTION: &str = "次の音声を文字起こしし、フィラーを除去して整形してください。修正後のテキストのみを出力してください。";
+
 pub async fn post_process(
     model: LlmModel,
     api_key: &str,
@@ -154,7 +165,9 @@ pub async fn post_process(
         app_prompt_rules,
     );
     match model {
-        LlmModel::Gemini25FlashLite => post_process_gemini(api_key, &prompt).await,
+        LlmModel::Gemini25FlashLite | LlmModel::Gemini25FlashLiteAudio => {
+            post_process_gemini(api_key, &prompt).await
+        }
         LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => {
             post_process_openai(api_key, model, &prompt).await
         }
@@ -165,7 +178,7 @@ async fn post_process_gemini(api_key: &str, prompt: &str) -> AppResult<PostProce
     let req = GeminiRequest {
         contents: vec![GeminiContent {
             role: "user".to_string(),
-            parts: vec![GeminiPart {
+            parts: vec![GeminiPart::Text {
                 text: prompt.to_string(),
             }],
         }],
@@ -176,6 +189,59 @@ async fn post_process_gemini(api_key: &str, prompt: &str) -> AppResult<PostProce
         LlmModel::Gemini25FlashLite.as_str()
     );
 
+    let client = reqwest::Client::new();
+    let response = client.post(url).json(&req).send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+
+    if !status.is_success() {
+        return Err(AppError::Other(format!(
+            "Gemini API error: {status} {body}"
+        )));
+    }
+
+    let parsed: GeminiResponse = serde_json::from_str(&body)
+        .map_err(|e| AppError::Other(format!("Gemini response parse error: {e}")))?;
+    let text = parsed
+        .candidates
+        .first()
+        .and_then(|c| c.content.parts.first())
+        .map(|p| p.text.trim().to_string())
+        .unwrap_or_default();
+
+    let usage = parsed.usage_metadata.map(|u| LlmUsage {
+        model: LlmModel::Gemini25FlashLite.as_str().to_string(),
+        prompt_tokens: u.prompt_token_count,
+        completion_tokens: u.candidates_token_count,
+    });
+
+    Ok(PostProcessResult { text, usage })
+}
+
+pub async fn transcribe_audio_gemini(
+    api_key: &str,
+    audio_bytes: &[u8],
+    mime_type: &str,
+) -> AppResult<PostProcessResult> {
+    let inline_data = GeminiInlineData {
+        mime_type: mime_type.to_string(),
+        data: base64::engine::general_purpose::STANDARD.encode(audio_bytes),
+    };
+    let req = GeminiRequest {
+        contents: vec![GeminiContent {
+            role: "user".to_string(),
+            parts: vec![
+                GeminiPart::Text {
+                    text: AUDIO_TRANSCRIBE_INSTRUCTION.to_string(),
+                },
+                GeminiPart::InlineData { inline_data },
+            ],
+        }],
+    };
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={api_key}",
+        LlmModel::Gemini25FlashLite.as_str()
+    );
     let client = reqwest::Client::new();
     let response = client.post(url).json(&req).send().await?;
     let status = response.status();

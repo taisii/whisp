@@ -28,6 +28,8 @@ impl Default for RecordingMode {
 pub enum LlmModel {
     #[serde(rename = "gemini-2.5-flash-lite")]
     Gemini25FlashLite,
+    #[serde(rename = "gemini-2.5-flash-lite-audio")]
+    Gemini25FlashLiteAudio,
     #[serde(rename = "gpt-4o-mini")]
     Gpt4oMini,
     #[serde(rename = "gpt-5-nano")]
@@ -38,9 +40,14 @@ impl LlmModel {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Gemini25FlashLite => "gemini-2.5-flash-lite",
+            Self::Gemini25FlashLiteAudio => "gemini-2.5-flash-lite",
             Self::Gpt4oMini => "gpt-4o-mini",
             Self::Gpt5Nano => "gpt-5-nano",
         }
+    }
+
+    pub fn uses_direct_audio(self) -> bool {
+        matches!(self, Self::Gemini25FlashLiteAudio)
     }
 }
 
