@@ -407,30 +407,6 @@ button.ghost {
   border-color: #e0c9a6;
 }
 
-.prompt-preview {
-  border: 1px solid #eadcc7;
-  border-radius: 12px;
-  padding: 12px;
-  background: #fffaf2;
-}
-
-.prompt-preview-title {
-  margin: 0 0 8px;
-  font-size: 12px;
-  color: #7c6e5e;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.prompt-preview pre {
-  margin: 0;
-  white-space: pre-wrap;
-  font-size: 12px;
-  color: #2c241c;
-  max-height: 200px;
-  overflow: auto;
-}
-
 .prompt-actions {
   display: flex;
   gap: 8px;

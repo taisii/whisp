@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { buildShortcutString, formatShortcutDisplay } from "@/lib/shortcut";
 import type { UsageSummary } from "@/types/usage";
 
@@ -39,11 +38,6 @@ type DebugLog = {
   message: string;
 };
 
-type PipelineResult = {
-  stt: string;
-  output: string;
-};
-
 const DEFAULT_PROMPT_TEMPLATE = `以下の音声認識結果を修正してください。修正後のテキストのみを出力してください。
 
 修正ルール:
@@ -77,9 +71,10 @@ function formatDuration(seconds: number): string {
   if (seconds < 60) {
     return `${seconds.toFixed(1)}秒`;
   }
-  const minutes = Math.floor(seconds / 60);
-  const remaining = seconds % 60;
-  return `${minutes}分${remaining.toFixed(0)}秒`;
+  const rounded = Math.round(seconds);
+  const minutes = Math.floor(rounded / 60);
+  const remaining = rounded % 60;
+  return `${minutes}分${remaining}秒`;
 }
 
 export default function Settings() {
@@ -90,7 +85,6 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [pipelineState, setPipelineState] = useState("idle");
   const [logs, setLogs] = useState<DebugLog[]>([]);
-  const [lastOutput, setLastOutput] = useState<PipelineResult | null>(null);
   const [captureActive, setCaptureActive] = useState(false);
   const [shortcutHint, setShortcutHint] = useState<string | null>(null);
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
@@ -128,7 +122,6 @@ export default function Settings() {
     if (!tauriReady) return;
     let unlistenState: (() => void) | null = null;
     let unlistenLog: (() => void) | null = null;
-    let unlistenOutput: (() => void) | null = null;
     let unlistenConfig: (() => void) | null = null;
     let unlistenUsage: (() => void) | null = null;
 
@@ -139,10 +132,6 @@ export default function Settings() {
       unlistenLog = await listen("debug-log", (event) => {
         const payload = event.payload as DebugLog;
         setLogs((prev) => [payload, ...prev].slice(0, 200));
-      });
-      unlistenOutput = await listen("pipeline-output", (event) => {
-        const payload = event.payload as PipelineResult;
-        setLastOutput(payload);
       });
       unlistenConfig = await listen("config-updated", (event) => {
         const payload = event.payload as Config;
@@ -159,7 +148,6 @@ export default function Settings() {
     return () => {
       if (unlistenState) unlistenState();
       if (unlistenLog) unlistenLog();
-      if (unlistenOutput) unlistenOutput();
       if (unlistenConfig) unlistenConfig();
       if (unlistenUsage) unlistenUsage();
     };
@@ -317,21 +305,6 @@ export default function Settings() {
     }
   };
 
-  const copyOutput = async () => {
-    if (!lastOutput || !tauriReady) return;
-    try {
-      await writeText(lastOutput.output);
-      setStatus("出力をクリップボードにコピーしました");
-    } catch (error) {
-      const message =
-        typeof error === "string"
-          ? error
-          : error && typeof error === "object" && "message" in error
-            ? String((error as { message?: unknown }).message)
-            : "コピーに失敗しました";
-      setStatus(message);
-    }
-  };
 
   return (
     <div className="app">
@@ -594,10 +567,6 @@ export default function Settings() {
                   デフォルトに戻す
                 </button>
               </div>
-              <div className="prompt-preview">
-                <p className="prompt-preview-title">プレビュー</p>
-                <pre>{selectedTemplate}</pre>
-              </div>
             </div>
           </div>
         )}
@@ -710,19 +679,6 @@ export default function Settings() {
                 ))
               )}
             </div>
-          </div>
-          <div className="debug-panel">
-            <p className="debug-label">最新の出力</p>
-            {lastOutput ? (
-              <div className="output-panel">
-                <pre>{lastOutput.output}</pre>
-                <button className="ghost" onClick={copyOutput}>
-                  出力をコピー
-                </button>
-              </div>
-            ) : (
-              <p className="log-empty">まだ出力がありません</p>
-            )}
           </div>
         </div>
       </section>
