@@ -195,6 +195,36 @@ h1 {
   margin-bottom: 12px;
 }
 
+.section-header.clickable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 10px;
+  margin: -8px -10px 0;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.section-header.clickable:hover {
+  background: #faf6f0;
+}
+
+.section-header-content {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.collapsible-section .section-content {
+  margin-top: 12px;
+}
+
 .section-content {
   display: flex;
   flex-direction: column;

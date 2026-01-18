@@ -124,6 +124,7 @@ export default function Settings() {
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
   const [debugExpanded, setDebugExpanded] = useState(false);
+  const [authExpanded, setAuthExpanded] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -373,44 +374,52 @@ export default function Settings() {
           </div>
         </div>
 
-        {/* Auth Section */}
-        <div className="settings-section">
-          <div className="section-header">
-            <Key size={16} />
-            <span>認証</span>
-          </div>
-          <div className="section-content">
-            <label className="field">
-              <span>Deepgram</span>
-              <input
-                type="password"
-                value={config.api_keys.deepgram}
-                onChange={(e) => updateApiKey("deepgram", e.target.value)}
-                placeholder="dg_..."
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>Gemini</span>
-              <input
-                type="password"
-                value={config.api_keys.gemini}
-                onChange={(e) => updateApiKey("gemini", e.target.value)}
-                placeholder="AIza..."
-                disabled={loading}
-              />
-            </label>
-            <label className="field">
-              <span>OpenAI</span>
-              <input
-                type="password"
-                value={config.api_keys.openai}
-                onChange={(e) => updateApiKey("openai", e.target.value)}
-                placeholder="sk-..."
-                disabled={loading}
-              />
-            </label>
-          </div>
+        {/* Auth Section (Collapsible) */}
+        <div className="settings-section collapsible-section">
+          <button
+            className="section-header clickable"
+            onClick={() => setAuthExpanded(!authExpanded)}
+          >
+            <div className="section-header-content">
+              <Key size={16} />
+              <span>認証</span>
+            </div>
+            {authExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+          {authExpanded && (
+            <div className="section-content">
+              <label className="field">
+                <span>Deepgram</span>
+                <input
+                  type="password"
+                  value={config.api_keys.deepgram}
+                  onChange={(e) => updateApiKey("deepgram", e.target.value)}
+                  placeholder="dg_..."
+                  disabled={loading}
+                />
+              </label>
+              <label className="field">
+                <span>Gemini</span>
+                <input
+                  type="password"
+                  value={config.api_keys.gemini}
+                  onChange={(e) => updateApiKey("gemini", e.target.value)}
+                  placeholder="AIza..."
+                  disabled={loading}
+                />
+              </label>
+              <label className="field">
+                <span>OpenAI</span>
+                <input
+                  type="password"
+                  value={config.api_keys.openai}
+                  onChange={(e) => updateApiKey("openai", e.target.value)}
+                  placeholder="sk-..."
+                  disabled={loading}
+                />
+              </label>
+            </div>
+          )}
         </div>
 
         {/* Input Section */}
