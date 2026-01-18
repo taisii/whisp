@@ -1,7 +1,14 @@
 use crate::config::{AppPromptRule, LlmModel};
 use crate::error::{AppError, AppResult};
+use crate::usage::LlmUsage;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone)]
+pub struct PostProcessResult {
+    pub text: String,
+    pub usage: Option<LlmUsage>,
+}
 
 const DEFAULT_PROMPT_TEMPLATE: &str = "以下の音声認識結果を修正してください。修正後のテキストのみを出力してください。\n\n修正ルール:\n1. フィラー（えーと、あのー、えー、なんか、こう、まあ、ちょっと）を除去\n2. 技術用語の誤認識を修正（例: \"リアクト\"→\"React\", \"ユーズステート\"→\"useState\"）\n3. 句読点を適切に追加\n4. 出力は{言語}にしてください\n\n入力: {STT結果}";
 
@@ -32,6 +39,16 @@ struct GeminiInlineData {
 #[derive(Debug, Deserialize)]
 struct GeminiResponse {
     candidates: Vec<GeminiCandidate>,
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiUsageMetadata {
+    #[serde(rename = "promptTokenCount", default)]
+    prompt_token_count: u32,
+    #[serde(rename = "candidatesTokenCount", default)]
+    candidates_token_count: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -64,6 +81,13 @@ struct OpenAiMessage {
 #[derive(Debug, Deserialize)]
 struct OpenAiResponse {
     choices: Vec<OpenAiChoice>,
+    usage: Option<OpenAiUsage>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiUsage {
+    prompt_tokens: u32,
+    completion_tokens: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,7 +157,7 @@ pub async fn post_process(
     language_hint: &str,
     app_name: Option<&str>,
     app_prompt_rules: &[AppPromptRule],
-) -> AppResult<String> {
+) -> AppResult<PostProcessResult> {
     let prompt = build_prompt(
         stt_result,
         language_hint,
@@ -150,7 +174,7 @@ pub async fn post_process(
     }
 }
 
-async fn post_process_gemini(api_key: &str, prompt: &str) -> AppResult<String> {
+async fn post_process_gemini(api_key: &str, prompt: &str) -> AppResult<PostProcessResult> {
     let req = GeminiRequest {
         contents: vec![GeminiContent {
             role: "user".to_string(),
@@ -184,14 +208,21 @@ async fn post_process_gemini(api_key: &str, prompt: &str) -> AppResult<String> {
         .and_then(|c| c.content.parts.first())
         .map(|p| p.text.trim().to_string())
         .unwrap_or_default();
-    Ok(text)
+
+    let usage = parsed.usage_metadata.map(|u| LlmUsage {
+        model: LlmModel::Gemini25FlashLite.as_str().to_string(),
+        prompt_tokens: u.prompt_token_count,
+        completion_tokens: u.candidates_token_count,
+    });
+
+    Ok(PostProcessResult { text, usage })
 }
 
 pub async fn transcribe_audio_gemini(
     api_key: &str,
     audio_bytes: &[u8],
     mime_type: &str,
-) -> AppResult<String> {
+) -> AppResult<PostProcessResult> {
     let inline_data = GeminiInlineData {
         mime_type: mime_type.to_string(),
         data: base64::engine::general_purpose::STANDARD.encode(audio_bytes),
@@ -230,14 +261,21 @@ pub async fn transcribe_audio_gemini(
         .and_then(|c| c.content.parts.first())
         .map(|p| p.text.trim().to_string())
         .unwrap_or_default();
-    Ok(text)
+
+    let usage = parsed.usage_metadata.map(|u| LlmUsage {
+        model: LlmModel::Gemini25FlashLite.as_str().to_string(),
+        prompt_tokens: u.prompt_token_count,
+        completion_tokens: u.candidates_token_count,
+    });
+
+    Ok(PostProcessResult { text, usage })
 }
 
 async fn post_process_openai(
     api_key: &str,
     model: LlmModel,
     prompt: &str,
-) -> AppResult<String> {
+) -> AppResult<PostProcessResult> {
     let req = OpenAiRequest {
         model: model.as_str().to_string(),
         messages: vec![OpenAiMessage {
@@ -269,7 +307,14 @@ async fn post_process_openai(
         .first()
         .map(|c| c.message.content.trim().to_string())
         .unwrap_or_default();
-    Ok(text)
+
+    let usage = parsed.usage.map(|u| LlmUsage {
+        model: model.as_str().to_string(),
+        prompt_tokens: u.prompt_tokens,
+        completion_tokens: u.completion_tokens,
+    });
+
+    Ok(PostProcessResult { text, usage })
 }
 
 #[cfg(test)]
@@ -324,6 +369,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_gemini_response_with_usage() {
+        let json = r#"{
+            "candidates": [
+                { "content": { "parts": [ { "text": "整形済み" } ] } }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 50
+            }
+        }"#;
+        let parsed: GeminiResponse = serde_json::from_str(json).expect("parse");
+        assert_eq!(parsed.candidates[0].content.parts[0].text, "整形済み");
+        let usage = parsed.usage_metadata.expect("usage");
+        assert_eq!(usage.prompt_token_count, 100);
+        assert_eq!(usage.candidates_token_count, 50);
+    }
+
+    #[test]
     fn parse_openai_response() {
         let json = r#"{
             "choices": [
@@ -333,5 +396,23 @@ mod tests {
         let parsed: OpenAiResponse = serde_json::from_str(json).expect("parse");
         let text = parsed.choices[0].message.content.clone();
         assert_eq!(text, "整形済み");
+    }
+
+    #[test]
+    fn parse_openai_response_with_usage() {
+        let json = r#"{
+            "choices": [
+                { "message": { "content": "整形済み" } }
+            ],
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 100
+            }
+        }"#;
+        let parsed: OpenAiResponse = serde_json::from_str(json).expect("parse");
+        assert_eq!(parsed.choices[0].message.content, "整形済み");
+        let usage = parsed.usage.expect("usage");
+        assert_eq!(usage.prompt_tokens, 200);
+        assert_eq!(usage.completion_tokens, 100);
     }
 }

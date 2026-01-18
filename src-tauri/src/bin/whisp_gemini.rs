@@ -21,7 +21,7 @@ fn run() -> Result<(), String> {
     let input = read_stdin()?;
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let output = rt
+    let result = rt
         .block_on(whisp_lib::post_processor::post_process(
             LlmModel::Gemini25FlashLite,
             &parsed.api_key,
@@ -31,7 +31,13 @@ fn run() -> Result<(), String> {
             &[],
         ))
         .map_err(|e| e.to_string())?;
-    println!("{output}");
+    println!("{}", result.text);
+    if let Some(usage) = result.usage {
+        eprintln!(
+            "[usage] model: {}, prompt: {}, completion: {}",
+            usage.model, usage.prompt_tokens, usage.completion_tokens
+        );
+    }
     Ok(())
 }
 
@@ -82,14 +88,20 @@ fn run_audio(api_key: &str, path: &str) -> Result<(), String> {
     let audio = std::fs::read(Path::new(path)).map_err(|e| e.to_string())?;
     let mime_type = mime_type_from_path(path)?;
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let output = rt
+    let result = rt
         .block_on(whisp_lib::post_processor::transcribe_audio_gemini(
             api_key,
             &audio,
             &mime_type,
         ))
         .map_err(|e| e.to_string())?;
-    println!("{output}");
+    println!("{}", result.text);
+    if let Some(usage) = result.usage {
+        eprintln!(
+            "[usage] model: {}, prompt: {}, completion: {}",
+            usage.model, usage.prompt_tokens, usage.completion_tokens
+        );
+    }
     Ok(())
 }
 
