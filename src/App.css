@@ -195,16 +195,23 @@ h1 {
   margin-bottom: 12px;
 }
 
+.collapsible-section {
+  background: #fbf6ed;
+  border: 1px solid #efe1cc;
+  border-radius: 12px;
+  padding: 0;
+}
+
 .section-header.clickable {
   display: flex;
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 8px 10px;
-  margin: -8px -10px 0;
+  padding: 12px 14px;
+  margin: 0;
   background: transparent;
   border: none;
-  border-radius: 8px;
+  border-radius: 12px;
   cursor: pointer;
   font: inherit;
   text-transform: uppercase;
@@ -212,7 +219,7 @@ h1 {
 }
 
 .section-header.clickable:hover {
-  background: #faf6f0;
+  background: #f7f0e5;
 }
 
 .section-header-content {
@@ -222,7 +229,7 @@ h1 {
 }
 
 .collapsible-section .section-content {
-  margin-top: 12px;
+  padding: 0 14px 14px;
 }
 
 .section-content {
