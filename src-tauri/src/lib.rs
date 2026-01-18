@@ -636,11 +636,13 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
             cost_estimate_usd: cost,
         });
 
+        // Clone before move into closure (recommended fix for E0382)
+        let processed_char_count = processed.chars().count();
         emit_log(
             app,
             "info",
             "postprocess",
-            format!("処理完了: {} chars", processed.chars().count()),
+            format!("処理完了: {processed_char_count} chars"),
         );
         emit_log(app, "info", "postprocess", format!("整形結果: {processed}"));
 
@@ -676,7 +678,7 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
             "recording finished in {}ms (stt_result={} chars, output={} chars)",
             elapsed.as_millis(),
             stt_text.chars().count(),
-            processed.chars().count()
+            processed_char_count
         );
 
         Ok::<_, AppError>(())
