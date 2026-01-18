@@ -12,6 +12,8 @@ A macOS menu bar app that transcribes speech in real time and applies AI post-pr
 
 Download the latest `.dmg` from [Releases](https://github.com/your-repo/whisp/releases) and drag `Whisp.app` to the Applications folder.
 
+> **Note**: Whisp currently supports Apple Silicon (arm64) Macs only.
+
 ### 2. First launch setup (required for unsigned apps)
 
 Because this app is not enrolled in the Apple Developer Program, macOS Gatekeeper will block it on first launch. Use either method below to open it.
