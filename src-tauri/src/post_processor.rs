@@ -1,5 +1,6 @@
 use crate::config::{AppPromptRule, LlmModel};
 use crate::error::{AppError, AppResult};
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_PROMPT_TEMPLATE: &str = "以下の音声認識結果を修正してください。修正後のテキストのみを出力してください。\n\n修正ルール:\n1. フィラー（えーと、あのー、えー、なんか、こう、まあ、ちょっと）を除去\n2. 技術用語の誤認識を修正（例: \"リアクト\"→\"React\", \"ユーズステート\"→\"useState\"）\n3. 句読点を適切に追加\n4. 出力は{言語}にしてください\n\n入力: {STT結果}";
@@ -16,8 +17,16 @@ struct GeminiContent {
 }
 
 #[derive(Debug, Serialize)]
-struct GeminiPart {
-    text: String,
+#[serde(untagged)]
+enum GeminiPart {
+    Text { text: String },
+    InlineData { inline_data: GeminiInlineData },
+}
+
+#[derive(Debug, Serialize)]
+struct GeminiInlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,6 +124,8 @@ pub fn build_prompt(
     apply_template(template, stt_result, language_hint)
 }
 
+const AUDIO_TRANSCRIBE_INSTRUCTION: &str = "次の音声を文字起こしし、フィラーを除去して整形してください。修正後のテキストのみを出力してください。";
+
 pub async fn post_process(
     model: LlmModel,
     api_key: &str,
@@ -141,7 +152,7 @@ async fn post_process_gemini(api_key: &str, prompt: &str) -> AppResult<String> {
     let req = GeminiRequest {
         contents: vec![GeminiContent {
             role: "user".to_string(),
-            parts: vec![GeminiPart {
+            parts: vec![GeminiPart::Text {
                 text: prompt.to_string(),
             }],
         }],
@@ -152,6 +163,52 @@ async fn post_process_gemini(api_key: &str, prompt: &str) -> AppResult<String> {
         LlmModel::Gemini25FlashLite.as_str()
     );
 
+    let client = reqwest::Client::new();
+    let response = client.post(url).json(&req).send().await?;
+    let status = response.status();
+    let body = response.text().await?;
+
+    if !status.is_success() {
+        return Err(AppError::Other(format!(
+            "Gemini API error: {status} {body}"
+        )));
+    }
+
+    let parsed: GeminiResponse = serde_json::from_str(&body)
+        .map_err(|e| AppError::Other(format!("Gemini response parse error: {e}")))?;
+    let text = parsed
+        .candidates
+        .first()
+        .and_then(|c| c.content.parts.first())
+        .map(|p| p.text.trim().to_string())
+        .unwrap_or_default();
+    Ok(text)
+}
+
+pub async fn transcribe_audio_gemini(
+    api_key: &str,
+    audio_bytes: &[u8],
+    mime_type: &str,
+) -> AppResult<String> {
+    let inline_data = GeminiInlineData {
+        mime_type: mime_type.to_string(),
+        data: base64::engine::general_purpose::STANDARD.encode(audio_bytes),
+    };
+    let req = GeminiRequest {
+        contents: vec![GeminiContent {
+            role: "user".to_string(),
+            parts: vec![
+                GeminiPart::Text {
+                    text: AUDIO_TRANSCRIBE_INSTRUCTION.to_string(),
+                },
+                GeminiPart::InlineData { inline_data },
+            ],
+        }],
+    };
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={api_key}",
+        LlmModel::Gemini25FlashLite.as_str()
+    );
     let client = reqwest::Client::new();
     let response = client.post(url).json(&req).send().await?;
     let status = response.status();
