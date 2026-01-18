@@ -13,6 +13,7 @@ pub enum AppError {
     ConfigDirMissing,
     MissingApiKey(&'static str),
     Shortcut(String),
+    AccessibilityPermissionRequired,
     Other(String),
 }
 
@@ -28,6 +29,9 @@ impl fmt::Display for AppError {
             AppError::ConfigDirMissing => write!(f, "config directory not found"),
             AppError::MissingApiKey(name) => write!(f, "missing api key: {name}"),
             AppError::Shortcut(msg) => write!(f, "shortcut error: {msg}"),
+            AppError::AccessibilityPermissionRequired => {
+                write!(f, "accessibility permission required")
+            }
             AppError::Other(msg) => write!(f, "{msg}"),
         }
     }

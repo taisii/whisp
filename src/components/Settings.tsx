@@ -41,8 +41,6 @@ type AppPromptRule = {
 type Config = {
   api_keys: ApiKeys;
   shortcut: string;
-  auto_paste: boolean;
-  avoid_clipboard_history: boolean;
   input_language: string;
   recording_mode: RecordingMode;
   known_apps: string[];
@@ -68,8 +66,6 @@ const DEFAULT_PROMPT_TEMPLATE = `以下の音声認識結果を修正してく�
 const emptyConfig: Config = {
   api_keys: { deepgram: "", gemini: "", openai: "" },
   shortcut: "Cmd+J",
-  auto_paste: true,
-  avoid_clipboard_history: true,
   input_language: "ja",
   recording_mode: "toggle",
   known_apps: [],
@@ -160,6 +156,7 @@ export default function Settings() {
     let unlistenLog: (() => void) | null = null;
     let unlistenConfig: (() => void) | null = null;
     let unlistenUsage: (() => void) | null = null;
+    let unlistenAccessibility: (() => void) | null = null;
 
     const setup = async () => {
       unlistenState = await listen("pipeline-state", (event) => {
@@ -178,6 +175,9 @@ export default function Settings() {
           .then(setUsageSummary)
           .catch(() => {});
       });
+      unlistenAccessibility = await listen("accessibility-required", () => {
+        setStatus("アクセシビリティ許可が必要です。設定を開いて許可してください。");
+      });
     };
 
     setup();
@@ -186,6 +186,7 @@ export default function Settings() {
       if (unlistenLog) unlistenLog();
       if (unlistenConfig) unlistenConfig();
       if (unlistenUsage) unlistenUsage();
+      if (unlistenAccessibility) unlistenAccessibility();
     };
   }, [tauriReady]);
 
@@ -529,38 +530,6 @@ export default function Settings() {
                 </option>
               </select>
             </label>
-            <div className="toggle-group">
-              <label className="toggle-item">
-                <input
-                  type="checkbox"
-                  checked={config.auto_paste}
-                  onChange={(e) =>
-                    setConfig((prev) => ({
-                      ...prev,
-                      auto_paste: e.target.checked,
-                    }))
-                  }
-                  disabled={loading}
-                />
-                <span>完了後に自動で貼り付け</span>
-              </label>
-              {config.auto_paste && (
-                <label className="toggle-item nested">
-                  <input
-                    type="checkbox"
-                    checked={config.avoid_clipboard_history}
-                    onChange={(e) =>
-                      setConfig((prev) => ({
-                        ...prev,
-                        avoid_clipboard_history: e.target.checked,
-                      }))
-                    }
-                    disabled={loading}
-                  />
-                  <span>履歴アプリに残さない</span>
-                </label>
-              )}
-            </div>
           </div>
         </div>
 
