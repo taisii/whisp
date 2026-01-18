@@ -9,7 +9,6 @@
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",
-    "clipboard-manager:allow-write-text",
     "notification:allow-notify",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",

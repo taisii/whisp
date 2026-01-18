@@ -23,7 +23,6 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-global-shortcut = "2"
-tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
 tokio = { version = "1", features = ["full"] }
@@ -35,7 +34,6 @@ toml = "0.8"
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 base64 = "0.22"
 cpal = "0.16"
-enigo = "0.2"
 rodio = { version = "0.21", features = ["symphonia-all"] }
 dirs = "5"
 chrono = { version = "0.4", features = ["serde"] }

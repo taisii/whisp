@@ -1,6 +1,6 @@
 mod billing;
-mod clipboard;
 mod context;
+mod direct_input;
 pub mod config;
 pub mod error;
 pub mod audio_file;
@@ -64,7 +64,7 @@ enum PipelineState {
     Recording,
     SttStreaming,
     PostProcessing,
-    Clipboard,
+    DirectInput,
     Done,
     Error,
 }
@@ -644,30 +644,28 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         );
         emit_log(app, "info", "postprocess", format!("整形結果: {processed}"));
 
-        emit_state(app, PipelineState::Clipboard);
-        emit_log(app, "info", "clipboard", "クリップボードへ書き込み");
-        clipboard::write_text(app, &processed, config.avoid_clipboard_history)?;
-
-        if config.auto_paste {
-            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-            let app_for_paste = app.clone();
-            if let Err(err) = app.run_on_main_thread(move || {
-                if let Err(err) = key_sender::send_paste() {
-                    emit_log(
-                        &app_for_paste,
-                        "error",
-                        "paste",
-                        format!("自動ペースト失敗: {err}"),
-                    );
-                }
-            }) {
+        emit_state(app, PipelineState::DirectInput);
+        emit_log(app, "info", "direct_input", "直接入力を開始");
+        let app_for_input = app.clone();
+        if let Err(err) = app.run_on_main_thread(move || {
+            if let Err(err) = direct_input::send_text(&processed) {
                 emit_log(
-                    app,
+                    &app_for_input,
                     "error",
-                    "paste",
-                    format!("自動ペースト実行失敗: {err}"),
+                    "direct_input",
+                    format!("直接入力失敗: {err}"),
                 );
+                if matches!(err, AppError::AccessibilityPermissionRequired) {
+                    let _ = app_for_input.emit("accessibility-required", true);
+                }
             }
+        }) {
+            emit_log(
+                app,
+                "error",
+                "direct_input",
+                format!("直接入力実行失敗: {err}"),
+            );
         }
 
         let _ = sound::play_completion_sound();
@@ -791,7 +789,6 @@ async fn get_usage_summary(state: State<'_, AppState>) -> Result<UsageSummary, S
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
