@@ -33,7 +33,7 @@ fn run() -> Result<(), String> {
             input.trim(),
             "auto",
             None,
-            None,
+            &[],
         ))
         .map_err(|e| e.to_string())?;
     println!("{output}");

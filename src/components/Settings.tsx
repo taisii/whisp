@@ -14,9 +14,9 @@ type RecordingMode = "toggle" | "push_to_talk";
 
 type LlmModel = "gemini-2.5-flash-lite" | "gpt-4o-mini" | "gpt-5-nano";
 
-type ContextRule = {
+type AppPromptRule = {
   app_name: string;
-  instruction: string;
+  template: string;
 };
 
 type Config = {
@@ -26,9 +26,8 @@ type Config = {
   avoid_clipboard_history: boolean;
   input_language: string;
   recording_mode: RecordingMode;
-  context_rules: ContextRule[];
   known_apps: string[];
-  custom_prompt: string | null;
+  app_prompt_rules: AppPromptRule[];
   llm_model: LlmModel;
 };
 
@@ -61,34 +60,9 @@ const emptyConfig: Config = {
   avoid_clipboard_history: true,
   input_language: "ja",
   recording_mode: "toggle",
-  context_rules: [],
   known_apps: [],
-  custom_prompt: null,
+  app_prompt_rules: [],
   llm_model: "gemini-2.5-flash-lite",
-};
-
-const normalizeCustomPrompt = (value: string | null) => {
-  const trimmed = value?.trim();
-  return trimmed ? value : null;
-};
-
-const DEFAULT_CONTEXT_RULES = [
-  {
-    patterns: ["Visual Studio Code", "VSCode", "Cursor", "Xcode", "Terminal"],
-    label: "コード形式",
-  },
-  { patterns: ["Claude Code"], label: "コード形式" },
-  { patterns: ["Codex"], label: "コード形式" },
-];
-
-const getDefaultRuleLabel = (appName: string) => {
-  const lower = appName.toLowerCase();
-  for (const rule of DEFAULT_CONTEXT_RULES) {
-    if (rule.patterns.some((pattern) => lower.includes(pattern.toLowerCase()))) {
-      return rule.label;
-    }
-  }
-  return null;
 };
 
 export default function Settings() {
@@ -102,6 +76,7 @@ export default function Settings() {
   const [lastOutput, setLastOutput] = useState<PipelineResult | null>(null);
   const [captureActive, setCaptureActive] = useState(false);
   const [shortcutHint, setShortcutHint] = useState<string | null>(null);
+  const [selectedApp, setSelectedApp] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -213,74 +188,76 @@ export default function Settings() {
     }));
   };
 
-  const contextRuleMap = useMemo(() => {
-    const map = new Map<string, ContextRule>();
-    for (const rule of config.context_rules) {
-      const key = rule.app_name.trim().toLowerCase();
+  const appPromptMap = useMemo(() => {
+    const map = new Map<string, AppPromptRule>();
+    for (const rule of config.app_prompt_rules) {
+      const key = rule.app_name.trim();
       if (!key) continue;
       if (!map.has(key)) {
         map.set(key, rule);
       }
     }
     return map;
-  }, [config.context_rules]);
+  }, [config.app_prompt_rules]);
 
-  const contextApps = useMemo(() => {
+  const knownApps = useMemo(() => {
     const names = new Map<string, string>();
     const add = (value: string) => {
       const trimmed = value.trim();
       if (!trimmed) return;
-      const key = trimmed.toLowerCase();
-      if (!names.has(key)) {
-        names.set(key, trimmed);
+      if (!names.has(trimmed)) {
+        names.set(trimmed, trimmed);
       }
     };
     config.known_apps.forEach(add);
-    config.context_rules.forEach((rule) => add(rule.app_name));
     return Array.from(names.values()).sort((a, b) =>
       a.localeCompare(b, "en", { sensitivity: "base" }),
     );
-  }, [config.known_apps, config.context_rules]);
+  }, [config.known_apps]);
 
-  const updateContextInstruction = (appName: string, value: string) => {
+  useEffect(() => {
+    if (knownApps.length === 0) {
+      setSelectedApp(null);
+      return;
+    }
+    if (!selectedApp || !knownApps.includes(selectedApp)) {
+      setSelectedApp(knownApps[0]);
+    }
+  }, [knownApps, selectedApp]);
+
+  const updateAppPrompt = (appName: string, value: string) => {
     const trimmed = appName.trim();
     if (!trimmed) return;
     setConfig((prev) => {
-      const nextRules = prev.context_rules.filter(
-        (rule) => rule.app_name.trim() !== "",
+      const nextRules = prev.app_prompt_rules.filter(
+        (rule) => rule.app_name.trim() !== trimmed,
       );
-      const key = trimmed.toLowerCase();
-      const index = nextRules.findIndex(
-        (rule) => rule.app_name.trim().toLowerCase() === key,
-      );
-      const instruction = value.trim();
-      if (!instruction) {
-        if (index !== -1) {
-          nextRules.splice(index, 1);
-        }
-      } else {
-        const entry = { app_name: trimmed, instruction: value };
-        if (index === -1) {
-          nextRules.push(entry);
-        } else {
-          nextRules[index] = entry;
-        }
+      const template = value.trim();
+      if (template) {
+        nextRules.push({ app_name: trimmed, template: value });
       }
-      return { ...prev, context_rules: nextRules };
+      return { ...prev, app_prompt_rules: nextRules };
     });
   };
+
+  const selectedTemplate = useMemo(() => {
+    if (!selectedApp) return "";
+    const rule = appPromptMap.get(selectedApp);
+    return rule?.template ?? DEFAULT_PROMPT_TEMPLATE;
+  }, [appPromptMap, selectedApp]);
+
+  const hasCustomTemplate = selectedApp
+    ? appPromptMap.has(selectedApp)
+    : false;
 
   const removeKnownApp = (appName: string) => {
     const trimmed = appName.trim();
     if (!trimmed) return;
-    const key = trimmed.toLowerCase();
     setConfig((prev) => ({
       ...prev,
-      known_apps: prev.known_apps.filter(
-        (name) => name.trim().toLowerCase() !== key,
-      ),
-      context_rules: prev.context_rules.filter(
-        (rule) => rule.app_name.trim().toLowerCase() !== key,
+      known_apps: prev.known_apps.filter((name) => name.trim() !== trimmed),
+      app_prompt_rules: prev.app_prompt_rules.filter(
+        (rule) => rule.app_name.trim() !== trimmed,
       ),
     }));
   };
@@ -293,11 +270,7 @@ export default function Settings() {
     setSaving(true);
     setStatus(null);
     try {
-      const payload = {
-        ...config,
-        custom_prompt: normalizeCustomPrompt(config.custom_prompt),
-      };
-      await invoke("save_config", { config: payload });
+      await invoke("save_config", { config });
       setStatus("保存しました");
     } catch (error) {
       const message =
@@ -535,85 +508,67 @@ export default function Settings() {
 
       <section className="card">
         <div className="card-header">
-          <h2>カスタムプロンプト</h2>
-          <p>{`{STT結果}`}/{`{言語}`} を使って出力スタイルを調整できます。</p>
-        </div>
-        <div className="prompt-body">
-          <textarea
-            value={config.custom_prompt ?? DEFAULT_PROMPT_TEMPLATE}
-            onChange={(e) =>
-              setConfig((prev) => ({
-                ...prev,
-                custom_prompt: e.target.value,
-              }))
-            }
-            disabled={loading}
-            rows={8}
-          />
-          <small>{`{STT結果}`}が含まれない場合、末尾に入力を自動追加します。</small>
-          <div className="prompt-actions">
-            <button
-              className="ghost"
-              onClick={() =>
-                setConfig((prev) => ({ ...prev, custom_prompt: null }))
-              }
-              disabled={loading}
-            >
-              デフォルトに戻す
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="card-header">
-          <h2>コンテキストルール</h2>
+          <h2>アプリ別プロンプト</h2>
           <p>
-            アプリ別に後処理の指示を追加できます（選択テキスト取得にはアクセシビリティ許可が必要です）。
+            アプリごとに完全なテンプレートを設定します（{`{STT結果}`} /
+            {`{言語}`}）。
           </p>
         </div>
-        <div className="context-rules">
-          <div className="context-list">
-            {contextApps.length === 0 ? (
-              <p className="context-empty">履歴にアプリがありません</p>
-            ) : (
-              contextApps.map((appName) => {
-                const rule = contextRuleMap.get(appName.toLowerCase());
-                const instruction = rule?.instruction ?? "";
-                const hasInstruction = instruction.trim().length > 0;
-                const defaultLabel =
-                  hasInstruction ? null : getDefaultRuleLabel(appName);
-                return (
-                  <div className="context-row" key={`context-${appName}`}>
-                    <div className="context-app">
-                      <span className="context-app-name">{appName}</span>
-                      {defaultLabel ? (
-                        <span className="context-default">
-                          （デフォルト: {defaultLabel}）
-                        </span>
-                      ) : null}
-                    </div>
-                    <textarea
-                      placeholder="指示を入力..."
-                      value={instruction}
-                      onChange={(e) =>
-                        updateContextInstruction(appName, e.target.value)
-                      }
-                      disabled={loading}
-                    />
-                    <button
-                      className="ghost"
-                      onClick={() => removeKnownApp(appName)}
-                      disabled={loading}
-                    >
-                      削除
-                    </button>
-                  </div>
-                );
-              })
-            )}
+        {knownApps.length === 0 ? (
+          <p className="context-empty">履歴にアプリがありません</p>
+        ) : (
+          <div className="app-prompt-layout">
+            <div className="app-list">
+              {knownApps.map((appName) => (
+                <button
+                  key={`app-${appName}`}
+                  className={`ghost ${selectedApp === appName ? "active" : ""}`}
+                  onClick={() => setSelectedApp(appName)}
+                  disabled={loading}
+                >
+                  {appName}
+                </button>
+              ))}
+              {selectedApp ? (
+                <button
+                  className="ghost"
+                  onClick={() => removeKnownApp(selectedApp)}
+                  disabled={loading}
+                >
+                  履歴から削除
+                </button>
+              ) : null}
+            </div>
+            <div className="prompt-body">
+              <textarea
+                value={selectedTemplate}
+                onChange={(e) => {
+                  if (!selectedApp) return;
+                  updateAppPrompt(selectedApp, e.target.value);
+                }}
+                disabled={loading || !selectedApp}
+                rows={10}
+              />
+              <small>{`{STT結果}`}が含まれない場合、末尾に入力を自動追加します。</small>
+              <div className="prompt-actions">
+                <button
+                  className="ghost"
+                  onClick={() => {
+                    if (!selectedApp) return;
+                    updateAppPrompt(selectedApp, "");
+                  }}
+                  disabled={loading || !selectedApp || !hasCustomTemplate}
+                >
+                  デフォルトに戻す
+                </button>
+              </div>
+              <div className="prompt-preview">
+                <p className="prompt-preview-title">プレビュー</p>
+                <pre>{selectedTemplate}</pre>
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </section>
 
       <section className="card">

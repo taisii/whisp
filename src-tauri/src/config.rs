@@ -52,9 +52,9 @@ impl Default for LlmModel {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
-pub struct ContextRule {
+pub struct AppPromptRule {
     pub app_name: String,
-    pub instruction: String,
+    pub template: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,9 +66,8 @@ pub struct Config {
     pub avoid_clipboard_history: bool,
     pub input_language: String,
     pub recording_mode: RecordingMode,
-    pub context_rules: Vec<ContextRule>,
     pub known_apps: Vec<String>,
-    pub custom_prompt: Option<String>,
+    pub app_prompt_rules: Vec<AppPromptRule>,
     pub llm_model: LlmModel,
 }
 
@@ -85,9 +84,8 @@ impl Default for Config {
             avoid_clipboard_history: true,
             input_language: "ja".to_string(),
             recording_mode: RecordingMode::Toggle,
-            context_rules: Vec::new(),
             known_apps: Vec::new(),
-            custom_prompt: None,
+            app_prompt_rules: Vec::new(),
             llm_model: LlmModel::Gemini25FlashLite,
         }
     }
@@ -161,12 +159,11 @@ mod tests {
             avoid_clipboard_history: true,
             input_language: "ja".to_string(),
             recording_mode: RecordingMode::PushToTalk,
-            context_rules: vec![ContextRule {
-                app_name: "VSCode".to_string(),
-                instruction: "コード形式で簡潔に".to_string(),
-            }],
             known_apps: vec!["Slack".to_string(), "VSCode".to_string()],
-            custom_prompt: Some("入力: {STT結果}".to_string()),
+            app_prompt_rules: vec![AppPromptRule {
+                app_name: "Slack".to_string(),
+                template: "入力: {STT結果}".to_string(),
+            }],
             llm_model: LlmModel::Gpt5Nano,
         };
 

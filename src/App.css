@@ -384,6 +384,53 @@ button.ghost {
   gap: 10px;
 }
 
+.app-prompt-layout {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.app-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-list .ghost {
+  justify-content: flex-start;
+}
+
+.app-list .ghost.active {
+  background: #f7ead4;
+  border-color: #e0c9a6;
+}
+
+.prompt-preview {
+  border: 1px solid #eadcc7;
+  border-radius: 12px;
+  padding: 12px;
+  background: #fffaf2;
+}
+
+.prompt-preview-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #7c6e5e;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.prompt-preview pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-size: 12px;
+  color: #2c241c;
+  max-height: 200px;
+  overflow: auto;
+}
+
 .prompt-actions {
   display: flex;
   gap: 8px;
@@ -411,6 +458,10 @@ button.ghost {
   }
 
   .context-row {
+    grid-template-columns: 1fr;
+  }
+
+  .app-prompt-layout {
     grid-template-columns: 1fr;
   }
 }
