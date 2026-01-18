@@ -26,7 +26,7 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let stt = rt
+    let stt_result = rt
         .block_on(whisp_lib::stt_client::run_deepgram_bytes(
             &deepgram_key,
             audio.sample_rate,
@@ -37,17 +37,29 @@ fn run() -> Result<(), String> {
         ))
         .map_err(|e| e.to_string())?;
 
-    let output = rt
+    let llm_result = rt
         .block_on(whisp_lib::post_processor::post_process(
             LlmModel::Gemini25FlashLite,
             &gemini_key,
-            &stt,
+            &stt_result.transcript,
             "auto",
             None,
             &[],
         ))
         .map_err(|e| e.to_string())?;
 
-    println!("--- STT ---\n{stt}\n\n--- OUTPUT ---\n{output}");
+    println!(
+        "--- STT ---\n{}\n\n--- OUTPUT ---\n{}",
+        stt_result.transcript, llm_result.text
+    );
+    if let Some(usage) = stt_result.usage {
+        eprintln!("[stt usage] duration: {:.2}s", usage.duration_seconds);
+    }
+    if let Some(usage) = llm_result.usage {
+        eprintln!(
+            "[llm usage] model: {}, prompt: {}, completion: {}",
+            usage.model, usage.prompt_tokens, usage.completion_tokens
+        );
+    }
     Ok(())
 }

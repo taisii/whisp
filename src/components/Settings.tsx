@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { buildShortcutString, formatShortcutDisplay } from "@/lib/shortcut";
+import type { UsageSummary } from "@/types/usage";
 
 type ApiKeys = {
   deepgram: string;
@@ -65,6 +66,22 @@ const emptyConfig: Config = {
   llm_model: "gemini-2.5-flash-lite",
 };
 
+function formatCost(usd: number): string {
+  if (usd < 0.01) {
+    return `$${usd.toFixed(4)}`;
+  }
+  return `$${usd.toFixed(2)}`;
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}秒`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remaining = seconds % 60;
+  return `${minutes}分${remaining.toFixed(0)}秒`;
+}
+
 export default function Settings() {
   const tauriReady = isTauri();
   const [config, setConfig] = useState<Config>(emptyConfig);
@@ -77,6 +94,7 @@ export default function Settings() {
   const [captureActive, setCaptureActive] = useState(false);
   const [shortcutHint, setShortcutHint] = useState<string | null>(null);
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -112,6 +130,7 @@ export default function Settings() {
     let unlistenLog: (() => void) | null = null;
     let unlistenOutput: (() => void) | null = null;
     let unlistenConfig: (() => void) | null = null;
+    let unlistenUsage: (() => void) | null = null;
 
     const setup = async () => {
       unlistenState = await listen("pipeline-state", (event) => {
@@ -129,6 +148,11 @@ export default function Settings() {
         const payload = event.payload as Config;
         setConfig(payload);
       });
+      unlistenUsage = await listen("usage-metrics", (_event) => {
+        invoke<UsageSummary>("get_usage_summary")
+          .then(setUsageSummary)
+          .catch(() => {});
+      });
     };
 
     setup();
@@ -137,7 +161,15 @@ export default function Settings() {
       if (unlistenLog) unlistenLog();
       if (unlistenOutput) unlistenOutput();
       if (unlistenConfig) unlistenConfig();
+      if (unlistenUsage) unlistenUsage();
     };
+  }, [tauriReady]);
+
+  useEffect(() => {
+    if (!tauriReady) return;
+    invoke<UsageSummary>("get_usage_summary")
+      .then(setUsageSummary)
+      .catch(() => {});
   }, [tauriReady]);
 
   useEffect(() => {
@@ -568,6 +600,87 @@ export default function Settings() {
               </div>
             </div>
           </div>
+        )}
+      </section>
+
+      <section className="card">
+        <div className="card-header">
+          <h2>API利用状況</h2>
+          <p>APIの使用量と推定コストを表示します。</p>
+        </div>
+        {usageSummary ? (
+          <div className="usage-grid">
+            <div className="usage-panel">
+              <p className="usage-label">今日の利用</p>
+              <div className="usage-details">
+                <div className="usage-row">
+                  <span>Deepgram (STT)</span>
+                  <span>
+                    {formatDuration(usageSummary.today.deepgramSeconds)} /{" "}
+                    {formatCost(usageSummary.today.deepgramCostUsd)}
+                  </span>
+                </div>
+                {usageSummary.today.geminiTokens > 0 && (
+                  <div className="usage-row">
+                    <span>Gemini</span>
+                    <span>
+                      {usageSummary.today.geminiTokens.toLocaleString()} tokens /{" "}
+                      {formatCost(usageSummary.today.geminiCostUsd)}
+                    </span>
+                  </div>
+                )}
+                {usageSummary.today.openaiTokens > 0 && (
+                  <div className="usage-row">
+                    <span>OpenAI</span>
+                    <span>
+                      {usageSummary.today.openaiTokens.toLocaleString()} tokens /{" "}
+                      {formatCost(usageSummary.today.openaiCostUsd)}
+                    </span>
+                  </div>
+                )}
+                <div className="usage-row usage-total">
+                  <span>合計</span>
+                  <span>{formatCost(usageSummary.today.totalCostUsd)}</span>
+                </div>
+              </div>
+            </div>
+            <div className="usage-panel">
+              <p className="usage-label">今月の利用</p>
+              <div className="usage-details">
+                <div className="usage-row">
+                  <span>Deepgram (STT)</span>
+                  <span>
+                    {formatDuration(usageSummary.this_month.deepgramSeconds)} /{" "}
+                    {formatCost(usageSummary.this_month.deepgramCostUsd)}
+                  </span>
+                </div>
+                {usageSummary.this_month.geminiTokens > 0 && (
+                  <div className="usage-row">
+                    <span>Gemini</span>
+                    <span>
+                      {usageSummary.this_month.geminiTokens.toLocaleString()} tokens /{" "}
+                      {formatCost(usageSummary.this_month.geminiCostUsd)}
+                    </span>
+                  </div>
+                )}
+                {usageSummary.this_month.openaiTokens > 0 && (
+                  <div className="usage-row">
+                    <span>OpenAI</span>
+                    <span>
+                      {usageSummary.this_month.openaiTokens.toLocaleString()} tokens /{" "}
+                      {formatCost(usageSummary.this_month.openaiCostUsd)}
+                    </span>
+                  </div>
+                )}
+                <div className="usage-row usage-total">
+                  <span>合計</span>
+                  <span>{formatCost(usageSummary.this_month.totalCostUsd)}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <p className="usage-empty">利用データがありません</p>
         )}
       </section>
 
