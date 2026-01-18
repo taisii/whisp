@@ -1,3 +1,4 @@
+mod billing;
 mod clipboard;
 mod context;
 pub mod config;
@@ -11,10 +12,14 @@ mod shortcut;
 mod sound;
 pub mod stt_client;
 mod tray;
+pub mod usage;
 
+use crate::billing::{calculate_daily_cost, calculate_total_cost};
 use crate::config::{Config, ConfigManager, LlmModel, RecordingMode};
 use crate::error::{AppError, AppResult};
+use crate::stt_client::SttResult;
 use crate::tray::TrayState;
+use crate::usage::UsageManager;
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -31,7 +36,7 @@ const SILENCE_THRESHOLD: u16 = 500;
 
 struct RecordingSession {
     recorder: recorder::RecorderHandle,
-    stt_task: tauri::async_runtime::JoinHandle<AppResult<String>>,
+    stt_task: tauri::async_runtime::JoinHandle<AppResult<SttResult>>,
     started_at: Instant,
     session_id: u64,
 }
@@ -41,6 +46,7 @@ struct AppState {
     config: Mutex<Config>,
     recording: Mutex<Option<RecordingSession>>,
     recording_counter: AtomicU64,
+    usage_manager: UsageManager,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -409,20 +415,46 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
             .stt_task
             .await
             .map_err(|e| AppError::Other(e.to_string()))??;
+
+        let stt_usage = stt_result.usage.clone();
+        let stt_text = stt_result.transcript;
+
         emit_log(
             app,
             "info",
             "stt",
-            format!("STT完了: {} chars", stt_result.chars().count()),
+            format!("STT完了: {} chars", stt_text.chars().count()),
         );
-        emit_log(app, "info", "stt", format!("STT結果: {stt_result}"));
-        if is_empty_stt(&stt_result) {
+        emit_log(app, "info", "stt", format!("STT結果: {stt_text}"));
+
+        if let Some(ref usage) = stt_usage {
+            emit_log(
+                app,
+                "info",
+                "stt",
+                format!("STT使用量: {:.2}秒", usage.duration_seconds),
+            );
+        }
+
+        if is_empty_stt(&stt_text) {
             emit_log(
                 app,
                 "info",
                 "pipeline",
                 "STT結果が空のためLLM処理をスキップします",
             );
+            // Record STT usage even if no LLM processing
+            if stt_usage.is_some() {
+                state.usage_manager.record_usage(stt_usage.clone(), None);
+                let cost = calculate_total_cost(stt_usage.as_ref(), None);
+                let _ = app.emit("usage-metrics", UsageMetricsEvent {
+                    stt_duration_seconds: stt_usage.as_ref().map(|u| u.duration_seconds),
+                    llm_prompt_tokens: None,
+                    llm_completion_tokens: None,
+                    llm_model: None,
+                    cost_estimate_usd: cost,
+                });
+            }
             emit_state(app, PipelineState::Done);
             return Ok(());
         }
@@ -441,28 +473,51 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         );
         let llm_started = Instant::now();
         let llm_key = required_llm_key(&config)?;
-        let processed = post_processor::post_process(
+        let llm_result = post_processor::post_process(
             config.llm_model,
             llm_key,
-            &stt_result,
+            &stt_text,
             &config.input_language,
             app_name.as_deref(),
             &config.app_prompt_rules,
         )
         .await?;
+
+        let llm_usage = llm_result.usage.clone();
+        let processed = llm_result.text;
+
         emit_log(
             app,
             "info",
             "postprocess",
             format!("LLM処理時間: {}ms", llm_started.elapsed().as_millis()),
         );
-        let _ = app.emit(
-            "pipeline-output",
-            PipelineResult {
-                stt: stt_result.clone(),
-                output: processed.clone(),
-            },
-        );
+
+        if let Some(ref usage) = llm_usage {
+            emit_log(
+                app,
+                "info",
+                "postprocess",
+                format!(
+                    "LLM使用量: prompt={}, completion={}",
+                    usage.prompt_tokens, usage.completion_tokens
+                ),
+            );
+        }
+
+        // Record usage
+        state.usage_manager.record_usage(stt_usage.clone(), llm_usage.clone());
+
+        // Emit usage metrics event
+        let cost = calculate_total_cost(stt_usage.as_ref(), llm_usage.as_ref());
+        let _ = app.emit("usage-metrics", UsageMetricsEvent {
+            stt_duration_seconds: stt_usage.as_ref().map(|u| u.duration_seconds),
+            llm_prompt_tokens: llm_usage.as_ref().map(|u| u.prompt_tokens),
+            llm_completion_tokens: llm_usage.as_ref().map(|u| u.completion_tokens),
+            llm_model: llm_usage.as_ref().map(|u| u.model.clone()),
+            cost_estimate_usd: cost,
+        });
+
         emit_log(
             app,
             "info",
@@ -504,7 +559,7 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         println!(
             "recording finished in {}ms (stt_result={} chars, output={} chars)",
             elapsed.as_millis(),
-            stt_result.chars().count(),
+            stt_text.chars().count(),
             processed.chars().count()
         );
 
@@ -519,6 +574,16 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
     result
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct UsageMetricsEvent {
+    stt_duration_seconds: Option<f64>,
+    llm_prompt_tokens: Option<u32>,
+    llm_completion_tokens: Option<u32>,
+    llm_model: Option<String>,
+    cost_estimate_usd: f64,
+}
+
 fn register_global_shortcut(app: &AppHandle, shortcut: &str) -> AppResult<()> {
     shortcut::register_shortcut(app, shortcut, move |app, state| {
         tauri::async_runtime::spawn(async move {
@@ -529,12 +594,6 @@ fn register_global_shortcut(app: &AppHandle, shortcut: &str) -> AppResult<()> {
             }
         });
     })
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct PipelineResult {
-    stt: String,
-    output: String,
 }
 
 fn required_llm_key(config: &Config) -> AppResult<&str> {
@@ -566,6 +625,48 @@ fn validate_llm_api_key(app: &AppHandle, config: &Config) -> AppResult<()> {
     Ok(())
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DailyUsageSummary {
+    deepgram_seconds: f64,
+    deepgram_cost_usd: f64,
+    gemini_tokens: u32,
+    gemini_cost_usd: f64,
+    openai_tokens: u32,
+    openai_cost_usd: f64,
+    total_cost_usd: f64,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct UsageSummary {
+    today: DailyUsageSummary,
+    this_month: DailyUsageSummary,
+}
+
+fn daily_usage_to_summary(daily: &usage::DailyUsage) -> DailyUsageSummary {
+    let cost = calculate_daily_cost(daily);
+    DailyUsageSummary {
+        deepgram_seconds: daily.deepgram_seconds,
+        deepgram_cost_usd: cost.deepgram_cost_usd,
+        gemini_tokens: daily.gemini_prompt_tokens + daily.gemini_completion_tokens,
+        gemini_cost_usd: cost.gemini_cost_usd,
+        openai_tokens: daily.openai_prompt_tokens + daily.openai_completion_tokens,
+        openai_cost_usd: cost.openai_cost_usd,
+        total_cost_usd: cost.total_cost_usd,
+    }
+}
+
+#[tauri::command]
+async fn get_usage_summary(state: State<'_, AppState>) -> Result<UsageSummary, String> {
+    let today = state.usage_manager.get_today();
+    let this_month = state.usage_manager.get_current_month();
+
+    Ok(UsageSummary {
+        today: daily_usage_to_summary(&today),
+        this_month: daily_usage_to_summary(&this_month),
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -580,12 +681,14 @@ pub fn run() {
         .setup(|app| {
             let config_manager = ConfigManager::new()?;
             let config = config_manager.load_or_create()?;
+            let usage_manager = UsageManager::new()?;
 
             app.manage(AppState {
                 config_manager,
                 config: Mutex::new(config.clone()),
                 recording: Mutex::new(None),
                 recording_counter: AtomicU64::new(0),
+                usage_manager,
             });
 
             let _ = notification::request_permission(app.app_handle());
@@ -609,7 +712,8 @@ pub fn run() {
             save_config,
             toggle_recording,
             open_microphone_settings,
-            open_accessibility_settings
+            open_accessibility_settings,
+            get_usage_summary
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

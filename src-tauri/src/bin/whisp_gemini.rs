@@ -26,7 +26,7 @@ fn run() -> Result<(), String> {
     }
 
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
-    let output = rt
+    let result = rt
         .block_on(whisp_lib::post_processor::post_process(
             LlmModel::Gemini25FlashLite,
             &api_key,
@@ -36,6 +36,12 @@ fn run() -> Result<(), String> {
             &[],
         ))
         .map_err(|e| e.to_string())?;
-    println!("{output}");
+    println!("{}", result.text);
+    if let Some(usage) = result.usage {
+        eprintln!(
+            "[usage] model: {}, prompt: {}, completion: {}",
+            usage.model, usage.prompt_tokens, usage.completion_tokens
+        );
+    }
     Ok(())
 }
