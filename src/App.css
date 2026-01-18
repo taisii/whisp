@@ -473,11 +473,21 @@ button.icon-button {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
   font-size: 12px;
   color: #3a322a;
   padding: 5px 7px;
   background: #fffaf2;
   border-radius: 6px;
+}
+
+.usage-row > span:first-child {
+  flex-shrink: 0;
+}
+
+.usage-row > span:last-child {
+  text-align: right;
+  white-space: nowrap;
 }
 
 .usage-row.usage-total {
