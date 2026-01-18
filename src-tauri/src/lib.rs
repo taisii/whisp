@@ -518,13 +518,6 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
             cost_estimate_usd: cost,
         });
 
-        let _ = app.emit(
-            "pipeline-output",
-            PipelineResult {
-                stt: stt_text.clone(),
-                output: processed.clone(),
-            },
-        );
         emit_log(
             app,
             "info",
@@ -601,12 +594,6 @@ fn register_global_shortcut(app: &AppHandle, shortcut: &str) -> AppResult<()> {
             }
         });
     })
-}
-
-#[derive(Debug, Serialize, Clone)]
-struct PipelineResult {
-    stt: String,
-    output: String,
 }
 
 fn required_llm_key(config: &Config) -> AppResult<&str> {

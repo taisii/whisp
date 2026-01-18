@@ -12,11 +12,3 @@ export type UsageSummary = {
   today: DailyUsageSummary;
   this_month: DailyUsageSummary;
 };
-
-export type UsageMetricsEvent = {
-  sttDurationSeconds: number | null;
-  llmPromptTokens: number | null;
-  llmCompletionTokens: number | null;
-  llmModel: string | null;
-  costEstimateUsd: number;
-};
