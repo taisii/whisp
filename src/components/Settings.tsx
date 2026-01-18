@@ -84,16 +84,6 @@ function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-function formatDuration(seconds: number): string {
-  if (seconds < 60) {
-    return `${seconds.toFixed(1)}秒`;
-  }
-  const rounded = Math.round(seconds);
-  const minutes = Math.floor(rounded / 60);
-  const remaining = rounded % 60;
-  return `${minutes}分${remaining}秒`;
-}
-
 type PipelineStateInfo = {
   label: string;
   color: string;
@@ -663,24 +653,18 @@ export default function Settings() {
               <div className="usage-details">
                 <div className="usage-row">
                   <span>Deepgram</span>
-                  <span>
-                    {formatDuration(usageSummary.today.deepgramSeconds)} / {formatCost(usageSummary.today.deepgramCostUsd)}
-                  </span>
+                  <span>{formatCost(usageSummary.today.deepgramCostUsd)}</span>
                 </div>
-                {usageSummary.today.geminiTokens > 0 && (
+                {usageSummary.today.geminiCostUsd > 0 && (
                   <div className="usage-row">
                     <span>Gemini</span>
-                    <span>
-                      {usageSummary.today.geminiTokens.toLocaleString()} tokens / {formatCost(usageSummary.today.geminiCostUsd)}
-                    </span>
+                    <span>{formatCost(usageSummary.today.geminiCostUsd)}</span>
                   </div>
                 )}
-                {usageSummary.today.openaiTokens > 0 && (
+                {usageSummary.today.openaiCostUsd > 0 && (
                   <div className="usage-row">
                     <span>OpenAI</span>
-                    <span>
-                      {usageSummary.today.openaiTokens.toLocaleString()} tokens / {formatCost(usageSummary.today.openaiCostUsd)}
-                    </span>
+                    <span>{formatCost(usageSummary.today.openaiCostUsd)}</span>
                   </div>
                 )}
                 <div className="usage-row usage-total">
@@ -694,24 +678,18 @@ export default function Settings() {
               <div className="usage-details">
                 <div className="usage-row">
                   <span>Deepgram</span>
-                  <span>
-                    {formatDuration(usageSummary.this_month.deepgramSeconds)} / {formatCost(usageSummary.this_month.deepgramCostUsd)}
-                  </span>
+                  <span>{formatCost(usageSummary.this_month.deepgramCostUsd)}</span>
                 </div>
-                {usageSummary.this_month.geminiTokens > 0 && (
+                {usageSummary.this_month.geminiCostUsd > 0 && (
                   <div className="usage-row">
                     <span>Gemini</span>
-                    <span>
-                      {usageSummary.this_month.geminiTokens.toLocaleString()} tokens / {formatCost(usageSummary.this_month.geminiCostUsd)}
-                    </span>
+                    <span>{formatCost(usageSummary.this_month.geminiCostUsd)}</span>
                   </div>
                 )}
-                {usageSummary.this_month.openaiTokens > 0 && (
+                {usageSummary.this_month.openaiCostUsd > 0 && (
                   <div className="usage-row">
                     <span>OpenAI</span>
-                    <span>
-                      {usageSummary.this_month.openaiTokens.toLocaleString()} tokens / {formatCost(usageSummary.this_month.openaiCostUsd)}
-                    </span>
+                    <span>{formatCost(usageSummary.this_month.openaiCostUsd)}</span>
                   </div>
                 )}
                 <div className="usage-row usage-total">
