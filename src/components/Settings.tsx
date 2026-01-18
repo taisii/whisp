@@ -3,6 +3,25 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { buildShortcutString, formatShortcutDisplay } from "@/lib/shortcut";
 import type { UsageSummary } from "@/types/usage";
+import {
+  Key,
+  Mic,
+  ClipboardCopy,
+  AppWindow,
+  BarChart3,
+  Bug,
+  Save,
+  Settings as SettingsIcon,
+  Accessibility,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Circle,
+  CheckCircle2,
+  Radio,
+  Sparkles,
+  X,
+} from "lucide-react";
 
 type ApiKeys = {
   deepgram: string;
@@ -41,10 +60,8 @@ type DebugLog = {
 const DEFAULT_PROMPT_TEMPLATE = `以下の音声認識結果を修正してください。修正後のテキストのみを出力してください。
 
 修正ルール:
-1. フィラー（えーと、あのー、えー、なんか、こう、まあ、ちょっと）を除去
+1. フィラー（えーと、あのー）を除去
 2. 技術用語の誤認識を修正（例: "リアクト"→"React", "ユーズステート"→"useState"）
-3. 句読点を適切に追加
-4. 出力は{言語}にしてください
 
 入力: {STT結果}`;
 
@@ -67,14 +84,31 @@ function formatCost(usd: number): string {
   return `$${usd.toFixed(2)}`;
 }
 
-function formatDuration(seconds: number): string {
-  if (seconds < 60) {
-    return `${seconds.toFixed(1)}秒`;
+type PipelineStateInfo = {
+  label: string;
+  color: string;
+  icon: React.ReactNode;
+};
+
+function getPipelineStateInfo(state: string): PipelineStateInfo {
+  switch (state.toLowerCase()) {
+    case "idle":
+      return { label: "待機中", color: "var(--state-idle)", icon: <Circle size={14} /> };
+    case "recording":
+      return { label: "録音中", color: "var(--state-recording)", icon: <Radio size={14} /> };
+    case "stt_streaming":
+    case "sttstreaming":
+      return { label: "文字起こし中", color: "var(--state-processing)", icon: <Loader2 size={14} className="animate-spin" /> };
+    case "post_processing":
+    case "postprocessing":
+      return { label: "後処理中", color: "var(--state-processing)", icon: <Sparkles size={14} /> };
+    case "clipboard":
+      return { label: "クリップボード", color: "var(--state-success)", icon: <ClipboardCopy size={14} /> };
+    case "done":
+      return { label: "完了", color: "var(--state-success)", icon: <CheckCircle2 size={14} /> };
+    default:
+      return { label: state, color: "var(--state-idle)", icon: <Circle size={14} /> };
   }
-  const rounded = Math.round(seconds);
-  const minutes = Math.floor(rounded / 60);
-  const remaining = rounded % 60;
-  return `${minutes}分${remaining}秒`;
 }
 
 export default function Settings() {
@@ -89,6 +123,8 @@ export default function Settings() {
   const [shortcutHint, setShortcutHint] = useState<string | null>(null);
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+  const [debugExpanded, setDebugExpanded] = useState(false);
+  const [authExpanded, setAuthExpanded] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -182,7 +218,7 @@ export default function Settings() {
       });
 
       if (!shortcut) {
-        setShortcutHint("修飾キー（Cmd/Ctrl/Alt/Shift）+ 通常キーを入力してください");
+        setShortcutHint("修飾キー + 通常キーを入力してください");
         return;
       }
 
@@ -305,6 +341,7 @@ export default function Settings() {
     }
   };
 
+  const pipelineInfo = getPipelineStateInfo(pipelineState);
 
   return (
     <div className="app">
@@ -313,237 +350,265 @@ export default function Settings() {
           <p className="badge">Whisp</p>
           <h1>声から即座に、整ったテキストへ。</h1>
           <p className="subtitle">
-            ショートカットで録音を切り替え、完了後にクリップボードへ。句読点とフィラー除去は自動です。
+            ショートカットで録音を切り替え、完了後にクリップボードへ。
           </p>
           <div className="meta-row">
-            <span>現在のショートカット: {formatShortcutDisplay(config.shortcut)}</span>
-            <span>入力言語: {config.input_language.toUpperCase()}</span>
+            <span>{formatShortcutDisplay(config.shortcut)}</span>
+            <span>{config.input_language.toUpperCase()}</span>
           </div>
         </div>
         <div className="status-panel">
-          <p className="status-title">録音状態</p>
-          <p className="status-value">メニューバーの色で確認できます。</p>
-          <p className="status-hint">赤: 録音中 / グレー: 待機中</p>
-          <div className="status-panel-line">
-            <p className="status-title">パイプライン</p>
-            <p className="status-value">{pipelineState}</p>
+          <div className="pipeline-status" style={{ "--pipeline-color": pipelineInfo.color } as React.CSSProperties}>
+            <span className="pipeline-icon">{pipelineInfo.icon}</span>
+            <span className="pipeline-label">{pipelineInfo.label}</span>
           </div>
         </div>
       </header>
 
+      {/* Settings Card */}
       <section className="card">
         <div className="card-header">
-          <h2>設定</h2>
-          <p>APIキーとショートカットを登録します。</p>
+          <div className="card-title-row">
+            <SettingsIcon size={20} />
+            <h2>設定</h2>
+          </div>
         </div>
 
-        <div className="grid">
-          <label className="field">
-            <span>Deepgram APIキー</span>
-            <input
-              type="password"
-              value={config.api_keys.deepgram}
-              onChange={(e) => updateApiKey("deepgram", e.target.value)}
-              placeholder="dg_..."
-              disabled={loading}
-            />
-          </label>
-          <label className="field">
-            <span>Gemini APIキー</span>
-            <input
-              type="password"
-              value={config.api_keys.gemini}
-              onChange={(e) => updateApiKey("gemini", e.target.value)}
-              placeholder="AIza..."
-              disabled={loading}
-            />
-          </label>
-          <label className="field">
-            <span>OpenAI APIキー</span>
-            <input
-              type="password"
-              value={config.api_keys.openai}
-              onChange={(e) => updateApiKey("openai", e.target.value)}
-              placeholder="sk-..."
-              disabled={loading}
-            />
-          </label>
-          <div className="field">
-            <span>ショートカット</span>
-            <div className="shortcut-row">
-              <input type="text" value={config.shortcut} readOnly />
-              <button
-                className="ghost"
-                onClick={() => {
-                  setShortcutHint(null);
-                  setCaptureActive((prev) => !prev);
-                }}
-                disabled={loading}
-              >
-                {captureActive ? "キーを押してください..." : "ショートカットを変更"}
-              </button>
-              {captureActive ? (
+        {/* Auth Section (Collapsible) */}
+        <div className="settings-section collapsible-section">
+          <button
+            className="section-header clickable"
+            onClick={() => setAuthExpanded(!authExpanded)}
+          >
+            <div className="section-header-content">
+              <Key size={16} />
+              <span>認証</span>
+            </div>
+            {authExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+          {authExpanded && (
+            <div className="section-content">
+              <label className="field">
+                <span>Deepgram</span>
+                <input
+                  type="password"
+                  value={config.api_keys.deepgram}
+                  onChange={(e) => updateApiKey("deepgram", e.target.value)}
+                  placeholder="dg_..."
+                  disabled={loading}
+                />
+              </label>
+              <label className="field">
+                <span>Gemini</span>
+                <input
+                  type="password"
+                  value={config.api_keys.gemini}
+                  onChange={(e) => updateApiKey("gemini", e.target.value)}
+                  placeholder="AIza..."
+                  disabled={loading}
+                />
+              </label>
+              <label className="field">
+                <span>OpenAI</span>
+                <input
+                  type="password"
+                  value={config.api_keys.openai}
+                  onChange={(e) => updateApiKey("openai", e.target.value)}
+                  placeholder="sk-..."
+                  disabled={loading}
+                />
+              </label>
+            </div>
+          )}
+        </div>
+
+        {/* Input Section */}
+        <div className="settings-section">
+          <div className="section-header">
+            <Mic size={16} />
+            <span>入力</span>
+          </div>
+          <div className="section-content">
+            <div className="field">
+              <span>ショートカット</span>
+              <div className="shortcut-row">
+                <input type="text" value={formatShortcutDisplay(config.shortcut)} readOnly />
                 <button
-                  className="ghost"
+                  className="ghost icon-button"
                   onClick={() => {
-                    setCaptureActive(false);
-                    setShortcutHint("ショートカットの変更をキャンセルしました");
+                    setShortcutHint(null);
+                    setCaptureActive((prev) => !prev);
                   }}
                   disabled={loading}
                 >
-                  キャンセル
+                  {captureActive ? "キーを押す..." : "変更"}
                 </button>
-              ) : null}
+                {captureActive && (
+                  <button
+                    className="ghost icon-button"
+                    onClick={() => {
+                      setCaptureActive(false);
+                      setShortcutHint("キャンセルしました");
+                    }}
+                    disabled={loading}
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+              {shortcutHint && <small className="shortcut-hint">{shortcutHint}</small>}
             </div>
-            <small>
-              修飾キー（Cmd/Ctrl/Alt/Shift）+ 通常キーの組み合わせが必須です。
-            </small>
-            {shortcutHint ? (
-              <small className="shortcut-hint">{shortcutHint}</small>
-            ) : null}
+            <div className="field-row">
+              <label className="field compact">
+                <span>入力言語</span>
+                <select
+                  value={config.input_language}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      input_language: e.target.value,
+                    }))
+                  }
+                  disabled={loading}
+                >
+                  <option value="ja">日本語</option>
+                  <option value="en">English</option>
+                  <option value="auto">自動</option>
+                </select>
+              </label>
+              <label className="field compact">
+                <span>録音モード</span>
+                <select
+                  value={config.recording_mode}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      recording_mode: e.target.value as RecordingMode,
+                    }))
+                  }
+                  disabled={loading}
+                >
+                  <option value="toggle">トグル</option>
+                  <option value="push_to_talk">長押し</option>
+                </select>
+              </label>
+            </div>
           </div>
-          <label className="field">
-            <span>入力言語</span>
-            <select
-              value={config.input_language}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  input_language: e.target.value,
-                }))
-              }
-              disabled={loading}
-            >
-              <option value="ja">日本語</option>
-              <option value="en">English</option>
-              <option value="auto">自動判定</option>
-            </select>
-            <small>Deepgramと後処理の言語を指定します。</small>
-          </label>
-          <label className="field">
-            <span>LLMモデル</span>
-            <select
-              value={config.llm_model}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  llm_model: e.target.value as LlmModel,
-                }))
-              }
-              disabled={loading}
-            >
-              <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
-              <option value="gemini-2.5-flash-lite-audio">Gemini 2.5 Flash Lite（音声直接入力）</option>
-              <option value="gpt-4o-mini">GPT-4o mini</option>
-              <option value="gpt-5-nano">GPT-5 nano</option>
-            </select>
-            <small>モデルに応じたAPIキーが必要です。</small>
-          </label>
-          <label className="field">
-            <span>録音モード</span>
-            <select
-              value={config.recording_mode}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  recording_mode: e.target.value as RecordingMode,
-                }))
-              }
-              disabled={loading}
-            >
-              <option value="toggle">トグル（押すたびに開始/停止）</option>
-              <option value="push_to_talk">長押し（押下中のみ録音）</option>
-            </select>
-            <small>長押しはアクセシビリティ許可が必要です。</small>
-          </label>
-          <label className="field toggle">
-            <span>自動ペースト</span>
-            <input
-              type="checkbox"
-              checked={config.auto_paste}
-              onChange={(e) =>
-                setConfig((prev) => ({
-                  ...prev,
-                  auto_paste: e.target.checked,
-                }))
-              }
-              disabled={loading}
-            />
-            <small>ONで変換後にCmd+Vを送信します。</small>
-          </label>
-          {config.auto_paste ? (
-            <label className="field toggle">
-              <span>クリップボード履歴を汚染しない</span>
-              <input
-                type="checkbox"
-                checked={config.avoid_clipboard_history}
+        </div>
+
+        {/* Output Section */}
+        <div className="settings-section">
+          <div className="section-header">
+            <ClipboardCopy size={16} />
+            <span>出力</span>
+          </div>
+          <div className="section-content">
+            <label className="field">
+              <span>LLMモデル</span>
+              <select
+                value={config.llm_model}
                 onChange={(e) =>
                   setConfig((prev) => ({
                     ...prev,
-                    avoid_clipboard_history: e.target.checked,
+                    llm_model: e.target.value as LlmModel,
                   }))
                 }
                 disabled={loading}
-              />
-              <small>履歴アプリに残らないようマーカーを付与します。</small>
+              >
+                <option value="gemini-2.5-flash-lite" disabled={!config.api_keys.gemini.trim()}>
+                  Gemini 2.5 Flash Lite{!config.api_keys.gemini.trim() ? " (APIキー未設定)" : ""}
+                </option>
+                <option value="gemini-2.5-flash-lite-audio" disabled={!config.api_keys.gemini.trim()}>
+                  Gemini 2.5 Flash Lite (Audio){!config.api_keys.gemini.trim() ? " (APIキー未設定)" : ""}
+                </option>
+                <option value="gpt-4o-mini" disabled={!config.api_keys.openai.trim()}>
+                  GPT-4o mini{!config.api_keys.openai.trim() ? " (APIキー未設定)" : ""}
+                </option>
+                <option value="gpt-5-nano" disabled={!config.api_keys.openai.trim()}>
+                  GPT-5 nano{!config.api_keys.openai.trim() ? " (APIキー未設定)" : ""}
+                </option>
+              </select>
             </label>
-          ) : null}
+            <div className="toggle-group">
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={config.auto_paste}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      auto_paste: e.target.checked,
+                    }))
+                  }
+                  disabled={loading}
+                />
+                <span>完了後に自動で貼り付け</span>
+              </label>
+              {config.auto_paste && (
+                <label className="toggle-item nested">
+                  <input
+                    type="checkbox"
+                    checked={config.avoid_clipboard_history}
+                    onChange={(e) =>
+                      setConfig((prev) => ({
+                        ...prev,
+                        avoid_clipboard_history: e.target.checked,
+                      }))
+                    }
+                    disabled={loading}
+                  />
+                  <span>履歴アプリに残さない</span>
+                </label>
+              )}
+            </div>
+          </div>
         </div>
 
-        <div className="actions">
-          <button onClick={save} disabled={!canSave}>
-            {saving ? "保存中..." : "保存"}
-          </button>
+        {/* System Settings Buttons */}
+        <div className="system-buttons">
           <button
-            className="ghost"
+            className="ghost system-button"
             onClick={() => invoke("open_microphone_settings")}
             disabled={loading || !tauriReady}
           >
-            マイク設定を開く
+            <Mic size={14} />
+            マイク設定
           </button>
           <button
-            className="ghost"
+            className="ghost system-button"
             onClick={() => invoke("open_accessibility_settings")}
             disabled={loading || !tauriReady}
           >
-            アクセシビリティ設定を開く
+            <Accessibility size={14} />
+            アクセシビリティ設定
           </button>
         </div>
-        {status ? <p className="status-message">{status}</p> : null}
       </section>
 
+      {/* App Prompts Card */}
       <section className="card">
         <div className="card-header">
-          <h2>アプリ別プロンプト</h2>
-          <p>
-            アプリごとに完全なテンプレートを設定します（{`{STT結果}`} /
-            {`{言語}`}）。
-          </p>
+          <div className="card-title-row">
+            <AppWindow size={20} />
+            <h2>アプリ別プロンプト</h2>
+          </div>
+          <p>アプリごとにテンプレートを設定（{`{STT結果}`} / {`{言語}`}）</p>
         </div>
         {knownApps.length === 0 ? (
-          <p className="context-empty">履歴にアプリがありません</p>
+          <p className="empty-state">アプリの履歴がありません</p>
         ) : (
           <div className="app-prompt-layout">
             <div className="app-list">
               {knownApps.map((appName) => (
                 <button
                   key={`app-${appName}`}
-                  className={`ghost ${selectedApp === appName ? "active" : ""}`}
+                  className={`app-item ${selectedApp === appName ? "active" : ""}`}
                   onClick={() => setSelectedApp(appName)}
                   disabled={loading}
                 >
                   {appName}
                 </button>
               ))}
-              {selectedApp ? (
-                <button
-                  className="ghost"
-                  onClick={() => removeKnownApp(selectedApp)}
-                  disabled={loading}
-                >
-                  履歴から削除
-                </button>
-              ) : null}
             </div>
             <div className="prompt-body">
               <textarea
@@ -553,9 +618,8 @@ export default function Settings() {
                   updateAppPrompt(selectedApp, e.target.value);
                 }}
                 disabled={loading || !selectedApp}
-                rows={10}
+                rows={8}
               />
-              <small>{`{STT結果}`}が含まれない場合、末尾に入力を自動追加します。</small>
               <div className="prompt-actions">
                 <button
                   className="ghost"
@@ -567,45 +631,49 @@ export default function Settings() {
                 >
                   デフォルトに戻す
                 </button>
+                {selectedApp && (
+                  <button
+                    className="ghost remove-button"
+                    onClick={() => removeKnownApp(selectedApp)}
+                    disabled={loading}
+                  >
+                    <X size={14} />
+                    履歴から除外
+                  </button>
+                )}
               </div>
             </div>
           </div>
         )}
       </section>
 
+      {/* Usage Card */}
       <section className="card">
         <div className="card-header">
-          <h2>API利用状況</h2>
-          <p>APIの使用量と推定コストを表示します。</p>
+          <div className="card-title-row">
+            <BarChart3 size={20} />
+            <h2>API利用状況</h2>
+          </div>
         </div>
         {usageSummary ? (
           <div className="usage-grid">
             <div className="usage-panel">
-              <p className="usage-label">今日の利用</p>
+              <p className="usage-label">今日</p>
               <div className="usage-details">
                 <div className="usage-row">
-                  <span>Deepgram (STT)</span>
-                  <span>
-                    {formatDuration(usageSummary.today.deepgramSeconds)} /{" "}
-                    {formatCost(usageSummary.today.deepgramCostUsd)}
-                  </span>
+                  <span>Deepgram</span>
+                  <span>{formatCost(usageSummary.today.deepgramCostUsd)}</span>
                 </div>
-                {usageSummary.today.geminiTokens > 0 && (
+                {usageSummary.today.geminiCostUsd > 0 && (
                   <div className="usage-row">
                     <span>Gemini</span>
-                    <span>
-                      {usageSummary.today.geminiTokens.toLocaleString()} tokens /{" "}
-                      {formatCost(usageSummary.today.geminiCostUsd)}
-                    </span>
+                    <span>{formatCost(usageSummary.today.geminiCostUsd)}</span>
                   </div>
                 )}
-                {usageSummary.today.openaiTokens > 0 && (
+                {usageSummary.today.openaiCostUsd > 0 && (
                   <div className="usage-row">
                     <span>OpenAI</span>
-                    <span>
-                      {usageSummary.today.openaiTokens.toLocaleString()} tokens /{" "}
-                      {formatCost(usageSummary.today.openaiCostUsd)}
-                    </span>
+                    <span>{formatCost(usageSummary.today.openaiCostUsd)}</span>
                   </div>
                 )}
                 <div className="usage-row usage-total">
@@ -615,31 +683,22 @@ export default function Settings() {
               </div>
             </div>
             <div className="usage-panel">
-              <p className="usage-label">今月の利用</p>
+              <p className="usage-label">今月</p>
               <div className="usage-details">
                 <div className="usage-row">
-                  <span>Deepgram (STT)</span>
-                  <span>
-                    {formatDuration(usageSummary.this_month.deepgramSeconds)} /{" "}
-                    {formatCost(usageSummary.this_month.deepgramCostUsd)}
-                  </span>
+                  <span>Deepgram</span>
+                  <span>{formatCost(usageSummary.this_month.deepgramCostUsd)}</span>
                 </div>
-                {usageSummary.this_month.geminiTokens > 0 && (
+                {usageSummary.this_month.geminiCostUsd > 0 && (
                   <div className="usage-row">
                     <span>Gemini</span>
-                    <span>
-                      {usageSummary.this_month.geminiTokens.toLocaleString()} tokens /{" "}
-                      {formatCost(usageSummary.this_month.geminiCostUsd)}
-                    </span>
+                    <span>{formatCost(usageSummary.this_month.geminiCostUsd)}</span>
                   </div>
                 )}
-                {usageSummary.this_month.openaiTokens > 0 && (
+                {usageSummary.this_month.openaiCostUsd > 0 && (
                   <div className="usage-row">
                     <span>OpenAI</span>
-                    <span>
-                      {usageSummary.this_month.openaiTokens.toLocaleString()} tokens /{" "}
-                      {formatCost(usageSummary.this_month.openaiCostUsd)}
-                    </span>
+                    <span>{formatCost(usageSummary.this_month.openaiCostUsd)}</span>
                   </div>
                 )}
                 <div className="usage-row usage-total">
@@ -650,39 +709,65 @@ export default function Settings() {
             </div>
           </div>
         ) : (
-          <p className="usage-empty">利用データがありません</p>
+          <p className="empty-state">利用データがありません</p>
         )}
       </section>
 
-      <section className="card">
-        <div className="card-header">
-          <h2>デバッグ</h2>
-          <p>現在の状態とログを可視化します。</p>
-        </div>
-        <div className="debug-grid">
-          <div className="debug-panel">
-            <p className="debug-label">パイプライン状態</p>
-            <p className="debug-value">{pipelineState}</p>
+      {/* Debug Card (Collapsible) */}
+      <section className="card collapsible">
+        <button
+          className="card-header clickable"
+          onClick={() => setDebugExpanded(!debugExpanded)}
+        >
+          <div className="card-title-row">
+            <Bug size={20} />
+            <h2>デバッグ</h2>
           </div>
-          <div className="debug-panel">
-            <p className="debug-label">ログ</p>
-            <div className="log-list">
-              {logs.length === 0 ? (
-                <p className="log-empty">まだログがありません</p>
-              ) : (
-                logs.map((log, idx) => (
-                  <div className="log-item" key={`${log.ts_ms}-${idx}`}>
-                    <span>
-                      {new Date(log.ts_ms).toLocaleTimeString()} [{log.level}]
-                      [{log.stage}] {log.message}
-                    </span>
-                  </div>
-                ))
-              )}
+          {debugExpanded ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+        </button>
+        {debugExpanded && (
+          <div className="debug-content">
+            <div className="debug-panel">
+              <p className="debug-label">パイプライン</p>
+              <div className="pipeline-status" style={{ "--pipeline-color": pipelineInfo.color } as React.CSSProperties}>
+                <span className="pipeline-icon">{pipelineInfo.icon}</span>
+                <span className="pipeline-label">{pipelineInfo.label}</span>
+              </div>
+            </div>
+            <div className="debug-panel">
+              <p className="debug-label">ログ</p>
+              <div className="log-list">
+                {logs.length === 0 ? (
+                  <p className="log-empty">ログなし</p>
+                ) : (
+                  logs.map((log, idx) => (
+                    <div className="log-item" key={`${log.ts_ms}-${idx}`}>
+                      <span>
+                        {new Date(log.ts_ms).toLocaleTimeString()} [{log.level}][{log.stage}] {log.message}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </section>
+
+      {/* Fixed Save Bar */}
+      <div className="save-bar">
+        <div className="save-bar-content">
+          {status && <span className="save-status">{status}</span>}
+          <button className="save-button" onClick={save} disabled={!canSave}>
+            {saving ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Save size={16} />
+            )}
+            {saving ? "保存中..." : "設定を保存"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -10,7 +10,7 @@ pub struct PostProcessResult {
     pub usage: Option<LlmUsage>,
 }
 
-const DEFAULT_PROMPT_TEMPLATE: &str = "以下の音声認識結果を修正してください。修正後のテキストのみを出力してください。\n\n修正ルール:\n1. フィラー（えーと、あのー、えー、なんか、こう、まあ、ちょっと）を除去\n2. 技術用語の誤認識を修正（例: \"リアクト\"→\"React\", \"ユーズステート\"→\"useState\"）\n3. 句読点を適切に追加\n4. 出力は{言語}にしてください\n\n入力: {STT結果}";
+const DEFAULT_PROMPT_TEMPLATE: &str = "以下の音声認識結果を修正してください。修正後のテキストのみを出力してください。\n\n修正ルール:\n1. フィラー（えーと、あのー）を除去\n2. 技術用語の誤認識を修正（例: \"リアクト\"→\"React\", \"ユーズステート\"→\"useState\"）\n\n入力: {STT結果}";
 
 #[derive(Debug, Serialize)]
 struct GeminiRequest {
