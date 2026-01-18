@@ -29,9 +29,17 @@ const SILENCE_TIMEOUT_SECS: u64 = 30;
 // Peak i16 amplitude threshold used to treat input as silence.
 const SILENCE_THRESHOLD: u16 = 500;
 
+enum SttTask {
+    Deepgram(tauri::async_runtime::JoinHandle<AppResult<String>>),
+    GeminiAudio {
+        audio_task: tauri::async_runtime::JoinHandle<Vec<u8>>,
+        sample_rate: u32,
+    },
+}
+
 struct RecordingSession {
     recorder: recorder::RecorderHandle,
-    stt_task: tauri::async_runtime::JoinHandle<AppResult<String>>,
+    stt_task: SttTask,
     started_at: Instant,
     session_id: u64,
 }
@@ -203,7 +211,10 @@ fn record_known_app(app: &AppHandle, state: &AppState) {
 
 async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
     let config = state.config.lock().unwrap().clone();
-    if config.api_keys.deepgram.trim().is_empty() {
+    let uses_direct_audio = config.llm_model.uses_direct_audio();
+
+    // Deepgram API key is only required for non-audio modes
+    if !uses_direct_audio && config.api_keys.deepgram.trim().is_empty() {
         emit_log(app, "error", "recording", "Deepgram APIキーが未設定です");
         return Err(AppError::MissingApiKey("deepgram"));
     }
@@ -227,40 +238,50 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
     };
     let sample_rate = recorder.sample_rate();
 
-    let deepgram_key = config.api_keys.deepgram.clone();
-    let language = language_param(&config.input_language);
-    let app_for_events = app.clone();
-    let on_event = std::sync::Arc::new(move |event: stt_client::SttEvent| match event {
-        stt_client::SttEvent::Connected => {
-            emit_state(&app_for_events, PipelineState::SttStreaming);
-            emit_log(&app_for_events, "info", "stt", "Deepgramに接続しました");
-        }
-        stt_client::SttEvent::AudioStreamEnded => {
-            emit_log(&app_for_events, "info", "stt", "音声送信が完了しました");
-        }
-        stt_client::SttEvent::FinalTranscript(text) => {
-            emit_log(
-                &app_for_events,
-                "info",
-                "stt",
-                format!("最終セグメント受信: {} chars", text.chars().count()),
-            );
-        }
-        stt_client::SttEvent::Error(message) => {
-            emit_state(&app_for_events, PipelineState::Error);
-            emit_log(&app_for_events, "error", "stt", message);
-        }
-    });
-    let stt_task = tauri::async_runtime::spawn(async move {
-        stt_client::run_deepgram_stream_with_events(
-            &deepgram_key,
+    let stt_task = if uses_direct_audio {
+        emit_log(app, "info", "recording", "Gemini音声直接入力モードで録音開始");
+        let audio_task = tauri::async_runtime::spawn(collect_audio(audio_rx));
+        SttTask::GeminiAudio {
+            audio_task,
             sample_rate,
-            audio_rx,
-            Some(on_event),
-            language,
-        )
-        .await
-    });
+        }
+    } else {
+        let deepgram_key = config.api_keys.deepgram.clone();
+        let language = language_param(&config.input_language);
+        let app_for_events = app.clone();
+        let on_event = std::sync::Arc::new(move |event: stt_client::SttEvent| match event {
+            stt_client::SttEvent::Connected => {
+                emit_state(&app_for_events, PipelineState::SttStreaming);
+                emit_log(&app_for_events, "info", "stt", "Deepgramに接続しました");
+            }
+            stt_client::SttEvent::AudioStreamEnded => {
+                emit_log(&app_for_events, "info", "stt", "音声送信が完了しました");
+            }
+            stt_client::SttEvent::FinalTranscript(text) => {
+                emit_log(
+                    &app_for_events,
+                    "info",
+                    "stt",
+                    format!("最終セグメント受信: {} chars", text.chars().count()),
+                );
+            }
+            stt_client::SttEvent::Error(message) => {
+                emit_state(&app_for_events, PipelineState::Error);
+                emit_log(&app_for_events, "error", "stt", message);
+            }
+        });
+        let task = tauri::async_runtime::spawn(async move {
+            stt_client::run_deepgram_stream_with_events(
+                &deepgram_key,
+                sample_rate,
+                audio_rx,
+                Some(on_event),
+                language,
+            )
+            .await
+        });
+        SttTask::Deepgram(task)
+    };
 
     let session_id = state.recording_counter.fetch_add(1, Ordering::Relaxed) + 1;
     *state.recording.lock().unwrap() = Some(RecordingSession {
@@ -381,9 +402,19 @@ fn is_empty_stt(text: &str) -> bool {
     text.trim().is_empty()
 }
 
+async fn collect_audio(mut audio_rx: Receiver<Vec<u8>>) -> Vec<u8> {
+    let mut pcm_data = Vec::new();
+    while let Some(chunk) = audio_rx.recv().await {
+        pcm_data.extend_from_slice(&chunk);
+    }
+    pcm_data
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_empty_stt;
+    use super::collect_audio;
+    use tokio::sync::mpsc;
 
     #[test]
     fn is_empty_stt_treats_whitespace_as_empty() {
@@ -391,6 +422,18 @@ mod tests {
         assert!(is_empty_stt("   "));
         assert!(is_empty_stt("\n\t"));
         assert!(!is_empty_stt("テスト"));
+    }
+
+    #[tokio::test]
+    async fn collect_audio_drains_all_chunks_until_closed() {
+        let (tx, rx) = mpsc::channel(8);
+        let task = tokio::spawn(collect_audio(rx));
+        for _ in 0..32 {
+            tx.send(vec![1, 2, 3, 4]).await.unwrap();
+        }
+        drop(tx);
+        let pcm_data = task.await.unwrap();
+        assert_eq!(pcm_data.len(), 32 * 4);
     }
 }
 
@@ -404,58 +447,117 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
     recorder.stop();
 
     let result = async {
-        emit_log(app, "info", "recording", "録音停止、STT待機中");
-        let stt_result = session
-            .stt_task
-            .await
-            .map_err(|e| AppError::Other(e.to_string()))??;
-        emit_log(
-            app,
-            "info",
-            "stt",
-            format!("STT完了: {} chars", stt_result.chars().count()),
-        );
-        emit_log(app, "info", "stt", format!("STT結果: {stt_result}"));
-        if is_empty_stt(&stt_result) {
-            emit_log(
-                app,
-                "info",
-                "pipeline",
-                "STT結果が空のためLLM処理をスキップします",
-            );
-            emit_state(app, PipelineState::Done);
-            return Ok(());
-        }
+        emit_log(app, "info", "recording", "録音停止");
 
         let config = state.config.lock().unwrap().clone();
-        let app_name = context::capture_app_name();
-        if let Some(app_name) = app_name.as_ref() {
-            emit_log(app, "info", "context", format!("アクティブアプリ: {app_name}"));
-        }
-        emit_state(app, PipelineState::PostProcessing);
-        emit_log(
-            app,
-            "info",
-            "postprocess",
-            format!("LLM後処理開始: {}", config.llm_model.as_str()),
-        );
-        let llm_started = Instant::now();
-        let llm_key = required_llm_key(&config)?;
-        let processed = post_processor::post_process(
-            config.llm_model,
-            llm_key,
-            &stt_result,
-            &config.input_language,
-            app_name.as_deref(),
-            &config.app_prompt_rules,
-        )
-        .await?;
-        emit_log(
-            app,
-            "info",
-            "postprocess",
-            format!("LLM処理時間: {}ms", llm_started.elapsed().as_millis()),
-        );
+
+        let (stt_result, processed) = match session.stt_task {
+            SttTask::Deepgram(task) => {
+                emit_log(app, "info", "stt", "Deepgram STT待機中");
+                let stt_result = task
+                    .await
+                    .map_err(|e| AppError::Other(e.to_string()))??;
+                emit_log(
+                    app,
+                    "info",
+                    "stt",
+                    format!("STT完了: {} chars", stt_result.chars().count()),
+                );
+                emit_log(app, "info", "stt", format!("STT結果: {stt_result}"));
+                if is_empty_stt(&stt_result) {
+                    emit_log(
+                        app,
+                        "info",
+                        "pipeline",
+                        "STT結果が空のためLLM処理をスキップします",
+                    );
+                    emit_state(app, PipelineState::Done);
+                    return Ok(());
+                }
+
+                let app_name = context::capture_app_name();
+                if let Some(app_name) = app_name.as_ref() {
+                    emit_log(app, "info", "context", format!("アクティブアプリ: {app_name}"));
+                }
+                emit_state(app, PipelineState::PostProcessing);
+                emit_log(
+                    app,
+                    "info",
+                    "postprocess",
+                    format!("LLM後処理開始: {}", config.llm_model.as_str()),
+                );
+                let llm_started = Instant::now();
+                let llm_key = required_llm_key(&config)?;
+                let processed = post_processor::post_process(
+                    config.llm_model,
+                    llm_key,
+                    &stt_result,
+                    &config.input_language,
+                    app_name.as_deref(),
+                    &config.app_prompt_rules,
+                )
+                .await?;
+                emit_log(
+                    app,
+                    "info",
+                    "postprocess",
+                    format!("LLM処理時間: {}ms", llm_started.elapsed().as_millis()),
+                );
+                (stt_result, processed)
+            }
+            SttTask::GeminiAudio {
+                audio_task,
+                sample_rate,
+            } => {
+                emit_log(app, "info", "stt", "Gemini音声文字起こし開始");
+                emit_state(app, PipelineState::PostProcessing);
+
+                // Collect all audio data
+                let pcm_data = audio_task
+                    .await
+                    .map_err(|e| AppError::Other(e.to_string()))?;
+
+                if pcm_data.is_empty() {
+                    emit_log(app, "info", "pipeline", "音声データが空のためスキップします");
+                    emit_state(app, PipelineState::Done);
+                    return Ok(());
+                }
+
+                emit_log(
+                    app,
+                    "info",
+                    "stt",
+                    format!("音声データ: {} bytes, sample_rate={}Hz", pcm_data.len(), sample_rate),
+                );
+
+                // Build WAV and call Gemini
+                let wav_bytes = audio_file::build_wav_bytes(sample_rate, &pcm_data);
+                let gemini_key = config.api_keys.gemini.as_str();
+                let llm_started = Instant::now();
+                let result = post_processor::transcribe_audio_gemini(
+                    gemini_key,
+                    &wav_bytes,
+                    "audio/wav",
+                )
+                .await?;
+                emit_log(
+                    app,
+                    "info",
+                    "stt",
+                    format!("Gemini音声文字起こし完了: {}ms", llm_started.elapsed().as_millis()),
+                );
+
+                if is_empty_stt(&result) {
+                    emit_log(app, "info", "pipeline", "文字起こし結果が空のためスキップします");
+                    emit_state(app, PipelineState::Done);
+                    return Ok(());
+                }
+
+                // For Gemini audio mode, the result is already formatted (no separate STT result)
+                (result.clone(), result)
+            }
+        };
+
         let _ = app.emit(
             "pipeline-output",
             PipelineResult {
@@ -467,7 +569,7 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
             app,
             "info",
             "postprocess",
-            format!("後処理完了: {} chars", processed.chars().count()),
+            format!("処理完了: {} chars", processed.chars().count()),
         );
         emit_log(app, "info", "postprocess", format!("整形結果: {processed}"));
 
@@ -539,7 +641,7 @@ struct PipelineResult {
 
 fn required_llm_key(config: &Config) -> AppResult<&str> {
     match config.llm_model {
-        LlmModel::Gemini25FlashLite => {
+        LlmModel::Gemini25FlashLite | LlmModel::Gemini25FlashLiteAudio => {
             if config.api_keys.gemini.trim().is_empty() {
                 return Err(AppError::MissingApiKey("gemini"));
             }
@@ -557,7 +659,9 @@ fn required_llm_key(config: &Config) -> AppResult<&str> {
 fn validate_llm_api_key(app: &AppHandle, config: &Config) -> AppResult<()> {
     if let Err(err) = required_llm_key(config) {
         let message = match config.llm_model {
-            LlmModel::Gemini25FlashLite => "Gemini APIキーが未設定です",
+            LlmModel::Gemini25FlashLite | LlmModel::Gemini25FlashLiteAudio => {
+                "Gemini APIキーが未設定です"
+            }
             LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => "OpenAI APIキーが未設定です",
         };
         emit_log(app, "error", "recording", message);

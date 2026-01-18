@@ -8,6 +8,37 @@ pub struct AudioData {
     pub duration_secs: f32,
 }
 
+/// Build a WAV file from raw PCM data (16-bit mono little-endian).
+pub fn build_wav_bytes(sample_rate: u32, pcm_data: &[u8]) -> Vec<u8> {
+    let num_channels: u16 = 1;
+    let bits_per_sample: u16 = 16;
+    let byte_rate = sample_rate * u32::from(num_channels) * u32::from(bits_per_sample) / 8;
+    let block_align = num_channels * bits_per_sample / 8;
+    let data_size = pcm_data.len() as u32;
+    let file_size = 36 + data_size;
+
+    let mut wav = Vec::with_capacity(44 + pcm_data.len());
+    // RIFF header
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&file_size.to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    // fmt subchunk
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // subchunk1 size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // audio format (PCM)
+    wav.extend_from_slice(&num_channels.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&byte_rate.to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&bits_per_sample.to_le_bytes());
+    // data subchunk
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_size.to_le_bytes());
+    wav.extend_from_slice(pcm_data);
+
+    wav
+}
+
 pub fn read_wav_as_mono_i16(path: &Path) -> AppResult<AudioData> {
     let mut reader = WavReader::open(path).map_err(|e| AppError::Audio(e.to_string()))?;
     let spec = reader.spec();

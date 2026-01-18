@@ -12,7 +12,7 @@ type ApiKeys = {
 
 type RecordingMode = "toggle" | "push_to_talk";
 
-type LlmModel = "gemini-2.5-flash-lite" | "gpt-4o-mini" | "gpt-5-nano";
+type LlmModel = "gemini-2.5-flash-lite" | "gemini-2.5-flash-lite-audio" | "gpt-4o-mini" | "gpt-5-nano";
 
 type AppPromptRule = {
   app_name: string;
@@ -428,6 +428,7 @@ export default function Settings() {
               disabled={loading}
             >
               <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite</option>
+              <option value="gemini-2.5-flash-lite-audio">Gemini 2.5 Flash Lite（音声直接入力）</option>
               <option value="gpt-4o-mini">GPT-4o mini</option>
               <option value="gpt-5-nano">GPT-5 nano</option>
             </select>

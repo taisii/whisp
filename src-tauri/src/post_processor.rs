@@ -141,7 +141,9 @@ pub async fn post_process(
         app_prompt_rules,
     );
     match model {
-        LlmModel::Gemini25FlashLite => post_process_gemini(api_key, &prompt).await,
+        LlmModel::Gemini25FlashLite | LlmModel::Gemini25FlashLiteAudio => {
+            post_process_gemini(api_key, &prompt).await
+        }
         LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => {
             post_process_openai(api_key, model, &prompt).await
         }
