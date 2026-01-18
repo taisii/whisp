@@ -428,27 +428,10 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         }
 
         let config = state.config.lock().unwrap().clone();
-        let context_info = context::build_context_info(&config);
-        if let Some(app_name) = context_info.app_name.as_ref() {
+        let app_name = context::capture_app_name();
+        if let Some(app_name) = app_name.as_ref() {
             emit_log(app, "info", "context", format!("アクティブアプリ: {app_name}"));
         }
-        if let Some(text) = context_info.selected_text.as_ref() {
-            emit_log(
-                app,
-                "info",
-                "context",
-                format!("選択テキスト: {} chars", text.chars().count()),
-            );
-        }
-        if let Some(instruction) = context_info.instruction.as_ref() {
-            emit_log(
-                app,
-                "info",
-                "context",
-                format!("適用ルール: {instruction}"),
-            );
-        }
-        let context_block = context::format_context_block(&context_info);
         emit_state(app, PipelineState::PostProcessing);
         emit_log(
             app,
@@ -463,8 +446,8 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
             llm_key,
             &stt_result,
             &config.input_language,
-            config.custom_prompt.as_deref(),
-            context_block.as_deref(),
+            app_name.as_deref(),
+            &config.app_prompt_rules,
         )
         .await?;
         emit_log(

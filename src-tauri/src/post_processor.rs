@@ -1,4 +1,4 @@
-use crate::config::LlmModel;
+use crate::config::{AppPromptRule, LlmModel};
 use crate::error::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 
@@ -87,26 +87,32 @@ fn apply_template(template: &str, stt_result: &str, language_hint: &str) -> Stri
     prompt
 }
 
+fn resolve_app_template<'a>(
+    app_name: Option<&str>,
+    rules: &'a [AppPromptRule],
+) -> Option<&'a str> {
+    let app_name = app_name?.trim();
+    if app_name.is_empty() {
+        return None;
+    }
+    for rule in rules {
+        if rule.app_name.trim() == app_name {
+            let template = rule.template.trim();
+            return if template.is_empty() { None } else { Some(template) };
+        }
+    }
+    None
+}
+
 pub fn build_prompt(
     stt_result: &str,
     language_hint: &str,
-    custom_prompt: Option<&str>,
-    context_block: Option<&str>,
+    app_name: Option<&str>,
+    app_prompt_rules: &[AppPromptRule],
 ) -> String {
-    let template = custom_prompt
-        .filter(|value| !value.trim().is_empty())
+    let template = resolve_app_template(app_name, app_prompt_rules)
         .unwrap_or(DEFAULT_PROMPT_TEMPLATE);
-
-    let mut prompt = apply_template(template, stt_result, language_hint);
-
-    if let Some(context_block) = context_block {
-        if !context_block.trim().is_empty() {
-            prompt.push_str("\n\nコンテキスト:\n");
-            prompt.push_str(context_block);
-        }
-    }
-
-    prompt
+    apply_template(template, stt_result, language_hint)
 }
 
 pub async fn post_process(
@@ -114,10 +120,15 @@ pub async fn post_process(
     api_key: &str,
     stt_result: &str,
     language_hint: &str,
-    custom_prompt: Option<&str>,
-    context_block: Option<&str>,
+    app_name: Option<&str>,
+    app_prompt_rules: &[AppPromptRule],
 ) -> AppResult<String> {
-    let prompt = build_prompt(stt_result, language_hint, custom_prompt, context_block);
+    let prompt = build_prompt(
+        stt_result,
+        language_hint,
+        app_name,
+        app_prompt_rules,
+    );
     match model {
         LlmModel::Gemini25FlashLite => post_process_gemini(api_key, &prompt).await,
         LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => {
@@ -208,31 +219,35 @@ mod tests {
 
     #[test]
     fn prompt_includes_input() {
-        let prompt = build_prompt("テストです", "ja", None, None);
+        let prompt = build_prompt("テストです", "ja", None, &[]);
         assert!(prompt.contains("入力: テストです"));
     }
 
     #[test]
-    fn prompt_includes_context_block() {
-        let prompt = build_prompt("テストです", "ja", None, Some("追加指示: コード形式"));
-        assert!(prompt.contains("コンテキスト:"));
-        assert!(prompt.contains("追加指示: コード形式"));
-    }
-
-    #[test]
-    fn custom_prompt_replaces_placeholders() {
+    fn app_prompt_replaces_placeholders() {
         let prompt = build_prompt(
             "こんにちは",
             "en",
-            Some("出力は{言語}。入力={STT結果}"),
-            None,
+            Some("Slack"),
+            &[AppPromptRule {
+                app_name: "Slack".to_string(),
+                template: "出力は{言語}。入力={STT結果}".to_string(),
+            }],
         );
         assert!(prompt.contains("出力は英語。入力=こんにちは"));
     }
 
     #[test]
-    fn custom_prompt_appends_input_when_missing() {
-        let prompt = build_prompt("テスト", "ja", Some("指示だけ"), None);
+    fn app_prompt_appends_input_when_missing() {
+        let prompt = build_prompt(
+            "テスト",
+            "ja",
+            Some("Slack"),
+            &[AppPromptRule {
+                app_name: "Slack".to_string(),
+                template: "指示だけ".to_string(),
+            }],
+        );
         assert!(prompt.contains("指示だけ"));
         assert!(prompt.contains("入力: テスト"));
     }

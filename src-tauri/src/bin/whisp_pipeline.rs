@@ -44,7 +44,7 @@ fn run() -> Result<(), String> {
             &stt,
             "auto",
             None,
-            None,
+            &[],
         ))
         .map_err(|e| e.to_string())?;
 
