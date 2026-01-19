@@ -385,6 +385,28 @@ fn spawn_vision_task(
         let analysis_started = Instant::now();
         match post_processor::analyze_screen_context(model, &llm_key, &screenshot).await {
             Ok(context) => {
+                let terms = if context.terms.is_empty() {
+                    "[]".to_string()
+                } else {
+                    format!(
+                        "[{}]",
+                        context
+                            .terms
+                            .iter()
+                            .map(|term| format!("\"{}\"", term))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                emit_log(
+                    &app_for_task,
+                    "info",
+                    "vision",
+                    format!(
+                        "Vision解析結果: summary=\"{}\", terms={}",
+                        context.summary, terms
+                    ),
+                );
                 emit_log(
                     &app_for_task,
                     "info",
@@ -680,9 +702,7 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                 );
                 let llm_started = Instant::now();
                 let llm_key = required_llm_key(&config)?;
-                let llm_result = post_processor::post_process(
-                    config.llm_model,
-                    llm_key,
+                let prompt = post_processor::build_prompt(
                     &stt_text,
                     &config.input_language,
                     app_name.as_deref(),
@@ -692,6 +712,12 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                     } else {
                         Some(&context_info)
                     },
+                );
+                emit_log(app, "info", "postprocess", format!("LLMプロンプト:\n{prompt}"));
+                let llm_result = post_processor::post_process_with_prompt(
+                    config.llm_model,
+                    llm_key,
+                    &prompt,
                 )
                 .await?;
 
