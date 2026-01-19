@@ -20,6 +20,7 @@ use crate::error::{AppError, AppResult};
 use crate::stt_client::SttResult;
 use crate::tray::TrayState;
 use crate::usage::UsageManager;
+use chrono::{Datelike, NaiveDate, Utc};
 use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -496,7 +497,11 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                         state.usage_manager.record_usage(stt_usage.clone(), None);
                         let cost = calculate_total_cost(stt_usage.as_ref(), None);
                         let _ = app.emit("usage-metrics", UsageMetricsEvent {
+                            timestamp_ms: Utc::now().timestamp_millis(),
+                            stt_provider: stt_usage.as_ref().map(|_| "deepgram".to_string()),
                             stt_duration_seconds: stt_usage.as_ref().map(|u| u.duration_seconds),
+                            stt_request_id: stt_usage.as_ref().and_then(|u| u.request_id.clone()),
+                            llm_provider: None,
                             llm_prompt_tokens: None,
                             llm_completion_tokens: None,
                             llm_model: None,
@@ -629,7 +634,11 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         // Emit usage metrics event
         let cost = calculate_total_cost(stt_usage.as_ref(), llm_usage.as_ref());
         let _ = app.emit("usage-metrics", UsageMetricsEvent {
+            timestamp_ms: Utc::now().timestamp_millis(),
+            stt_provider: stt_usage.as_ref().map(|_| "deepgram".to_string()),
             stt_duration_seconds: stt_usage.as_ref().map(|u| u.duration_seconds),
+            stt_request_id: stt_usage.as_ref().and_then(|u| u.request_id.clone()),
+            llm_provider: llm_usage.as_ref().map(|u| llm_provider_from_model(&u.model)),
             llm_prompt_tokens: llm_usage.as_ref().map(|u| u.prompt_tokens),
             llm_completion_tokens: llm_usage.as_ref().map(|u| u.completion_tokens),
             llm_model: llm_usage.as_ref().map(|u| u.model.clone()),
@@ -695,11 +704,23 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct UsageMetricsEvent {
+    timestamp_ms: i64,
+    stt_provider: Option<String>,
     stt_duration_seconds: Option<f64>,
+    stt_request_id: Option<String>,
+    llm_provider: Option<String>,
     llm_prompt_tokens: Option<u32>,
     llm_completion_tokens: Option<u32>,
     llm_model: Option<String>,
     cost_estimate_usd: f64,
+}
+
+fn llm_provider_from_model(model: &str) -> String {
+    if model.contains("gemini") {
+        "gemini".to_string()
+    } else {
+        "openai".to_string()
+    }
 }
 
 fn register_global_shortcut(app: &AppHandle, shortcut: &str) -> AppResult<()> {
@@ -787,6 +808,149 @@ async fn get_usage_summary(state: State<'_, AppState>) -> Result<UsageSummary, S
     })
 }
 
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct DeepgramBillingSummary {
+    project_id: String,
+    start_date: String,
+    end_date: String,
+    fetched_at_ms: i64,
+    total_cost_usd: Option<f64>,
+    total_seconds: Option<f64>,
+    balance_usd: Option<f64>,
+    raw_usage: serde_json::Value,
+    raw_balance: serde_json::Value,
+}
+
+fn extract_number(value: &serde_json::Value, keys: &[&str]) -> Option<f64> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(|v| v.as_f64()))
+}
+
+fn sum_numbers(value: &serde_json::Value, keys: &[&str]) -> Option<f64> {
+    let array = value.as_array()?;
+    let mut sum = 0.0;
+    let mut found = false;
+    for item in array {
+        if let Some(obj) = item.as_object() {
+            if let Some(number) = keys
+                .iter()
+                .find_map(|key| obj.get(*key).and_then(|v| v.as_f64()))
+            {
+                sum += number;
+                found = true;
+            }
+        }
+    }
+    if found {
+        Some(sum)
+    } else {
+        None
+    }
+}
+
+fn extract_deepgram_total_cost(value: &serde_json::Value) -> Option<f64> {
+    if let Some(cost) = extract_number(value, &["total_cost", "total_cost_usd"]) {
+        return Some(cost);
+    }
+    value
+        .get("results")
+        .and_then(|results| sum_numbers(results, &["cost", "total_cost", "total_cost_usd"]))
+}
+
+fn extract_deepgram_total_seconds(value: &serde_json::Value) -> Option<f64> {
+    if let Some(seconds) = extract_number(value, &["total_seconds", "total_duration", "seconds"]) {
+        return Some(seconds);
+    }
+    value
+        .get("results")
+        .and_then(|results| sum_numbers(results, &["seconds", "duration", "total_seconds"]))
+}
+
+fn extract_deepgram_balance(value: &serde_json::Value) -> Option<f64> {
+    if let Some(balance) = extract_number(value, &["balance", "amount", "total_balance"]) {
+        return Some(balance);
+    }
+    value
+        .get("balances")
+        .and_then(|balances| sum_numbers(balances, &["balance", "amount", "total_balance"]))
+}
+
+#[tauri::command]
+async fn get_deepgram_billing_summary(
+    state: State<'_, AppState>,
+) -> Result<DeepgramBillingSummary, String> {
+    let config = state.config.lock().unwrap().clone();
+    if !config.billing.deepgram_enabled {
+        return Err("Deepgram Billing APIが無効です".to_string());
+    }
+    let api_key = config.api_keys.deepgram.trim();
+    if api_key.is_empty() {
+        return Err("Deepgram APIキーが未設定です".to_string());
+    }
+    let project_id = config.billing.deepgram_project_id.trim();
+    if project_id.is_empty() {
+        return Err("Deepgram Project IDが未設定です".to_string());
+    }
+
+    let today = Utc::now().date_naive();
+    let start_date = NaiveDate::from_ymd_opt(today.year(), today.month(), 1)
+        .unwrap_or(today)
+        .format("%Y-%m-%d")
+        .to_string();
+    let end_date = today.format("%Y-%m-%d").to_string();
+
+    let client = reqwest::Client::new();
+    let usage_url = format!(
+        "https://api.deepgram.com/v1/projects/{project_id}/usage"
+    );
+    let usage_response = client
+        .get(&usage_url)
+        .query(&[("start", &start_date), ("end", &end_date)])
+        .header("Authorization", format!("Token {api_key}"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let usage_status = usage_response.status();
+    let usage_body = usage_response.text().await.map_err(|e| e.to_string())?;
+    if !usage_status.is_success() {
+        return Err(format!("Deepgram usage API error: {usage_status} {usage_body}"));
+    }
+    let raw_usage: serde_json::Value =
+        serde_json::from_str(&usage_body).map_err(|e| e.to_string())?;
+
+    let balances_url = format!(
+        "https://api.deepgram.com/v1/projects/{project_id}/balances"
+    );
+    let balance_response = client
+        .get(&balances_url)
+        .header("Authorization", format!("Token {api_key}"))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let balance_status = balance_response.status();
+    let balance_body = balance_response.text().await.map_err(|e| e.to_string())?;
+    if !balance_status.is_success() {
+        return Err(format!(
+            "Deepgram balance API error: {balance_status} {balance_body}"
+        ));
+    }
+    let raw_balance: serde_json::Value =
+        serde_json::from_str(&balance_body).map_err(|e| e.to_string())?;
+
+    Ok(DeepgramBillingSummary {
+        project_id: project_id.to_string(),
+        start_date,
+        end_date,
+        fetched_at_ms: Utc::now().timestamp_millis(),
+        total_cost_usd: extract_deepgram_total_cost(&raw_usage),
+        total_seconds: extract_deepgram_total_seconds(&raw_usage),
+        balance_usd: extract_deepgram_balance(&raw_balance),
+        raw_usage,
+        raw_balance,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -832,7 +996,8 @@ pub fn run() {
             toggle_recording,
             open_microphone_settings,
             open_accessibility_settings,
-            get_usage_summary
+            get_usage_summary,
+            get_deepgram_billing_summary
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

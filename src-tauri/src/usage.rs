@@ -8,6 +8,7 @@ use std::sync::Mutex;
 #[derive(Debug, Clone)]
 pub struct SttUsage {
     pub duration_seconds: f64,
+    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +201,7 @@ mod tests {
         manager.record_usage(
             Some(SttUsage {
                 duration_seconds: 10.5,
+                request_id: None,
             }),
             None,
         );
@@ -262,6 +264,7 @@ mod tests {
         manager.record_usage(
             Some(SttUsage {
                 duration_seconds: 5.0,
+                request_id: None,
             }),
             Some(LlmUsage {
                 model: "gemini-2.5-flash-lite".to_string(),
@@ -287,12 +290,14 @@ mod tests {
         manager.record_usage(
             Some(SttUsage {
                 duration_seconds: 10.0,
+                request_id: None,
             }),
             None,
         );
         manager.record_usage(
             Some(SttUsage {
                 duration_seconds: 5.0,
+                request_id: None,
             }),
             None,
         );
