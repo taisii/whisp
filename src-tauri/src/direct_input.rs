@@ -3,7 +3,11 @@ use crate::error::{AppError, AppResult};
 #[cfg(target_os = "macos")]
 mod macos {
     use super::{AppError, AppResult};
-    use core_foundation_sys::base::CFRelease;
+    use core_foundation_sys::base::{CFRelease, CFTypeRef};
+    use core_foundation_sys::dictionary::{
+        CFDictionaryKeyCallBacks, CFDictionaryRef, CFDictionaryValueCallBacks,
+    };
+    use core_foundation_sys::string::CFStringRef;
     use std::ffi::c_void;
 
     type CGEventRef = *mut c_void;
@@ -17,7 +21,23 @@ mod macos {
 
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
-        fn AXIsProcessTrusted() -> bool;
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+        static kAXTrustedCheckOptionPrompt: CFStringRef;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        static kCFBooleanTrue: CFTypeRef;
+        fn CFDictionaryCreate(
+            allocator: *const c_void,
+            keys: *const *const c_void,
+            values: *const *const c_void,
+            num_values: isize,
+            key_callbacks: *const CFDictionaryKeyCallBacks,
+            value_callbacks: *const CFDictionaryValueCallBacks,
+        ) -> CFDictionaryRef;
+        static kCFTypeDictionaryKeyCallBacks: CFDictionaryKeyCallBacks;
+        static kCFTypeDictionaryValueCallBacks: CFDictionaryValueCallBacks;
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -36,19 +56,48 @@ mod macos {
         fn CGEventPost(tap: CGEventTapLocation, event: CGEventRef);
     }
 
-    fn is_accessibility_trusted() -> bool {
-        unsafe { AXIsProcessTrusted() }
+    /// Check if the app has accessibility permissions.
+    /// If `prompt` is true, will show a dialog prompting the user to grant permission.
+    fn is_accessibility_trusted_with_prompt(prompt: bool) -> bool {
+        unsafe {
+            if !prompt {
+                // Just check without prompting
+                return AXIsProcessTrustedWithOptions(std::ptr::null());
+            }
+
+            // Create a dictionary with kAXTrustedCheckOptionPrompt: true
+            let keys: [CFTypeRef; 1] = [kAXTrustedCheckOptionPrompt as CFTypeRef];
+            let values: [CFTypeRef; 1] = [kCFBooleanTrue];
+
+            let options = CFDictionaryCreate(
+                std::ptr::null(),
+                keys.as_ptr(),
+                values.as_ptr(),
+                1,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
+            );
+
+            let result = AXIsProcessTrustedWithOptions(options);
+
+            if !options.is_null() {
+                CFRelease(options as *const c_void);
+            }
+
+            result
+        }
     }
 
     /// Request accessibility permission, showing a dialog if not already granted.
     /// Returns true if permission is granted.
     #[allow(dead_code)]
     pub fn request_accessibility_permission() -> bool {
-        is_accessibility_trusted()
+        is_accessibility_trusted_with_prompt(true)
     }
 
     pub fn send_text(text: &str) -> AppResult<()> {
-        if !is_accessibility_trusted() {
+        // Check permission with prompt to show dialog if needed
+        if !is_accessibility_trusted_with_prompt(true) {
             return Err(AppError::AccessibilityPermissionRequired);
         }
 

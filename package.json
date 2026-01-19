@@ -9,6 +9,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test": "bun test",
     "typecheck": "bunx tsc --noEmit",
     "check:rust": "cd src-tauri && cargo check --all-targets",
     "check:clippy": "cd src-tauri && cargo clippy --all-targets -- -D warnings",
