@@ -54,20 +54,11 @@ pub struct AppPromptRule {
     pub template: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct BillingSettings {
     pub deepgram_enabled: bool,
     pub deepgram_project_id: String,
-}
-
-impl Default for BillingSettings {
-    fn default() -> Self {
-        Self {
-            deepgram_enabled: false,
-            deepgram_project_id: String::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
