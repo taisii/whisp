@@ -227,12 +227,20 @@ pub async fn post_process(
         app_prompt_rules,
         context,
     );
+    post_process_with_prompt(model, api_key, &prompt).await
+}
+
+pub(crate) async fn post_process_with_prompt(
+    model: LlmModel,
+    api_key: &str,
+    prompt: &str,
+) -> AppResult<PostProcessResult> {
     match model {
         LlmModel::Gemini25FlashLite | LlmModel::Gemini25FlashLiteAudio => {
-            post_process_gemini(api_key, &prompt).await
+            post_process_gemini(api_key, prompt).await
         }
         LlmModel::Gpt4oMini | LlmModel::Gpt5Nano => {
-            post_process_openai(api_key, model, &prompt).await
+            post_process_openai(api_key, model, prompt).await
         }
     }
 }
