@@ -22,7 +22,7 @@ use crate::tray::TrayState;
 use crate::usage::UsageManager;
 use chrono::{Datelike, NaiveDate, Utc};
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -243,7 +243,11 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         }
     };
     let sample_rate = recorder.sample_rate();
-    let vision_task = spawn_vision_task(app, &config);
+    let vision_task = if uses_direct_audio {
+        spawn_vision_task(app, &config)
+    } else {
+        None
+    };
 
     let stt_task = if uses_direct_audio {
         emit_log(app, "info", "recording", "Gemini音声直接入力モードで録音開始");
@@ -256,6 +260,9 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         let deepgram_key = config.api_keys.deepgram.clone();
         let language = language_param(&config.input_language);
         let app_for_events = app.clone();
+        let config_for_vision = config.clone();
+        let vision_started = std::sync::Arc::new(AtomicBool::new(false));
+        let vision_started_for_events = vision_started.clone();
         let on_event = std::sync::Arc::new(move |event: stt_client::SttEvent| match event {
             stt_client::SttEvent::Connected => {
                 emit_state(&app_for_events, PipelineState::SttStreaming);
@@ -271,6 +278,25 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                     "stt",
                     format!("最終セグメント受信: {} chars", text.chars().count()),
                 );
+                if text.trim().is_empty() {
+                    return;
+                }
+                if vision_started_for_events.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                let state = app_for_events.state::<AppState>();
+                if state.recording.lock().unwrap().is_none() {
+                    return;
+                }
+                let Some(task) = spawn_vision_task(&app_for_events, &config_for_vision) else {
+                    return;
+                };
+                let mut guard = state.recording.lock().unwrap();
+                if let Some(session) = guard.as_mut() {
+                    session.vision_task = Some(task);
+                } else {
+                    task.abort();
+                }
             }
             stt_client::SttEvent::Error(message) => {
                 emit_state(&app_for_events, PipelineState::Error);
@@ -567,6 +593,9 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                         "pipeline",
                         "STT結果が空のためLLM処理をスキップします",
                     );
+                    if let Some(vision_task) = vision_task.take() {
+                        vision_task.abort();
+                    }
                     // Record STT usage even if no LLM processing
                     if stt_usage.is_some() {
                         state.usage_manager.record_usage(stt_usage.clone(), None);
@@ -694,7 +723,6 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                 audio_task,
                 sample_rate,
             } => {
-                let _ = vision_task.take();
                 emit_log(app, "info", "stt", "Gemini音声文字起こし開始");
                 emit_state(app, PipelineState::PostProcessing);
 
@@ -705,6 +733,9 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 
                 if pcm_data.is_empty() {
                     emit_log(app, "info", "pipeline", "音声データが空のためスキップします");
+                    if let Some(vision_task) = vision_task.take() {
+                        vision_task.abort();
+                    }
                     emit_state(app, PipelineState::Done);
                     return Ok(());
                 }
@@ -751,8 +782,15 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 
                 if is_empty_stt(&processed) {
                     emit_log(app, "info", "pipeline", "文字起こし結果が空のためスキップします");
+                    if let Some(vision_task) = vision_task.take() {
+                        vision_task.abort();
+                    }
                     emit_state(app, PipelineState::Done);
                     return Ok(());
+                }
+
+                if let Some(vision_task) = vision_task.take() {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), vision_task).await;
                 }
 
                 // For Gemini audio mode: no STT usage (Deepgram not used), LLM usage from transcribe call
