@@ -11,22 +11,18 @@ pub struct ApiKeys {
     pub openai: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordingMode {
+    #[default]
     Toggle,
     PushToTalk,
 }
 
-impl Default for RecordingMode {
-    fn default() -> Self {
-        Self::Toggle
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LlmModel {
     #[serde(rename = "gemini-2.5-flash-lite")]
+    #[default]
     Gemini25FlashLite,
     #[serde(rename = "gemini-2.5-flash-lite-audio")]
     Gemini25FlashLiteAudio,
@@ -51,12 +47,6 @@ impl LlmModel {
     }
 }
 
-impl Default for LlmModel {
-    fn default() -> Self {
-        Self::Gemini25FlashLite
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(default)]
 pub struct AppPromptRule {
@@ -71,6 +61,13 @@ pub struct ContextConfig {
     pub vision_enabled: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct BillingSettings {
+    pub deepgram_enabled: bool,
+    pub deepgram_project_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
@@ -82,6 +79,7 @@ pub struct Config {
     pub app_prompt_rules: Vec<AppPromptRule>,
     pub llm_model: LlmModel,
     pub context: ContextConfig,
+    pub billing: BillingSettings,
 }
 
 impl Default for Config {
@@ -102,6 +100,7 @@ impl Default for Config {
                 accessibility_enabled: true,
                 vision_enabled: true,
             },
+            billing: BillingSettings::default(),
         }
     }
 }
@@ -181,6 +180,10 @@ mod tests {
             context: ContextConfig {
                 accessibility_enabled: false,
                 vision_enabled: true,
+            },
+            billing: BillingSettings {
+                deepgram_enabled: true,
+                deepgram_project_id: "project-123".to_string(),
             },
         };
 
