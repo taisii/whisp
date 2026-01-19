@@ -22,9 +22,9 @@ use crate::tray::TrayState;
 use crate::usage::UsageManager;
 use chrono::{Datelike, NaiveDate, Utc};
 use serde::Serialize;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -48,6 +48,7 @@ struct RecordingSession {
     stt_task: SttTask,
     started_at: Instant,
     session_id: u64,
+    vision_task: Option<tauri::async_runtime::JoinHandle<Option<post_processor::VisionContext>>>,
 }
 
 struct AppState {
@@ -242,6 +243,11 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         }
     };
     let sample_rate = recorder.sample_rate();
+    let vision_task = if uses_direct_audio {
+        spawn_vision_task(app, &config)
+    } else {
+        None
+    };
 
     let stt_task = if uses_direct_audio {
         emit_log(app, "info", "recording", "Gemini音声直接入力モードで録音開始");
@@ -254,6 +260,9 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         let deepgram_key = config.api_keys.deepgram.clone();
         let language = language_param(&config.input_language);
         let app_for_events = app.clone();
+        let config_for_vision = config.clone();
+        let vision_started = std::sync::Arc::new(AtomicBool::new(false));
+        let vision_started_for_events = vision_started.clone();
         let on_event = std::sync::Arc::new(move |event: stt_client::SttEvent| match event {
             stt_client::SttEvent::Connected => {
                 emit_state(&app_for_events, PipelineState::SttStreaming);
@@ -269,6 +278,25 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                     "stt",
                     format!("最終セグメント受信: {} chars", text.chars().count()),
                 );
+                if text.trim().is_empty() {
+                    return;
+                }
+                if vision_started_for_events.swap(true, Ordering::SeqCst) {
+                    return;
+                }
+                let state = app_for_events.state::<AppState>();
+                if state.recording.lock().unwrap().is_none() {
+                    return;
+                }
+                let Some(task) = spawn_vision_task(&app_for_events, &config_for_vision) else {
+                    return;
+                };
+                let mut guard = state.recording.lock().unwrap();
+                if let Some(session) = guard.as_mut() {
+                    session.vision_task = Some(task);
+                } else {
+                    task.abort();
+                }
             }
             stt_client::SttEvent::Error(message) => {
                 emit_state(&app_for_events, PipelineState::Error);
@@ -294,6 +322,7 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         stt_task,
         started_at: Instant::now(),
         session_id,
+        vision_task,
     });
 
     tray::set_tray_state(app, TrayState::Recording)?;
@@ -311,6 +340,73 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
     spawn_silence_watchdog(app.clone(), session_id, meter_rx);
 
     Ok(())
+}
+
+fn spawn_vision_task(
+    app: &AppHandle,
+    config: &Config,
+) -> Option<tauri::async_runtime::JoinHandle<Option<post_processor::VisionContext>>> {
+    if !config.context.vision_enabled {
+        return None;
+    }
+    let llm_key = match required_llm_key(config) {
+        Ok(key) => key.to_string(),
+        Err(err) => {
+            emit_log(app, "error", "vision", format!("Vision APIキー未設定: {err}"));
+            return None;
+        }
+    };
+    let model = config.llm_model;
+    let app_for_task = app.clone();
+    Some(tauri::async_runtime::spawn(async move {
+        emit_log(&app_for_task, "info", "vision", "スクリーンショット取得開始");
+        let screenshot = match context::capture_screenshot() {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                emit_log(&app_for_task, "info", "vision", "スクリーンショットが取得できませんでした");
+                return None;
+            }
+            Err(err) => {
+                emit_log(
+                    &app_for_task,
+                    "error",
+                    "vision",
+                    format!("スクリーンショット取得失敗: {err}"),
+                );
+                return None;
+            }
+        };
+        emit_log(
+            &app_for_task,
+            "info",
+            "vision",
+            format!("スクリーンショット取得完了: {} bytes", screenshot.len()),
+        );
+        let analysis_started = Instant::now();
+        match post_processor::analyze_screen_context(model, &llm_key, &screenshot).await {
+            Ok(context) => {
+                emit_log(
+                    &app_for_task,
+                    "info",
+                    "vision",
+                    format!(
+                        "Vision解析完了: {}ms",
+                        analysis_started.elapsed().as_millis()
+                    ),
+                );
+                Some(context)
+            }
+            Err(err) => {
+                emit_log(
+                    &app_for_task,
+                    "error",
+                    "vision",
+                    format!("Vision解析失敗: {err}"),
+                );
+                None
+            }
+        }
+    }))
 }
 
 fn open_mic_settings() -> AppResult<()> {
@@ -448,15 +544,22 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         return Ok(());
     };
 
-    let mut recorder = session.recorder;
+    let RecordingSession {
+        mut recorder,
+        stt_task,
+        started_at,
+        session_id: _,
+        vision_task,
+    } = session;
     recorder.stop();
+    let mut vision_task = vision_task;
 
     let result = async {
         emit_log(app, "info", "recording", "録音停止");
 
         let config = state.config.lock().unwrap().clone();
 
-        let (stt_text, stt_usage, processed, llm_usage) = match session.stt_task {
+        let (stt_text, stt_usage, processed, llm_usage) = match stt_task {
             SttTask::Deepgram(task) => {
                 emit_log(app, "info", "stt", "Deepgram STT待機中");
                 let stt_result = task
@@ -490,6 +593,9 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                         "pipeline",
                         "STT結果が空のためLLM処理をスキップします",
                     );
+                    if let Some(vision_task) = vision_task.take() {
+                        vision_task.abort();
+                    }
                     // Record STT usage even if no LLM processing
                     if stt_usage.is_some() {
                         state.usage_manager.record_usage(stt_usage.clone(), None);
@@ -508,6 +614,57 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                     }
                     emit_state(app, PipelineState::Done);
                     return Ok(());
+                }
+
+                let mut context_info = post_processor::ContextInfo::default();
+                if config.context.accessibility_enabled {
+                    match context::capture_accessibility_text() {
+                        Ok(Some(text)) => {
+                            emit_log(
+                                app,
+                                "info",
+                                "context",
+                                format!("選択テキスト取得: {} chars", text.chars().count()),
+                            );
+                            context_info.accessibility_text = Some(text);
+                        }
+                        Ok(None) => {
+                            emit_log(app, "info", "context", "選択テキストなし");
+                        }
+                        Err(err) => {
+                            emit_log(
+                                app,
+                                "error",
+                                "context",
+                                format!("選択テキスト取得失敗: {err}"),
+                            );
+                        }
+                    }
+                }
+
+                if let Some(vision_task) = vision_task.take() {
+                    match tokio::time::timeout(Duration::from_secs(2), vision_task).await {
+                        Ok(Ok(Some(vision))) => {
+                            if !vision.summary.trim().is_empty() {
+                                context_info.vision_summary = Some(vision.summary);
+                            }
+                            context_info.vision_terms = vision.terms;
+                        }
+                        Ok(Ok(None)) => {
+                            emit_log(app, "info", "vision", "Visionコンテキストなし");
+                        }
+                        Ok(Err(err)) => {
+                            emit_log(
+                                app,
+                                "error",
+                                "vision",
+                                format!("Visionタスク失敗: {err}"),
+                            );
+                        }
+                        Err(_) => {
+                            emit_log(app, "info", "vision", "Vision解析タイムアウト");
+                        }
+                    }
                 }
 
                 let app_name = context::capture_app_name();
@@ -530,6 +687,11 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
                     &config.input_language,
                     app_name.as_deref(),
                     &config.app_prompt_rules,
+                    if context_info.is_empty() {
+                        None
+                    } else {
+                        Some(&context_info)
+                    },
                 )
                 .await?;
 
@@ -571,6 +733,9 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 
                 if pcm_data.is_empty() {
                     emit_log(app, "info", "pipeline", "音声データが空のためスキップします");
+                    if let Some(vision_task) = vision_task.take() {
+                        vision_task.abort();
+                    }
                     emit_state(app, PipelineState::Done);
                     return Ok(());
                 }
@@ -617,8 +782,15 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
 
                 if is_empty_stt(&processed) {
                     emit_log(app, "info", "pipeline", "文字起こし結果が空のためスキップします");
+                    if let Some(vision_task) = vision_task.take() {
+                        vision_task.abort();
+                    }
                     emit_state(app, PipelineState::Done);
                     return Ok(());
+                }
+
+                if let Some(vision_task) = vision_task.take() {
+                    let _ = tokio::time::timeout(Duration::from_secs(2), vision_task).await;
                 }
 
                 // For Gemini audio mode: no STT usage (Deepgram not used), LLM usage from transcribe call
@@ -680,7 +852,7 @@ async fn stop_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         let _ = sound::play_completion_sound();
         emit_state(app, PipelineState::Done);
 
-        let elapsed = session.started_at.elapsed();
+        let elapsed = started_at.elapsed();
         println!(
             "recording finished in {}ms (stt_result={} chars, output={} chars)",
             elapsed.as_millis(),

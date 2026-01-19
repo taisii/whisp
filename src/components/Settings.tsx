@@ -40,6 +40,11 @@ type AppPromptRule = {
   template: string;
 };
 
+type ContextConfig = {
+  accessibility_enabled: boolean;
+  vision_enabled: boolean;
+};
+
 type Config = {
   api_keys: ApiKeys;
   shortcut: string;
@@ -48,6 +53,7 @@ type Config = {
   known_apps: string[];
   app_prompt_rules: AppPromptRule[];
   llm_model: LlmModel;
+  context: ContextConfig;
   billing: {
     deepgram_enabled: boolean;
     deepgram_project_id: string;
@@ -77,6 +83,10 @@ const emptyConfig: Config = {
   known_apps: [],
   app_prompt_rules: [],
   llm_model: "gemini-2.5-flash-lite",
+  context: {
+    accessibility_enabled: true,
+    vision_enabled: true,
+  },
   billing: {
     deepgram_enabled: false,
     deepgram_project_id: "",
@@ -584,6 +594,47 @@ export default function Settings() {
                 </option>
               </select>
             </label>
+          </div>
+        </div>
+
+        {/* Context Section */}
+        <div className="settings-section">
+          <div className="section-header">
+            <Sparkles size={16} />
+            <span>コンテキスト</span>
+          </div>
+          <div className="section-content">
+            <div className="toggle-group">
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={config.context.accessibility_enabled}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      context: { ...prev.context, accessibility_enabled: e.target.checked },
+                    }))
+                  }
+                  disabled={loading}
+                />
+                <span>選択テキストを利用（Accessibility）</span>
+              </label>
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={config.context.vision_enabled}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      context: { ...prev.context, vision_enabled: e.target.checked },
+                    }))
+                  }
+                  disabled={loading}
+                />
+                <span>スクリーンショットをVision解析</span>
+              </label>
+            </div>
+            <small>録音開始時に画面解析を並列実行し、後処理の精度を向上させます。</small>
           </div>
         </div>
 
