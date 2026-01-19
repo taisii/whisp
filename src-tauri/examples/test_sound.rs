@@ -40,7 +40,7 @@ fn test_file(path: &str) {
     
     // Step 4: Create sink
     print!("  [4] Sink: ");
-    let sink = Sink::connect_new(&stream.mixer());
+    let sink = Sink::connect_new(stream.mixer());
     println!("✓");
     
     // Step 5: Play

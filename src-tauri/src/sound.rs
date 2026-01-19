@@ -11,7 +11,7 @@ fn play_tink() -> AppResult<()> {
             eprintln!("[sound] Failed to open default stream");
             return;
         };
-        let sink = Sink::connect_new(&stream.mixer());
+        let sink = Sink::connect_new(stream.mixer());
         let Ok(file) = File::open(TINK_PATH) else {
             eprintln!("[sound] Failed to open file: {}", TINK_PATH);
             return;

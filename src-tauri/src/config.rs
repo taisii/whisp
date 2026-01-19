@@ -11,22 +11,18 @@ pub struct ApiKeys {
     pub openai: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RecordingMode {
+    #[default]
     Toggle,
     PushToTalk,
 }
 
-impl Default for RecordingMode {
-    fn default() -> Self {
-        Self::Toggle
-    }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum LlmModel {
     #[serde(rename = "gemini-2.5-flash-lite")]
+    #[default]
     Gemini25FlashLite,
     #[serde(rename = "gemini-2.5-flash-lite-audio")]
     Gemini25FlashLiteAudio,
@@ -48,12 +44,6 @@ impl LlmModel {
 
     pub fn uses_direct_audio(self) -> bool {
         matches!(self, Self::Gemini25FlashLiteAudio)
-    }
-}
-
-impl Default for LlmModel {
-    fn default() -> Self {
-        Self::Gemini25FlashLite
     }
 }
 
