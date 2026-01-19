@@ -4,7 +4,9 @@ use crate::error::{AppError, AppResult};
 mod macos {
     use super::{AppError, AppResult};
     use core_foundation_sys::base::{CFRelease, CFTypeRef};
-    use core_foundation_sys::dictionary::CFDictionaryRef;
+    use core_foundation_sys::dictionary::{
+        CFDictionaryKeyCallBacks, CFDictionaryRef, CFDictionaryValueCallBacks,
+    };
     use core_foundation_sys::string::CFStringRef;
     use std::ffi::c_void;
 
@@ -28,14 +30,14 @@ mod macos {
         static kCFBooleanTrue: CFTypeRef;
         fn CFDictionaryCreate(
             allocator: *const c_void,
-            keys: *const CFTypeRef,
-            values: *const CFTypeRef,
+            keys: *const *const c_void,
+            values: *const *const c_void,
             num_values: isize,
-            key_callbacks: *const c_void,
-            value_callbacks: *const c_void,
+            key_callbacks: *const CFDictionaryKeyCallBacks,
+            value_callbacks: *const CFDictionaryValueCallBacks,
         ) -> CFDictionaryRef;
-        static kCFTypeDictionaryKeyCallBacks: c_void;
-        static kCFTypeDictionaryValueCallBacks: c_void;
+        static kCFTypeDictionaryKeyCallBacks: CFDictionaryKeyCallBacks;
+        static kCFTypeDictionaryValueCallBacks: CFDictionaryValueCallBacks;
     }
 
     #[link(name = "CoreGraphics", kind = "framework")]
@@ -72,8 +74,8 @@ mod macos {
                 keys.as_ptr(),
                 values.as_ptr(),
                 1,
-                &kCFTypeDictionaryKeyCallBacks as *const _ as *const c_void,
-                &kCFTypeDictionaryValueCallBacks as *const _ as *const c_void,
+                &kCFTypeDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
             );
 
             let result = AXIsProcessTrustedWithOptions(options);
@@ -90,7 +92,7 @@ mod macos {
     /// Returns true if permission is granted.
     #[allow(dead_code)]
     pub fn request_accessibility_permission() -> bool {
-        is_accessibility_trusted()
+        is_accessibility_trusted_with_prompt(true)
     }
 
     pub fn send_text(text: &str) -> AppResult<()> {
