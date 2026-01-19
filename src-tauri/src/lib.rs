@@ -120,10 +120,10 @@ async fn save_config(app: AppHandle, state: State<'_, AppState>, config: Config)
         return Err(err.to_string());
     }
 
-    if config.shortcut != old_shortcut {
-        if shortcut::is_registered(&app, &old_shortcut) {
-            let _ = shortcut::unregister_shortcut(&app, &old_shortcut);
-        }
+    if config.shortcut != old_shortcut
+        && shortcut::is_registered(&app, &old_shortcut)
+    {
+        let _ = shortcut::unregister_shortcut(&app, &old_shortcut);
     }
 
     *state.config.lock().unwrap() = config.clone();
@@ -224,9 +224,7 @@ async fn start_recording(app: &AppHandle, state: &AppState) -> AppResult<()> {
         emit_log(app, "error", "recording", "Deepgram APIキーが未設定です");
         return Err(AppError::MissingApiKey("deepgram"));
     }
-    if let Err(err) = validate_llm_api_key(app, &config) {
-        return Err(err);
-    }
+    validate_llm_api_key(app, &config)?;
 
     record_known_app(app, state);
 

@@ -180,7 +180,7 @@ fn encode_f32(data: &[f32], channels: usize) -> (Vec<u8>, u16) {
     let mut peak = 0u16;
     for sample in mono {
         let sample_i16 = f32_to_i16(sample);
-        let abs = i32::from(sample_i16).abs() as u16;
+        let abs = i32::from(sample_i16).unsigned_abs() as u16;
         if abs > peak {
             peak = abs;
         }
@@ -194,7 +194,7 @@ fn encode_i16(data: &[i16], channels: usize) -> (Vec<u8>, u16) {
     let mut bytes = Vec::with_capacity(mono.len() * 2);
     let mut peak = 0u16;
     for sample in mono {
-        let abs = i32::from(sample).abs() as u16;
+        let abs = i32::from(sample).unsigned_abs() as u16;
         if abs > peak {
             peak = abs;
         }
@@ -209,7 +209,7 @@ fn encode_u16(data: &[u16], channels: usize) -> (Vec<u8>, u16) {
     let mut peak = 0u16;
     for sample in mono {
         let sample_i16 = u16_to_i16(sample);
-        let abs = i32::from(sample_i16).abs() as u16;
+        let abs = i32::from(sample_i16).unsigned_abs() as u16;
         if abs > peak {
             peak = abs;
         }

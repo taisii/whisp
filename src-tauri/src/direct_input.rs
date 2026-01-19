@@ -86,6 +86,13 @@ mod macos {
         }
     }
 
+    /// Request accessibility permission, showing a dialog if not already granted.
+    /// Returns true if permission is granted.
+    #[allow(dead_code)]
+    pub fn request_accessibility_permission() -> bool {
+        is_accessibility_trusted()
+    }
+
     pub fn send_text(text: &str) -> AppResult<()> {
         // Check permission with prompt to show dialog if needed
         if !is_accessibility_trusted_with_prompt(true) {
@@ -140,4 +147,18 @@ pub fn send_text(_text: &str) -> AppResult<()> {
     Err(AppError::Other(
         "direct input is only supported on macOS".to_string(),
     ))
+}
+
+/// Request accessibility permission, showing a dialog if not already granted.
+/// Returns true if permission is granted.
+#[cfg(target_os = "macos")]
+#[allow(dead_code)]
+pub fn request_accessibility_permission() -> bool {
+    macos::request_accessibility_permission()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
+pub fn request_accessibility_permission() -> bool {
+    true // Non-macOS platforms don't need accessibility permission
 }
