@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { buildShortcutString, formatShortcutDisplay } from "@/lib/shortcut";
+import type { DeepgramBillingSummary } from "@/types/billing";
 import type { UsageSummary } from "@/types/usage";
 import {
   Key,
@@ -21,6 +22,7 @@ import {
   Radio,
   Sparkles,
   X,
+  RefreshCcw,
 } from "lucide-react";
 
 type ApiKeys = {
@@ -46,6 +48,10 @@ type Config = {
   known_apps: string[];
   app_prompt_rules: AppPromptRule[];
   llm_model: LlmModel;
+  billing: {
+    deepgram_enabled: boolean;
+    deepgram_project_id: string;
+  };
 };
 
 type DebugLog = {
@@ -71,6 +77,10 @@ const emptyConfig: Config = {
   known_apps: [],
   app_prompt_rules: [],
   llm_model: "gemini-2.5-flash-lite",
+  billing: {
+    deepgram_enabled: false,
+    deepgram_project_id: "",
+  },
 };
 
 function formatCost(usd: number): string {
@@ -78,6 +88,16 @@ function formatCost(usd: number): string {
     return `$${usd.toFixed(4)}`;
   }
   return `$${usd.toFixed(2)}`;
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) {
+    return "—";
+  }
+  if (seconds < 60) {
+    return `${seconds.toFixed(1)}秒`;
+  }
+  return `${(seconds / 60).toFixed(1)}分`;
 }
 
 type PipelineStateInfo = {
@@ -119,6 +139,9 @@ export default function Settings() {
   const [shortcutHint, setShortcutHint] = useState<string | null>(null);
   const [selectedApp, setSelectedApp] = useState<string | null>(null);
   const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
+  const [deepgramBilling, setDeepgramBilling] = useState<DeepgramBillingSummary | null>(null);
+  const [deepgramBillingError, setDeepgramBillingError] = useState<string | null>(null);
+  const [deepgramBillingLoading, setDeepgramBillingLoading] = useState(false);
   const [debugExpanded, setDebugExpanded] = useState(false);
   const [authExpanded, setAuthExpanded] = useState(false);
 
@@ -196,6 +219,37 @@ export default function Settings() {
       .then(setUsageSummary)
       .catch(() => {});
   }, [tauriReady]);
+
+  const fetchDeepgramBilling = () => {
+    setDeepgramBillingLoading(true);
+    setDeepgramBillingError(null);
+    invoke<DeepgramBillingSummary>("get_deepgram_billing_summary")
+      .then((data) => {
+        setDeepgramBilling(data);
+      })
+      .catch((err) => {
+        setDeepgramBilling(null);
+        setDeepgramBillingError(String(err));
+      })
+      .finally(() => {
+        setDeepgramBillingLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    if (!tauriReady) return;
+    if (!config.billing.deepgram_enabled) {
+      setDeepgramBilling(null);
+      setDeepgramBillingError(null);
+      return;
+    }
+    if (!config.billing.deepgram_project_id.trim()) {
+      setDeepgramBilling(null);
+      setDeepgramBillingError("Deepgram Project IDを入力してください");
+      return;
+    }
+    fetchDeepgramBilling();
+  }, [config.billing.deepgram_enabled, config.billing.deepgram_project_id, tauriReady]);
 
   useEffect(() => {
     if (!captureActive) return;
@@ -680,6 +734,110 @@ export default function Settings() {
         ) : (
           <p className="empty-state">利用データがありません</p>
         )}
+        <div className="settings-section">
+          <div className="section-header">
+            <span>公式請求額（Deepgram）</span>
+          </div>
+          <div className="section-content">
+            <div className="toggle-group">
+              <label className="toggle-item">
+                <input
+                  type="checkbox"
+                  checked={config.billing.deepgram_enabled}
+                  onChange={(e) =>
+                    setConfig((prev) => ({
+                      ...prev,
+                      billing: {
+                        ...prev.billing,
+                        deepgram_enabled: e.target.checked,
+                      },
+                    }))
+                  }
+                  disabled={loading}
+                />
+                <span>Deepgram Billing APIを使用する</span>
+              </label>
+            </div>
+            <label className="field">
+              <span>Deepgram Project ID</span>
+              <input
+                type="text"
+                value={config.billing.deepgram_project_id}
+                onChange={(e) =>
+                  setConfig((prev) => ({
+                    ...prev,
+                    billing: {
+                      ...prev.billing,
+                      deepgram_project_id: e.target.value,
+                    },
+                  }))
+                }
+                disabled={loading || !config.billing.deepgram_enabled}
+              />
+              <small>Deepgram Consoleに表示されるProject IDを入力してください。</small>
+            </label>
+            <div className="usage-grid">
+              <div className="usage-panel">
+                <p className="usage-label">今月の請求額</p>
+                {deepgramBilling ? (
+                  <div className="usage-details">
+                    <div className="usage-row">
+                      <span>期間</span>
+                      <span>
+                        {deepgramBilling.startDate}〜{deepgramBilling.endDate}
+                      </span>
+                    </div>
+                    <div className="usage-row">
+                      <span>利用料金</span>
+                      <span>
+                        {deepgramBilling.totalCostUsd === null
+                          ? "—"
+                          : formatCost(deepgramBilling.totalCostUsd)}
+                      </span>
+                    </div>
+                    <div className="usage-row">
+                      <span>音声時間</span>
+                      <span>{formatDuration(deepgramBilling.totalSeconds)}</span>
+                    </div>
+                    <div className="usage-row">
+                      <span>残高</span>
+                      <span>
+                        {deepgramBilling.balanceUsd === null
+                          ? "—"
+                          : formatCost(deepgramBilling.balanceUsd)}
+                      </span>
+                    </div>
+                    <div className="usage-row usage-total">
+                      <span>取得時刻</span>
+                      <span>
+                        {new Date(deepgramBilling.fetchedAtMs).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="empty-state">
+                    {deepgramBillingLoading
+                      ? "読み込み中..."
+                      : deepgramBillingError ?? "Deepgram Billing APIを有効化してください"}
+                  </p>
+                )}
+                <button
+                  className="ghost icon-button billing-refresh"
+                  onClick={fetchDeepgramBilling}
+                  disabled={
+                    loading ||
+                    deepgramBillingLoading ||
+                    !config.billing.deepgram_enabled ||
+                    !config.billing.deepgram_project_id.trim()
+                  }
+                >
+                  <RefreshCcw size={14} />
+                  更新
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* Debug Card (Collapsible) */}

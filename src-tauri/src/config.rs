@@ -54,6 +54,13 @@ pub struct AppPromptRule {
     pub template: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct BillingSettings {
+    pub deepgram_enabled: bool,
+    pub deepgram_project_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
@@ -64,6 +71,7 @@ pub struct Config {
     pub known_apps: Vec<String>,
     pub app_prompt_rules: Vec<AppPromptRule>,
     pub llm_model: LlmModel,
+    pub billing: BillingSettings,
 }
 
 impl Default for Config {
@@ -80,6 +88,7 @@ impl Default for Config {
             known_apps: Vec::new(),
             app_prompt_rules: Vec::new(),
             llm_model: LlmModel::Gemini25FlashLite,
+            billing: BillingSettings::default(),
         }
     }
 }
@@ -156,6 +165,10 @@ mod tests {
                 template: "入力: {STT結果}".to_string(),
             }],
             llm_model: LlmModel::Gpt5Nano,
+            billing: BillingSettings {
+                deepgram_enabled: true,
+                deepgram_project_id: "project-123".to_string(),
+            },
         };
 
         manager.save(&config).expect("save");

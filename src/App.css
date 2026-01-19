@@ -533,6 +533,11 @@ button.icon-button {
   margin-top: 4px;
 }
 
+.billing-refresh {
+  margin-top: 10px;
+  align-self: flex-start;
+}
+
 /* Debug */
 .debug-content {
   padding: 4px 20px 20px;

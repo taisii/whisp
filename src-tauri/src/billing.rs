@@ -124,6 +124,7 @@ mod tests {
     fn total_cost_combines_stt_and_llm() {
         let stt = SttUsage {
             duration_seconds: 60.0,
+            request_id: None,
         };
         let llm = LlmUsage {
             model: "gemini-2.5-flash-lite".to_string(),

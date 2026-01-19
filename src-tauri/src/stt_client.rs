@@ -101,12 +101,16 @@ pub async fn run_deepgram_stream_with_events(
         let mut final_segments: Vec<String> = Vec::new();
         let mut partial = String::new();
         let mut last_duration: f64 = 0.0;
+        let mut last_request_id: Option<String> = None;
         while let Some(msg) = ws_read.next().await {
             let msg = msg?;
             if let Message::Text(text) = msg {
                 if let Some(parsed) = parse_deepgram_message_with_duration(&text) {
                     if parsed.duration > 0.0 {
                         last_duration = parsed.duration;
+                    }
+                    if parsed.request_id.is_some() {
+                        last_request_id = parsed.request_id.clone();
                     }
                     if parsed.chunk.text.trim().is_empty() {
                         continue;
@@ -132,6 +136,7 @@ pub async fn run_deepgram_stream_with_events(
         let usage = if last_duration > 0.0 {
             Some(SttUsage {
                 duration_seconds: last_duration,
+                request_id: last_request_id,
             })
         } else {
             None
@@ -168,17 +173,28 @@ pub fn parse_deepgram_message(text: &str) -> Option<TranscriptChunk> {
 struct ParsedDeepgramMessage {
     chunk: TranscriptChunk,
     duration: f64,
+    request_id: Option<String>,
 }
 
 fn parse_deepgram_message_with_duration(text: &str) -> Option<ParsedDeepgramMessage> {
     let parsed: DeepgramMessage = serde_json::from_str(text).ok()?;
     let alternative = parsed.channel.alternatives.first()?;
+    let metadata_duration = parsed.metadata.as_ref().map(|m| m.duration).unwrap_or(0.0);
+    let duration = if metadata_duration > 0.0 {
+        metadata_duration
+    } else {
+        parsed.duration
+    };
+    let request_id = parsed
+        .metadata
+        .and_then(|m| if m.request_id.is_empty() { None } else { Some(m.request_id) });
     Some(ParsedDeepgramMessage {
         chunk: TranscriptChunk {
             text: alternative.transcript.clone(),
             is_final: parsed.is_final,
         },
-        duration: parsed.duration,
+        duration,
+        request_id,
     })
 }
 
@@ -189,6 +205,15 @@ struct DeepgramMessage {
     is_final: bool,
     #[serde(default)]
     duration: f64,
+    metadata: Option<DeepgramMetadata>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepgramMetadata {
+    #[serde(default)]
+    duration: f64,
+    #[serde(default)]
+    request_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -244,6 +269,7 @@ mod tests {
         assert!(parsed.chunk.is_final);
         assert_eq!(parsed.chunk.text, "hello");
         assert!((parsed.duration - 5.25).abs() < 0.001);
+        assert_eq!(parsed.request_id, None);
     }
 
     #[test]
@@ -255,5 +281,23 @@ mod tests {
         let parsed = parse_deepgram_message_with_duration(payload).expect("parsed");
         assert!(!parsed.chunk.is_final);
         assert!((parsed.duration - 0.0).abs() < 0.001);
+        assert_eq!(parsed.request_id, None);
+    }
+
+    #[test]
+    fn parse_metadata_duration_and_request_id() {
+        let payload = r#"{
+            "channel": { "alternatives": [ { "transcript": "hello" } ] },
+            "is_final": true,
+            "metadata": {
+                "duration": 3.5,
+                "request_id": "abc123"
+            }
+        }"#;
+        let parsed = parse_deepgram_message_with_duration(payload).expect("parsed");
+        assert!(parsed.chunk.is_final);
+        assert_eq!(parsed.chunk.text, "hello");
+        assert!((parsed.duration - 3.5).abs() < 0.001);
+        assert_eq!(parsed.request_id.as_deref(), Some("abc123"));
     }
 }
