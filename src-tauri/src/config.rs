@@ -64,6 +64,13 @@ pub struct AppPromptRule {
     pub template: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct ContextConfig {
+    pub accessibility_enabled: bool,
+    pub vision_enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
@@ -74,6 +81,7 @@ pub struct Config {
     pub known_apps: Vec<String>,
     pub app_prompt_rules: Vec<AppPromptRule>,
     pub llm_model: LlmModel,
+    pub context: ContextConfig,
 }
 
 impl Default for Config {
@@ -90,6 +98,10 @@ impl Default for Config {
             known_apps: Vec::new(),
             app_prompt_rules: Vec::new(),
             llm_model: LlmModel::Gemini25FlashLite,
+            context: ContextConfig {
+                accessibility_enabled: true,
+                vision_enabled: true,
+            },
         }
     }
 }
@@ -166,6 +178,10 @@ mod tests {
                 template: "入力: {STT結果}".to_string(),
             }],
             llm_model: LlmModel::Gpt5Nano,
+            context: ContextConfig {
+                accessibility_enabled: false,
+                vision_enabled: true,
+            },
         };
 
         manager.save(&config).expect("save");

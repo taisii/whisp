@@ -29,6 +29,7 @@ fn run() -> Result<(), String> {
             "auto",
             None,
             &[],
+            None,
         ))
         .map_err(|e| e.to_string())?;
     println!("{}", result.text);
