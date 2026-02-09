@@ -1,16 +1,17 @@
 import Foundation
 
 private let defaultPromptTemplate = """
-以下の音声認識結果を修正してください。修正後のテキストのみを出力してください。
+以下の音声認識結果を、意味を保って自然な文に整形してください。
+出力は整形後テキストのみ。
 
-修正ルール:
-1. フィラー（えーと、あのー）を除去
-2. 技術用語の誤認識を修正（例: \"リアクト\"→\"React\", \"ユーズステート\"→\"useState\"）
+ルール:
+- フィラー（えーと、あのー等）を除去
+- 誤認識された技術用語を文脈で修正
 
 入力: {STT結果}
 """
 
-public struct ContextInfo: Equatable, Sendable {
+public struct ContextInfo: Codable, Equatable, Sendable {
     public var accessibilityText: String?
     public var visionSummary: String?
     public var visionTerms: [String]
@@ -138,11 +139,15 @@ public struct GeminiUsageMetadata: Decodable, Equatable, Sendable {
 }
 
 public struct GeminiPartResponse: Decodable, Equatable, Sendable {
-    public let text: String
+    public let text: String?
 }
 
 public struct GeminiContentResponse: Decodable, Equatable, Sendable {
     public let parts: [GeminiPartResponse]
+
+    public var joinedText: String {
+        parts.compactMap { $0.text }.joined()
+    }
 }
 
 public struct GeminiCandidate: Decodable, Equatable, Sendable {

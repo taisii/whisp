@@ -58,9 +58,29 @@ final class PromptBuilderTests: XCTestCase {
         }
         """
         let parsed = try JSONDecoder().decode(GeminiResponse.self, from: Data(json.utf8))
-        XCTAssertEqual(parsed.candidates.first?.content.parts.first?.text, "整形済み")
+        XCTAssertEqual(parsed.candidates.first?.content.joinedText, "整形済み")
         XCTAssertEqual(parsed.usageMetadata?.promptTokenCount, 100)
         XCTAssertEqual(parsed.usageMetadata?.candidatesTokenCount, 50)
+    }
+
+    func testParseGeminiResponseJoinsMultipartText() throws {
+        let json = """
+        {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  { "text": "前半です。" },
+                  { "inlineData": { "mimeType": "text/plain", "data": "ZHVtbXk=" } },
+                  { "text": "後半です。" }
+                ]
+              }
+            }
+          ]
+        }
+        """
+        let parsed = try JSONDecoder().decode(GeminiResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(parsed.candidates.first?.content.joinedText, "前半です。後半です。")
     }
 
     func testParseOpenAIResponseWithUsage() throws {

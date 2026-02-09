@@ -14,23 +14,27 @@ public struct ParsedDeepgramMessage: Equatable, Sendable {
     public let chunk: TranscriptChunk
     public let duration: Double
     public let requestID: String?
+    public let isSpeechFinal: Bool
 
-    public init(chunk: TranscriptChunk, duration: Double, requestID: String?) {
+    public init(chunk: TranscriptChunk, duration: Double, requestID: String?, isSpeechFinal: Bool = false) {
         self.chunk = chunk
         self.duration = duration
         self.requestID = requestID
+        self.isSpeechFinal = isSpeechFinal
     }
 }
 
 private struct DeepgramMessage: Decodable {
     let channel: DeepgramChannel
     let isFinal: Bool
+    let speechFinal: Bool
     let duration: Double
     let metadata: DeepgramMetadata?
 
     enum CodingKeys: String, CodingKey {
         case channel
         case isFinal = "is_final"
+        case speechFinal = "speech_final"
         case duration
         case metadata
     }
@@ -39,6 +43,7 @@ private struct DeepgramMessage: Decodable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         channel = try container.decode(DeepgramChannel.self, forKey: .channel)
         isFinal = try container.decodeIfPresent(Bool.self, forKey: .isFinal) ?? false
+        speechFinal = try container.decodeIfPresent(Bool.self, forKey: .speechFinal) ?? false
         duration = try container.decodeIfPresent(Double.self, forKey: .duration) ?? 0
         metadata = try container.decodeIfPresent(DeepgramMetadata.self, forKey: .metadata)
     }
@@ -106,6 +111,7 @@ public func parseDeepgramMessageWithDuration(_ text: String) -> ParsedDeepgramMe
     return ParsedDeepgramMessage(
         chunk: TranscriptChunk(text: alternative.transcript, isFinal: parsed.isFinal),
         duration: duration,
-        requestID: requestID
+        requestID: requestID,
+        isSpeechFinal: parsed.speechFinal
     )
 }

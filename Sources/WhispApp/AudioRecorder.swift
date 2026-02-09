@@ -1,4 +1,4 @@
-import AVFoundation
+@preconcurrency import AVFoundation
 import Foundation
 import WhispCore
 
@@ -7,13 +7,30 @@ struct RecordingResult {
     let pcmData: Data
 }
 
+private struct UnsafeSendablePCMBuffer: @unchecked Sendable {
+    let value: AVAudioPCMBuffer
+}
+
+private final class ConversionState: @unchecked Sendable {
+    var didSendInput = false
+}
+
 final class AudioRecorder {
+    static let targetSampleRate = 16_000
+
     private let engine = AVAudioEngine()
     private let lock = NSLock()
+    private let onChunk: (Data) -> Void
 
     private var pcmData = Data()
-    private(set) var sampleRate: Int = 16_000
+    private(set) var sampleRate: Int = AudioRecorder.targetSampleRate
     private var isRecording = false
+    private var converter: AVAudioConverter?
+    private var outputFormat: AVAudioFormat?
+
+    init(onChunk: @escaping (Data) -> Void = { _ in }) {
+        self.onChunk = onChunk
+    }
 
     func start() throws {
         guard !isRecording else { return }
@@ -21,10 +38,24 @@ final class AudioRecorder {
         pcmData = Data()
 
         let inputNode = engine.inputNode
-        let format = inputNode.inputFormat(forBus: 0)
-        sampleRate = Int(format.sampleRate)
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+        guard let outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: Double(Self.targetSampleRate),
+            channels: 1,
+            interleaved: false
+        ) else {
+            throw AppError.invalidArgument("録音フォーマット初期化に失敗")
+        }
+        guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
+            throw AppError.invalidArgument("音声コンバータ初期化に失敗")
+        }
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        self.outputFormat = outputFormat
+        self.converter = converter
+        sampleRate = Self.targetSampleRate
+
+        inputNode.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
             self?.append(buffer: buffer)
         }
 
@@ -41,54 +72,148 @@ final class AudioRecorder {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRecording = false
+        let flushedBytes = flushConverterTail()
+        converter = nil
+        outputFormat = nil
 
         lock.lock()
         let data = pcmData
         lock.unlock()
 
+        SystemLog.audio("recording_stop", fields: [
+            "sample_rate": String(sampleRate),
+            "pcm_bytes": String(data.count),
+            "flushed_bytes": String(flushedBytes),
+        ])
+
         return RecordingResult(sampleRate: sampleRate, pcmData: data)
     }
 
     private func append(buffer: AVAudioPCMBuffer) {
-        var local = Data(capacity: Int(buffer.frameLength) * 2)
+        guard let outputFormat else {
+            return
+        }
 
-        if let floatChannels = buffer.floatChannelData {
-            let channelCount = Int(buffer.format.channelCount)
-            let frameLength = Int(buffer.frameLength)
+        let ratio = outputFormat.sampleRate / buffer.format.sampleRate
+        let estimatedFrames = max(AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16, 32)
+        let state = ConversionState()
+        let sendableBuffer = UnsafeSendablePCMBuffer(value: buffer)
+        var emptyOutputStreak = 0
 
-            for frame in 0..<frameLength {
-                var sum: Float = 0
-                for channel in 0..<channelCount {
-                    sum += floatChannels[channel][frame]
-                }
-                let mono = sum / Float(max(channelCount, 1))
-                append(i16: f32ToI16(mono), to: &local)
+        while let converter {
+            guard let converted = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: estimatedFrames) else {
+                return
             }
-        } else if let int16Channels = buffer.int16ChannelData {
-            let channelCount = Int(buffer.format.channelCount)
-            let frameLength = Int(buffer.frameLength)
 
-            for frame in 0..<frameLength {
-                var sum: Int32 = 0
-                for channel in 0..<channelCount {
-                    sum += Int32(int16Channels[channel][frame])
+            var error: NSError?
+            let status = converter.convert(to: converted, error: &error) { _, outStatus in
+                if state.didSendInput {
+                    outStatus.pointee = .noDataNow
+                    return nil
                 }
-                let mono = Int16(clamping: sum / Int32(max(channelCount, 1)))
-                append(i16: mono, to: &local)
+                state.didSendInput = true
+                outStatus.pointee = .haveData
+                return sendableBuffer.value
+            }
+
+            if error != nil || status == .error {
+                return
+            }
+
+            let wrote = appendConvertedBuffer(converted)
+            emptyOutputStreak = wrote == 0 ? (emptyOutputStreak + 1) : 0
+
+            switch status {
+            case .haveData:
+                if emptyOutputStreak >= 2 {
+                    return
+                }
+            case .inputRanDry, .endOfStream:
+                if wrote == 0 {
+                    return
+                }
+            case .error:
+                return
+            @unknown default:
+                return
+            }
+        }
+    }
+
+    private func flushConverterTail() -> Int {
+        guard let outputFormat else {
+            return 0
+        }
+
+        let state = ConversionState()
+        var totalBytes = 0
+        var emptyOutputStreak = 0
+
+        while let converter {
+            guard let converted = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: 1024) else {
+                return totalBytes
+            }
+
+            var error: NSError?
+            let status = converter.convert(to: converted, error: &error) { _, outStatus in
+                if state.didSendInput {
+                    outStatus.pointee = .noDataNow
+                    return nil
+                }
+                state.didSendInput = true
+                outStatus.pointee = .endOfStream
+                return nil
+            }
+            if error != nil || status == .error {
+                return totalBytes
+            }
+
+            let wrote = appendConvertedBuffer(converted)
+            totalBytes += wrote
+
+            if wrote == 0 {
+                emptyOutputStreak += 1
+            } else {
+                emptyOutputStreak = 0
+            }
+
+            switch status {
+            case .haveData:
+                if emptyOutputStreak >= 2 {
+                    return totalBytes
+                }
+            case .inputRanDry, .endOfStream:
+                if wrote == 0 {
+                    return totalBytes
+                }
+            case .error:
+                return totalBytes
+            @unknown default:
+                return totalBytes
             }
         }
 
-        guard !local.isEmpty else { return }
+        return totalBytes
+    }
+
+    private func appendConvertedBuffer(_ converted: AVAudioPCMBuffer) -> Int {
+        guard converted.frameLength > 0 else {
+            return 0
+        }
+        guard let channel = converted.int16ChannelData?[0] else {
+            return 0
+        }
+
+        let byteCount = Int(converted.frameLength) * MemoryLayout<Int16>.size
+        let local = Data(bytes: channel, count: byteCount)
+        guard !local.isEmpty else {
+            return 0
+        }
 
         lock.lock()
         pcmData.append(local)
         lock.unlock()
-    }
-
-    private func append(i16: Int16, to data: inout Data) {
-        var value = i16.littleEndian
-        withUnsafeBytes(of: &value) { bytes in
-            data.append(contentsOf: bytes)
-        }
+        onChunk(local)
+        return local.count
     }
 }

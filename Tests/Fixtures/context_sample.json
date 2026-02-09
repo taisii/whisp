@@ -1,0 +1,11 @@
+{
+  "accessibilityText": "TODO: optimize post processing latency and compare benchmark outputs.",
+  "visionSummary": "XcodeでWhispのSwiftコードを開き、ベンチマーク結果を確認している画面。",
+  "visionTerms": [
+    "Deepgram",
+    "Gemini",
+    "postprocess",
+    "latency",
+    "benchmark_full_pipeline.sh"
+  ]
+}

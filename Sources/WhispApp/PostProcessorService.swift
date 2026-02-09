@@ -91,14 +91,13 @@ final class PostProcessorService {
     }
 
     private let visionContextPrompt = """
-    次のスクリーンショットを解析し、音声整形で使うコンテキストをJSONのみで返してください。
-    出力形式:
-    {"summary":"...","terms":["..."]}
+    スクリーンショットを解析し、音声整形用のコンテキストをJSONのみで返してください。
+    形式: {"summary":"...","terms":["..."]}
     ルール:
-    - summary は1文で簡潔に記載
-    - terms は画面上の専門用語・固有名詞を最大10個
-    - 情報がない場合は summary は空文字、terms は空配列
-    - JSON以外の文字を出力しない
+    - summary は1文で簡潔
+    - terms は専門用語・固有名詞を最大10個
+    - 情報がなければ summary は空文字、terms は空配列
+    - JSON以外は出力しない
     """
 
     func postProcess(
@@ -108,7 +107,8 @@ final class PostProcessorService {
         languageHint: String,
         appName: String?,
         appPromptRules: [AppPromptRule],
-        context: ContextInfo?
+        context: ContextInfo?,
+        debugRunID: String? = nil
     ) async throws -> PostProcessResult {
         let prompt = buildPrompt(
             sttResult: sttResult,
@@ -116,6 +116,22 @@ final class PostProcessorService {
             appName: appName,
             appPromptRules: appPromptRules,
             context: context
+        )
+        var extra: [String: String] = [
+            "stt_chars": String(sttResult.count),
+            "language_hint": languageHint,
+            "rule_count": String(appPromptRules.count),
+        ]
+        if let debugRunID, !debugRunID.isEmpty {
+            extra["run_id"] = debugRunID
+        }
+        PromptTrace.dump(
+            stage: "postprocess",
+            model: model.rawValue,
+            appName: appName,
+            context: context,
+            prompt: prompt,
+            extra: extra
         )
 
         switch model {
@@ -130,12 +146,28 @@ final class PostProcessorService {
         apiKey: String,
         wavData: Data,
         mimeType: String,
-        context: ContextInfo?
+        context: ContextInfo?,
+        debugRunID: String? = nil
     ) async throws -> PostProcessResult {
-        var prompt = "次の音声を文字起こしし、フィラーを除去して整形してください。修正後のテキストのみを出力してください。"
+        var prompt = "次の音声を文字起こしし、フィラー除去と最小限の整形を行ってください。出力は整形後テキストのみ。"
         if let context, !context.isEmpty {
             prompt += "\n\n画面コンテキスト:\n\(contextPromptLines(context))"
         }
+        var extra: [String: String] = [
+            "mime_type": mimeType,
+            "audio_bytes": String(wavData.count),
+        ]
+        if let debugRunID, !debugRunID.isEmpty {
+            extra["run_id"] = debugRunID
+        }
+        PromptTrace.dump(
+            stage: "audio_transcribe",
+            model: LLMModel.gemini25FlashLiteAudio.rawValue,
+            appName: nil,
+            context: context,
+            prompt: prompt,
+            extra: extra
+        )
         let requestBody = GeminiRequest(
             contents: [
                 GeminiContent(
@@ -156,7 +188,7 @@ final class PostProcessorService {
         let data = try await sendJSONRequest(url: url, method: "POST", headers: [:], body: requestBody)
         let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
 
-        let text = decoded.candidates.first?.content.parts.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let usage = decoded.usageMetadata.map {
             LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount)
         }
@@ -168,14 +200,26 @@ final class PostProcessorService {
         model: LLMModel,
         apiKey: String,
         imageData: Data,
-        mimeType: String = "image/png"
+        mimeType: String = "image/png",
+        debugRunID: String? = nil
     ) async throws -> ContextInfo? {
         let vision: VisionContext?
         switch model {
         case .gemini25FlashLite, .gemini25FlashLiteAudio:
-            vision = try await analyzeVisionContextGemini(apiKey: apiKey, imageData: imageData, mimeType: mimeType)
+            vision = try await analyzeVisionContextGemini(
+                apiKey: apiKey,
+                imageData: imageData,
+                mimeType: mimeType,
+                debugRunID: debugRunID
+            )
         case .gpt4oMini, .gpt5Nano:
-            vision = try await analyzeVisionContextOpenAI(apiKey: apiKey, model: model, imageData: imageData, mimeType: mimeType)
+            vision = try await analyzeVisionContextOpenAI(
+                apiKey: apiKey,
+                model: model,
+                imageData: imageData,
+                mimeType: mimeType,
+                debugRunID: debugRunID
+            )
         }
 
         guard let vision else { return nil }
@@ -197,7 +241,7 @@ final class PostProcessorService {
         let data = try await sendJSONRequest(url: url, method: "POST", headers: [:], body: requestBody)
         let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
 
-        let text = decoded.candidates.first?.content.parts.first?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let usage = decoded.usageMetadata.map {
             LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount)
         }
@@ -230,8 +274,24 @@ final class PostProcessorService {
     private func analyzeVisionContextGemini(
         apiKey: String,
         imageData: Data,
-        mimeType: String
+        mimeType: String,
+        debugRunID: String?
     ) async throws -> VisionContext? {
+        var extra: [String: String] = [
+            "mime_type": mimeType,
+            "image_bytes": String(imageData.count),
+        ]
+        if let debugRunID, !debugRunID.isEmpty {
+            extra["run_id"] = debugRunID
+        }
+        PromptTrace.dump(
+            stage: "vision_context",
+            model: LLMModel.gemini25FlashLite.rawValue,
+            appName: nil,
+            context: nil,
+            prompt: visionContextPrompt,
+            extra: extra
+        )
         let requestBody = GeminiRequest(
             contents: [
                 GeminiContent(
@@ -251,7 +311,7 @@ final class PostProcessorService {
 
         let data = try await sendJSONRequest(url: url, method: "POST", headers: [:], body: requestBody)
         let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-        let text = decoded.candidates.first?.content.parts.first?.text ?? ""
+        let text = decoded.candidates.first?.content.joinedText ?? ""
         return parseVisionContext(text)
     }
 
@@ -259,8 +319,24 @@ final class PostProcessorService {
         apiKey: String,
         model: LLMModel,
         imageData: Data,
-        mimeType: String
+        mimeType: String,
+        debugRunID: String?
     ) async throws -> VisionContext? {
+        var extra: [String: String] = [
+            "mime_type": mimeType,
+            "image_bytes": String(imageData.count),
+        ]
+        if let debugRunID, !debugRunID.isEmpty {
+            extra["run_id"] = debugRunID
+        }
+        PromptTrace.dump(
+            stage: "vision_context",
+            model: model.rawValue,
+            appName: nil,
+            context: nil,
+            prompt: visionContextPrompt,
+            extra: extra
+        )
         let dataURL = "data:\(mimeType);base64,\(imageData.base64EncodedString())"
         let requestBody = OpenAIVisionRequest(
             model: model.modelName,

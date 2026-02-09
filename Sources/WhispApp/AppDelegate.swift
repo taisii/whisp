@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import WhispCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -15,6 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        if DevLog.isEnabled {
+            DevLog.info("app_launch", fields: ["log_file": DevLog.filePath ?? "n/a"])
+        }
 
         if let button = statusItem.button {
             button.title = "○"
@@ -50,6 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSettings() {
         coordinator?.openSettings()
+    }
+
+    @objc private func openDebugWindow() {
+        coordinator?.openDebugWindow()
     }
 
     @objc private func openMicrophoneSettings() {
@@ -98,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem.separator())
         menu.addItem(startStopItem)
         menu.addItem(NSMenuItem(title: "設定を開く", action: #selector(openSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "デバッグを開く", action: #selector(openDebugWindow), keyEquivalent: "d"))
         menu.addItem(requestAccessibilityItem)
         menu.addItem(NSMenuItem(title: "マイク設定を開く", action: #selector(openMicrophoneSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "アクセシビリティ設定を開く", action: #selector(openAccessibilitySettings), keyEquivalent: ""))

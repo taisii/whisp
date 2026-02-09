@@ -71,6 +71,20 @@ final class STTParserTests: XCTestCase {
         XCTAssertEqual(parsed?.requestID, "abc123")
     }
 
+    func testParseSpeechFinalFlag() {
+        let payload = """
+        {
+          "channel": { "alternatives": [ { "transcript": "hello" } ] },
+          "is_final": true,
+          "speech_final": true
+        }
+        """
+        let parsed = parseDeepgramMessageWithDuration(payload)
+        XCTAssertEqual(parsed?.chunk.text, "hello")
+        XCTAssertEqual(parsed?.chunk.isFinal, true)
+        XCTAssertEqual(parsed?.isSpeechFinal, true)
+    }
+
     func testParseAlternativeWithExtraFields() {
         let payload = """
         {
