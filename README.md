@@ -1,93 +1,107 @@
-# Whisp
+# Whisp (Swift Native)
 
-A macOS menu bar app that transcribes speech in real time and applies AI post-processing.
+Whisp is now implemented as a native macOS app in Swift.
 
-- **Real-time speech recognition**: Streaming transcription via Deepgram
-- **AI post-processing**: Remove filler words, add punctuation, and fix technical terms with Google Gemini
-- **Low latency**: Targeting ≤500 ms from end of speech to clipboard
+## What is implemented
 
-## Installation
+- Menu bar resident app (`WhispApp`)
+- Global shortcut (`Cmd+J` default, configurable)
+- Recording modes: Toggle / Push-to-talk
+- Microphone recording (AVAudioEngine, mono PCM)
+- Deepgram STT
+- LLM post processing (Gemini / OpenAI)
+- Direct text input via Accessibility (CGEvent)
+- Optional screenshot context analysis at recording start
+- Settings window (SwiftUI)
+- Local config and usage storage
 
-### 1. Download the app
+## Repository structure
 
-Download the latest `.dmg` from [Releases](https://github.com/your-repo/whisp/releases) and drag `Whisp.app` to the Applications folder.
+- `Package.swift`: SwiftPM manifest
+- `Sources/WhispCore`: core logic and utilities
+- `Sources/WhispApp`: native menu bar GUI app
+- `Sources/whisp`: small CLI smoke-check target
+- `Tests/WhispCoreTests`: migrated tests
+- `scripts/build_macos_app.sh`: local `.app` bundle builder
 
-> **Note**: Whisp currently supports Apple Silicon (arm64) Macs only.
-
-### 2. First launch setup (required for unsigned apps)
-
-Because this app is not enrolled in the Apple Developer Program, macOS Gatekeeper will block it on first launch. Use either method below to open it.
-
-#### Method A: Allow from System Settings (recommended)
-
-1. Double-click Whisp.app to open it
-2. When the dialog says it cannot be opened because the developer cannot be verified, click **OK**
-3. Open **System Settings** → **Privacy & Security**
-4. Scroll down to see “\"Whisp\" was blocked because it is not from an identified developer”
-5. Click **Open Anyway**
-6. Enter your password to allow
-
-#### Method B: Remove extended attributes from Terminal
-
-Run the following command in Terminal:
+## Prerequisites
 
 ```bash
-xattr -cr /Applications/Whisp.app
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+sudo xcodebuild -license accept
+sudo xcodebuild -runFirstLaunch
 ```
 
-Then open the app as usual.
+## Development commands
 
-### 3. Microphone permission
+```bash
+# build and test
+swift build
+swift test
 
-On first launch, you will be asked for microphone access. Click **Allow**.
+# smoke checks
+swift run whisp --self-check
+swift run WhispApp --self-check
+```
 
-To change it later: **System Settings** → **Privacy & Security** → **Microphone**, then enable Whisp.
+## STT smoke check (Swift)
+
+```bash
+# 1) generate sample speech audio
+say -o /tmp/whisp-stt-check.aiff "これは音声認識の動作確認です"
+afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/whisp-stt-check.aiff /tmp/whisp-stt-check.wav
+
+# 2) run Deepgram STT through Swift implementation
+swift run whisp --stt-file /tmp/whisp-stt-check.wav
+```
+
+Requirements:
+- `~/.config/whisp/config.json` に `apiKeys.deepgram` が設定されていること
+
+## Run as menu bar app (debug)
+
+```bash
+swift run WhispApp
+```
+
+## Build local `.app` and run on real machine
+
+```bash
+scripts/build_macos_app.sh
+open .build/Whisp.app
+```
+
+Built app path:
+- `/Users/macbookair/Projects/whisp/.build/Whisp.app`
+
+## First-run permissions
+
+Whisp requires these permissions:
+- Microphone
+- Accessibility (for direct input)
+- Screen Recording (when screenshot analysis is enabled)
+
+If permission state gets stuck:
+
+```bash
+tccutil reset Microphone com.taisii.whisp.swift
+tccutil reset Accessibility com.taisii.whisp.swift
+```
 
 ## Configuration
 
-### Get and set API keys
+Config file path:
+- `~/.config/whisp/config.json`
 
-Whisp requires two API keys.
+Main fields:
+- `apiKeys.deepgram`
+- `apiKeys.gemini`
+- `apiKeys.openai`
+- `shortcut` (e.g. `Cmd+J`, `Ctrl+Alt+Shift+F1`)
+- `recordingMode` (`toggle` / `push_to_talk`)
+- `inputLanguage` (`auto` / `ja` / `en`)
+- `llmModel`
 
-#### Deepgram (speech recognition)
+## Current test status
 
-1. Create an account at [Deepgram](https://deepgram.com/)
-2. Generate an API key from the dashboard
-3. Enter it in Whisp’s settings
-
-#### Google Gemini (AI post-processing)
-
-1. Go to [Google AI Studio](https://aistudio.google.com/)
-2. **Get API key** → **Create API key**
-3. Enter it in Whisp’s settings
-
-### Global shortcut
-
-Default is `Cmd+J`. You can change it in the settings screen.
-
-## Usage
-
-1. Click the Whisp menu bar icon or press the shortcut (default: `Cmd+J`) to start recording
-2. Click again or press the shortcut to stop
-3. The text is automatically copied to the clipboard (auto-paste is optional)
-
-## Development
-
-```bash
-# Install dependencies
-bun install
-
-# Start in development mode
-bun run tauri dev
-
-# Production build
-bun run tauri build
-```
-
-## Tech stack
-
-- **Frontend**: React + TypeScript + Vite
-- **Backend**: Rust + Tauri v2
-- **Audio**: CPAL
-- **STT**: Deepgram WebSocket API
-- **Post-processing**: Google Gemini API
+- `swift test`: Swift core tests passing

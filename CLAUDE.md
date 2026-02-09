@@ -2,7 +2,7 @@
 
 macOS menu bar app for real-time speech-to-text with AI post-processing.
 
-**Stack**: Tauri v2 (Rust backend + React frontend), Bun
+**Stack**: Swift (SwiftPM), AppKit + SwiftUI
 
 ## Development Philosophy
 
@@ -11,19 +11,19 @@ macOS menu bar app for real-time speech-to-text with AI post-processing.
 
 ## Development
 
-Use `bun` for frontend, `cargo` for Rust (`src-tauri/`). See `package.json` for available scripts.
+Use SwiftPM commands.
 
 ## Architecture
 
 ```
-User speaks → Recording → Deepgram STT (streaming) → Gemini post-processing → Clipboard
+User speaks → Recording → Deepgram STT → LLM post-processing → Direct input
 ```
 
 **Responsibilities**:
-- **Frontend (React)**: Settings UI only. No business logic.
-- **Backend (Rust)**: All core logic. Audio capture, STT streaming, LLM post-processing, clipboard, global shortcut.
+- **WhispApp (AppKit/SwiftUI)**: Menu bar UI, settings window, audio capture, input dispatch.
+- **WhispCore**: Core models, prompt building, STT parsing, usage/config storage, API clients.
 
-**Pipeline states**: `Idle` → `Recording` → `SttStreaming` → `PostProcessing` → `Clipboard` → `Done`
+**Pipeline states**: `Idle` → `Recording` → `SttStreaming` → `PostProcessing` → `DirectInput` → `Done`
 
 ## Domain Concepts
 
@@ -35,4 +35,4 @@ Users can configure different prompt templates per application (e.g., code-style
 
 ## Configuration
 
-Stored at `~/.config/whisp/config.toml`
+Stored at `~/.config/whisp/config.json`
