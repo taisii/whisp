@@ -13,19 +13,27 @@ private let defaultPromptTemplate = """
 
 public struct ContextInfo: Codable, Equatable, Sendable {
     public var accessibilityText: String?
+    public var windowText: String?
     public var visionSummary: String?
     public var visionTerms: [String]
 
-    public init(accessibilityText: String? = nil, visionSummary: String? = nil, visionTerms: [String] = []) {
+    public init(
+        accessibilityText: String? = nil,
+        windowText: String? = nil,
+        visionSummary: String? = nil,
+        visionTerms: [String] = []
+    ) {
         self.accessibilityText = accessibilityText
+        self.windowText = windowText
         self.visionSummary = visionSummary
         self.visionTerms = visionTerms
     }
 
     public var isEmpty: Bool {
         let accessibilityEmpty = accessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        let windowTextEmpty = windowText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
         let summaryEmpty = visionSummary?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
-        return accessibilityEmpty && summaryEmpty && visionTerms.isEmpty
+        return accessibilityEmpty && windowTextEmpty && summaryEmpty && visionTerms.isEmpty
     }
 }
 
@@ -92,6 +100,9 @@ private func appendContext(to prompt: inout String, context: ContextInfo) {
     var lines: [String] = []
     if let text = context.accessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
         lines.append("選択テキスト: \(text)")
+    }
+    if let text = context.windowText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+        lines.append("同一ウィンドウ本文: \(text)")
     }
     if let summary = context.visionSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
         lines.append("画面の要約: \(summary)")

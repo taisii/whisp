@@ -14,6 +14,16 @@ final class PostProcessorService: @unchecked Sendable {
     - JSON以外は出力しない
     """
 
+    private let accessibilitySummaryPromptHeader = """
+    次のアプリ本文を、音声整形に使うコンテキストとして要約してください。出力はJSONのみ。
+    形式: {"summary":"...","terms":["..."]}
+    ルール:
+    - summary は1文で簡潔（最大120文字）
+    - terms は固有名詞・専門用語を最大10個
+    - 情報が不十分なら summary は空文字、terms は空配列
+    - JSON以外は出力しない
+    """
+
     init(providers: [any LLMAPIProvider] = [GeminiLLMAPIProvider(), OpenAILLMAPIProvider()]) {
         self.providers = providers
     }
@@ -148,6 +158,60 @@ final class PostProcessorService: @unchecked Sendable {
         return ContextInfo(visionSummary: vision.summary, visionTerms: vision.terms)
     }
 
+    func summarizeAccessibilityContext(
+        model: LLMModel,
+        apiKey: String,
+        appName: String?,
+        sourceText: String,
+        debugRunID: String? = nil,
+        debugRunDirectory: String? = nil
+    ) async throws -> ContextInfo? {
+        let trimmedSource = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSource.isEmpty else {
+            return nil
+        }
+
+        var prompt = accessibilitySummaryPromptHeader
+        if let appName = appName?.trimmingCharacters(in: .whitespacesAndNewlines), !appName.isEmpty {
+            prompt += "\n\nアプリ名: \(appName)"
+        }
+        prompt += "\n\n本文:\n\(trimmedSource)"
+
+        var extra: [String: String] = [
+            "source_chars": String(trimmedSource.count),
+            "source": "accessibility_window_text",
+        ]
+        if let debugRunID, !debugRunID.isEmpty {
+            extra["run_id"] = debugRunID
+        }
+        if let debugRunDirectory, !debugRunDirectory.isEmpty {
+            extra["run_dir"] = debugRunDirectory
+        }
+
+        PromptTrace.dump(
+            stage: "accessibility_summary",
+            model: model.rawValue,
+            appName: appName,
+            context: nil,
+            prompt: prompt,
+            extra: extra
+        )
+
+        let response = try await resolveProvider(model: model).postProcess(
+            apiKey: apiKey,
+            model: model,
+            prompt: prompt
+        )
+        guard let parsed = parseVisionContext(response.text) else {
+            return nil
+        }
+
+        return ContextInfo(
+            visionSummary: parsed.summary,
+            visionTerms: parsed.terms
+        )
+    }
+
     private func resolveProvider(model: LLMModel) throws -> any LLMAPIProvider {
         guard let provider = providers.first(where: { $0.supports(model: model) }) else {
             throw AppError.invalidArgument("model \(model.rawValue) に対応するLLM provider がありません")
@@ -165,6 +229,9 @@ final class PostProcessorService: @unchecked Sendable {
         }
         if let accessibility = context.accessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines), !accessibility.isEmpty {
             lines.append("- 選択テキスト: \(accessibility)")
+        }
+        if let windowText = context.windowText?.trimmingCharacters(in: .whitespacesAndNewlines), !windowText.isEmpty {
+            lines.append("- 同一ウィンドウ本文: \(windowText)")
         }
         return lines.joined(separator: "\n")
     }

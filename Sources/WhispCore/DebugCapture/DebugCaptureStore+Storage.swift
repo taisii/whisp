@@ -62,7 +62,8 @@ extension DebugCaptureStore {
             let promptText = (try? String(contentsOf: promptURL, encoding: .utf8)) ?? ""
             let summaryChars = trace.context?.visionSummary?.count ?? 0
             let termsCount = trace.context?.visionTerms.count ?? 0
-            let accessibilityChars = trace.context?.accessibilityText?.count ?? 0
+            let accessibilityChars = (trace.context?.accessibilityText?.count ?? 0)
+                + (trace.context?.windowText?.count ?? 0)
 
             snapshots.append(
                 DebugPromptSnapshot(
@@ -83,7 +84,13 @@ extension DebugCaptureStore {
     }
 
     func isoNow() -> String {
-        ISO8601DateFormatter().string(from: Date())
+        isoString(Date())
+    }
+
+    func isoString(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     func timestampToken() -> String {

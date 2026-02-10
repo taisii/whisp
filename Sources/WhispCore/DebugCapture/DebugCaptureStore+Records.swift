@@ -47,14 +47,29 @@ extension DebugCaptureStore {
         return id
     }
 
-    public func appendEvent(captureID: String, event: String, fields: [String: String] = [:]) throws {
+    public func appendEvent(
+        captureID: String,
+        event: String,
+        fields: [String: String] = [:],
+        timestamp: Date? = nil
+    ) throws {
         lock.lock()
         defer { lock.unlock() }
 
         guard let record = try loadRecord(path: recordPath(captureID: captureID)) else { return }
-        let payload = DebugRunEvent(timestamp: isoNow(), event: event, fields: fields)
+        let eventTimestamp = timestamp.map(isoString) ?? isoNow()
+        let payload = DebugRunEvent(timestamp: eventTimestamp, event: event, fields: fields)
         let data = try JSONEncoder().encode(payload)
         try appendLine(data: data, to: URL(fileURLWithPath: record.eventsFilePath))
+    }
+
+    public func appendEvent(
+        captureID: String,
+        event: DebugRunEventName,
+        fields: [String: String] = [:],
+        timestamp: Date? = nil
+    ) throws {
+        try appendEvent(captureID: captureID, event: event.rawValue, fields: fields, timestamp: timestamp)
     }
 
     public func updateResult(

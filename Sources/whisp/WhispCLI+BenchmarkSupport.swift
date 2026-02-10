@@ -167,6 +167,7 @@ extension WhispCLI {
         guard let context else { return "{}" }
         let payload: [String: Any] = [
             "accessibilityText": context.accessibilityText ?? "",
+            "windowText": context.windowText ?? "",
             "visionSummary": context.visionSummary ?? "",
             "visionTerms": context.visionTerms,
         ]

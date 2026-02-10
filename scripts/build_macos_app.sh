@@ -40,8 +40,12 @@ cat > "$PLIST_PATH" <<'PLIST'
   <true/>
   <key>NSMicrophoneUsageDescription</key>
   <string>Whisp needs microphone access to transcribe your voice to text.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>Whisp needs speech recognition access to transcribe audio using Apple Speech.</string>
   <key>NSAccessibilityUsageDescription</key>
   <string>Whisp needs accessibility access to input transcribed text directly into your applications.</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>Whisp needs screen recording access to analyze screenshot context.</string>
 </dict>
 </plist>
 PLIST

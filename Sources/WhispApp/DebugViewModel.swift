@@ -10,6 +10,82 @@ enum DebugRecordFilter: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+struct DebugSTTExecutionInfo: Equatable {
+    let providerName: String
+    let routeName: String
+
+    static let unknown = DebugSTTExecutionInfo(providerName: "不明", routeName: "不明")
+}
+
+struct DebugPhaseTimingSummary: Equatable {
+    let recordingMs: Double?
+    let sttMs: Double?
+    let sttFinalizeMs: Double?
+    let visionWaitMs: Double?
+    let visionCaptureMs: Double?
+    let visionAnalyzeMs: Double?
+    let visionTotalMs: Double?
+    let postProcessMs: Double?
+    let directInputMs: Double?
+    let pipelineMs: Double?
+    let endToEndMs: Double?
+
+    static let empty = DebugPhaseTimingSummary(
+        recordingMs: nil,
+        sttMs: nil,
+        sttFinalizeMs: nil,
+        visionWaitMs: nil,
+        visionCaptureMs: nil,
+        visionAnalyzeMs: nil,
+        visionTotalMs: nil,
+        postProcessMs: nil,
+        directInputMs: nil,
+        pipelineMs: nil,
+        endToEndMs: nil
+    )
+}
+
+struct DebugTimelinePhase: Equatable, Identifiable {
+    let id: String
+    let title: String
+    let startMs: Double
+    let endMs: Double
+
+    var durationMs: Double {
+        max(0, endMs - startMs)
+    }
+}
+
+struct DebugTimelineOverlap: Equatable {
+    let leftPhaseID: String
+    let rightPhaseID: String
+    let leftTitle: String
+    let rightTitle: String
+    let durationMs: Double
+}
+
+struct DebugTimelineSummary: Equatable {
+    let phases: [DebugTimelinePhase]
+    let totalMs: Double
+    let bottleneckPhaseID: String?
+    let maxOverlap: DebugTimelineOverlap?
+
+    static let empty = DebugTimelineSummary(
+        phases: [],
+        totalMs: 0,
+        bottleneckPhaseID: nil,
+        maxOverlap: nil
+    )
+}
+
+struct DebugEventAnalysis: Equatable {
+    let sttInfo: DebugSTTExecutionInfo
+    let timings: DebugPhaseTimingSummary
+    let timeline: DebugTimelineSummary
+
+    static let empty = DebugEventAnalysis(sttInfo: .unknown, timings: .empty, timeline: .empty)
+}
+
 @MainActor
 final class DebugViewModel: ObservableObject {
     @Published var records: [DebugCaptureRecord] = []
@@ -32,9 +108,12 @@ final class DebugViewModel: ObservableObject {
     @Published var statusMessage = ""
     @Published var statusIsError = false
     @Published var isAudioPlaying = false
+    @Published private(set) var selectedEventAnalysis: DebugEventAnalysis = .empty
 
     private let store: DebugCaptureStore
+    private let eventAnalyzer = DebugEventAnalyzer()
     private var persistedGroundTruthText = ""
+    private var eventAnalysisCache: [String: DebugEventAnalysis] = [:]
     private var audioPlayer: AVAudioPlayer?
     private var audioPollingTimer: Timer?
 
@@ -66,6 +145,7 @@ final class DebugViewModel: ObservableObject {
 
     func refresh() {
         do {
+            eventAnalysisCache.removeAll()
             records = try store.listRecords(limit: 200)
             let detailLoadSucceeded = syncSelectionForCurrentFilter()
             if detailLoadSucceeded {
@@ -88,6 +168,7 @@ final class DebugViewModel: ObservableObject {
             selectedPromptIndex = 0
             persistedGroundTruthText = ""
             groundTruthDraft = ""
+            selectedEventAnalysis = .empty
             clearGroundTruthSaveFeedback()
             return
         }
@@ -149,6 +230,7 @@ final class DebugViewModel: ObservableObject {
         do {
             stopAudioPlayback(showMessage: false)
             try store.deleteCapture(captureID: captureID)
+            eventAnalysisCache.removeValue(forKey: captureID)
             records = (try? store.listRecords(limit: 200)) ?? records
             _ = syncSelectionForCurrentFilter()
             setStatus("ログを削除しました。", isError: false)
@@ -197,6 +279,15 @@ final class DebugViewModel: ObservableObject {
         copyTextToPasteboard(details?.record.outputText ?? "", successMessage: "最終出力をコピーしました。")
     }
 
+    func copyCaptureID(_ value: String? = nil) {
+        let id = value ?? details?.record.id ?? ""
+        copyTextToPasteboard(id, successMessage: "capture_id をコピーしました。")
+    }
+
+    func copyRunID() {
+        copyTextToPasteboard(details?.record.runID ?? "", successMessage: "run_id をコピーしました。")
+    }
+
     private func copyTextToPasteboard(_ text: String, successMessage: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -243,6 +334,7 @@ final class DebugViewModel: ObservableObject {
             let groundTruth = details?.record.groundTruthText ?? ""
             persistedGroundTruthText = groundTruth
             groundTruthDraft = groundTruth
+            selectedEventAnalysis = eventAnalysis(captureID: captureID, eventsFilePath: details?.record.eventsFilePath ?? "")
             clearGroundTruthSaveFeedback()
             return true
         } catch {
@@ -250,6 +342,7 @@ final class DebugViewModel: ObservableObject {
             selectedPromptIndex = 0
             persistedGroundTruthText = ""
             groundTruthDraft = ""
+            selectedEventAnalysis = .empty
             clearGroundTruthSaveFeedback()
             setStatus("詳細読み込みに失敗: \(error.localizedDescription)", isError: true)
             return false
@@ -272,8 +365,34 @@ final class DebugViewModel: ObservableObject {
         selectedPromptIndex = 0
         persistedGroundTruthText = ""
         groundTruthDraft = ""
+        selectedEventAnalysis = .empty
         clearGroundTruthSaveFeedback()
         return true
+    }
+
+    private func eventAnalysis(captureID: String, eventsFilePath: String) -> DebugEventAnalysis {
+        if let cached = eventAnalysisCache[captureID] {
+            return cached
+        }
+        let analysis = eventAnalyzer.analyze(events: loadEvents(path: eventsFilePath))
+        eventAnalysisCache[captureID] = analysis
+        return analysis
+    }
+
+    private func loadEvents(path: String) -> [DebugRunEvent] {
+        guard !path.isEmpty,
+              let text = try? String(contentsOfFile: path, encoding: .utf8)
+        else {
+            return []
+        }
+
+        let decoder = JSONDecoder()
+        return text
+            .split(whereSeparator: \.isNewline)
+            .compactMap { line in
+                guard let data = String(line).data(using: .utf8) else { return nil }
+                return try? decoder.decode(DebugRunEvent.self, from: data)
+            }
     }
 
     private func setStatus(_ message: String, isError: Bool) {

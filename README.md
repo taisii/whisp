@@ -8,7 +8,7 @@ Whisp is now implemented as a native macOS app in Swift.
 - Global shortcut (`Cmd+J` default, configurable)
 - Recording modes: Toggle / Push-to-talk
 - Microphone recording (AVAudioEngine, mono PCM)
-- Deepgram STT
+- STT provider: Deepgram / Whisper (OpenAI) / Apple Speech (OS built-in)
 - LLM post processing (Gemini / OpenAI)
 - Direct text input via Accessibility (CGEvent)
 - Optional screenshot context analysis at recording start
@@ -27,6 +27,7 @@ Whisp is now implemented as a native macOS app in Swift.
 - `Tests/WhispAppTests`: app-layer tests (pipeline state transitions)
 - `docs/ARCHITECTURE.md`: current architecture and debug data model
 - `scripts/build_macos_app.sh`: local `.app` bundle builder
+- `scripts/reset_permissions.sh`: TCC reset / privacy settings helper
 
 ## Prerequisites
 
@@ -101,7 +102,10 @@ swift run whisp --stt-stream-file Tests/Fixtures/benchmark_ja_10s.wav --chunk-ms
 ```
 
 Requirements:
-- `~/.config/whisp/config.json` に `apiKeys.deepgram` が設定されていること
+- `~/.config/whisp/config.json` に必要なAPIキーが設定されていること
+  - `sttProvider=deepgram` の場合: `apiKeys.deepgram`
+  - `sttProvider=whisper` の場合: `apiKeys.openai`
+  - `sttProvider=apple_speech` の場合: APIキー不要（音声認識権限は必要）
 
 ### STT latency benchmark example
 
@@ -298,6 +302,12 @@ open .build/Whisp.app
 Built app path:
 - `/Users/macbookair/Projects/whisp/.build/Whisp.app`
 
+`build_macos_app.sh` が埋め込む権限説明キー:
+- `NSMicrophoneUsageDescription`
+- `NSSpeechRecognitionUsageDescription`
+- `NSAccessibilityUsageDescription`
+- `NSScreenCaptureUsageDescription`
+
 ## 最新版ビルド + 権限初期化 + 起動（運用手順）
 
 以下のスクリプトを実行するだけで、最新版ビルド・権限初期化・起動まで完了します。
@@ -318,10 +328,21 @@ scripts/rebuild_reset_launch.sh --open-settings
 - 起動確認は `pgrep -fl "WhispApp|Whisp"` で確認できます。
 - オプション確認は `scripts/rebuild_reset_launch.sh --help`
 
+## 権限だけ初期化/設定画面を開く
+
+```bash
+scripts/reset_permissions.sh
+scripts/reset_permissions.sh --open-settings
+```
+
+補足:
+- オプション確認は `scripts/reset_permissions.sh --help`
+
 ## First-run permissions
 
 Whisp requires these permissions:
 - Microphone
+- Speech Recognition (when `sttProvider=apple_speech`)
 - Accessibility (for direct input)
 - Screen Recording (when screenshot analysis is enabled)
 
@@ -329,6 +350,7 @@ If permission state gets stuck:
 
 ```bash
 tccutil reset Microphone com.taisii.whisp.swift
+tccutil reset SpeechRecognition com.taisii.whisp.swift
 tccutil reset Accessibility com.taisii.whisp.swift
 tccutil reset ScreenCapture com.taisii.whisp.swift
 ```
@@ -345,6 +367,7 @@ Main fields:
 - `shortcut` (e.g. `Cmd+J`, `Ctrl+Alt+Shift+F1`)
 - `recordingMode` (`toggle` / `push_to_talk`)
 - `inputLanguage` (`auto` / `ja` / `en`)
+- `sttProvider` (`deepgram` / `whisper` / `apple_speech`)
 - `llmModel`
 
 ## Current test status

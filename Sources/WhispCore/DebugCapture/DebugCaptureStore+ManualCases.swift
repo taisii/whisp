@@ -31,6 +31,7 @@ extension DebugCaptureStore {
         if let context = record.context, !context.isEmpty {
             payload["context"] = [
                 "accessibilityText": context.accessibilityText ?? "",
+                "windowText": context.windowText ?? "",
                 "visionSummary": context.visionSummary ?? "",
                 "visionTerms": context.visionTerms,
             ]

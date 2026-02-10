@@ -77,7 +77,9 @@
 1. 録音開始時: 必要キー検証、STTストリーミング準備、録音開始。
 2. 録音停止時: 音声データ確定、デバッグrun作成、非同期で処理継続。
 3. STT:
-   - 通常は Deepgram（stream優先、失敗時restフォールバック）
+   - `sttProvider=deepgram`: stream優先、失敗時restフォールバック
+   - `sttProvider=whisper`: OpenAI Whisper REST
+   - `sttProvider=apple_speech`: Apple Speech（OS内蔵）
    - 直接音声モデル時は LLMで音声→テキスト整形
 4. Context:
    - アクセシビリティ文脈を収集

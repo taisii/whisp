@@ -100,8 +100,23 @@ public struct AccessibilitySnapshot: Codable, Equatable, Sendable {
     public let bundleID: String?
     public let processID: Int32?
     public let windowTitle: String?
+    public let windowText: String?
+    public let windowTextChars: Int
     public let focusedElement: AccessibilityElementSnapshot?
     public let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case capturedAt
+        case trusted
+        case appName
+        case bundleID
+        case processID
+        case windowTitle
+        case windowText
+        case windowTextChars
+        case focusedElement
+        case error
+    }
 
     public init(
         capturedAt: String,
@@ -110,6 +125,8 @@ public struct AccessibilitySnapshot: Codable, Equatable, Sendable {
         bundleID: String? = nil,
         processID: Int32? = nil,
         windowTitle: String? = nil,
+        windowText: String? = nil,
+        windowTextChars: Int = 0,
         focusedElement: AccessibilityElementSnapshot? = nil,
         error: String? = nil
     ) {
@@ -119,8 +136,38 @@ public struct AccessibilitySnapshot: Codable, Equatable, Sendable {
         self.bundleID = bundleID
         self.processID = processID
         self.windowTitle = windowTitle
+        self.windowText = windowText
+        self.windowTextChars = windowTextChars
         self.focusedElement = focusedElement
         self.error = error
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        capturedAt = try container.decode(String.self, forKey: .capturedAt)
+        trusted = try container.decode(Bool.self, forKey: .trusted)
+        appName = try container.decodeIfPresent(String.self, forKey: .appName)
+        bundleID = try container.decodeIfPresent(String.self, forKey: .bundleID)
+        processID = try container.decodeIfPresent(Int32.self, forKey: .processID)
+        windowTitle = try container.decodeIfPresent(String.self, forKey: .windowTitle)
+        windowText = try container.decodeIfPresent(String.self, forKey: .windowText)
+        windowTextChars = try container.decodeIfPresent(Int.self, forKey: .windowTextChars) ?? 0
+        focusedElement = try container.decodeIfPresent(AccessibilityElementSnapshot.self, forKey: .focusedElement)
+        error = try container.decodeIfPresent(String.self, forKey: .error)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(capturedAt, forKey: .capturedAt)
+        try container.encode(trusted, forKey: .trusted)
+        try container.encodeIfPresent(appName, forKey: .appName)
+        try container.encodeIfPresent(bundleID, forKey: .bundleID)
+        try container.encodeIfPresent(processID, forKey: .processID)
+        try container.encodeIfPresent(windowTitle, forKey: .windowTitle)
+        try container.encodeIfPresent(windowText, forKey: .windowText)
+        try container.encode(windowTextChars, forKey: .windowTextChars)
+        try container.encodeIfPresent(focusedElement, forKey: .focusedElement)
+        try container.encodeIfPresent(error, forKey: .error)
     }
 }
 

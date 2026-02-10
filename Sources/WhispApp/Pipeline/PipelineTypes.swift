@@ -18,5 +18,6 @@ struct VisionContextCollectionResult {
     let imageBytes: Int
     let imageWidth: Int
     let imageHeight: Int
+    let mode: String
     let error: String?
 }

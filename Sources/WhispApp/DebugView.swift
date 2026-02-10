@@ -70,8 +70,9 @@ struct DebugView: View {
                 ForEach(viewModel.filteredRecords) { record in
                     HStack(alignment: .top, spacing: 8) {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(record.id)
+                            Text(shortID(record.id))
                                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                .help(record.id)
                             Text(record.createdAt)
                                 .font(.system(size: 11))
                                 .foregroundStyle(.secondary)
@@ -122,8 +123,8 @@ struct DebugView: View {
             if let details = viewModel.details {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
-                        overviewSection(details: details)
-                        mediaSection(details: details)
+                        topSummarySection(details: details)
+                        artifactsSection(details: details)
                         textComparisonSection(details: details)
                         groundTruthSection
                         promptSection(details: details)
@@ -143,81 +144,106 @@ struct DebugView: View {
         }
     }
 
-    private func overviewSection(details: DebugCaptureDetails) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Overview")
-                .font(.system(size: 14, weight: .semibold))
+    private func topSummarySection(details: DebugCaptureDetails) -> some View {
+        let record = details.record
+        let analysis = viewModel.selectedEventAnalysis
+        let sttInfo = analysis.sttInfo
+        let context = record.context
+        let hasVisionSummary = !(context?.visionSummary?.isEmpty ?? true)
+        let hasAccessibilityContext = !(context?.accessibilityText?.isEmpty ?? true)
+        let hasWindowContext = !(context?.windowText?.isEmpty ?? true)
+        let hasFocusedSelection = !(record.accessibilitySnapshot?.focusedElement?.selectedText?.isEmpty ?? true)
 
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("run_id: \(details.record.runID)")
-                    Text("status: \(details.record.status)")
-                    Text("model: \(details.record.llmModel)")
-                    Text("sample_rate: \(details.record.sampleRate)")
-                    Text("app: \(details.record.appName ?? "-")")
-                    Text("run_dir: \(details.record.runDirectoryPath)")
-                    Text("events: \(details.record.eventsFilePath)")
-                    if let error = details.record.errorMessage, !error.isEmpty {
-                        Text("error: \(error)")
-                            .foregroundStyle(.red)
-                    }
-                }
-                .font(.system(size: 12, design: .monospaced))
-
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Text("Summary")
+                    .font(.system(size: 14, weight: .semibold))
+                statusBadge(text: record.status)
                 Spacer()
-
-                HStack(spacing: 8) {
-                    iconButton(
-                        symbol: viewModel.isAudioPlaying ? "stop.fill" : "play.fill",
-                        helpText: viewModel.isAudioPlaying ? "録音を停止" : "録音を再生"
-                    ) {
-                        viewModel.toggleAudioPlayback()
-                    }
-                    iconButton(symbol: "folder", helpText: "録音ファイルを表示") {
-                        viewModel.revealAudioFile()
-                    }
-                    iconButton(symbol: "folder.fill", helpText: "runフォルダを開く") {
-                        viewModel.revealRunDirectory()
-                    }
-                    iconButton(symbol: "list.bullet.rectangle.portrait", helpText: "events.jsonl を表示") {
-                        viewModel.revealEventsFile()
-                    }
-                    iconButton(symbol: "photo", helpText: "画像ファイルを表示", disabled: (details.record.visionImageFilePath == nil)) {
-                        viewModel.revealVisionImageFile()
-                    }
-                    iconButton(symbol: "text.quote", helpText: "Prompt保存先を開く") {
-                        viewModel.openPromptsDirectory()
-                    }
-                    iconButton(symbol: "trash", helpText: "削除", role: .destructive) {
-                        showingDeleteConfirmation = true
-                    }
+                copyableIDChip(
+                    label: "capture",
+                    value: record.id,
+                    copyMessage: "capture_id をコピー"
+                ) {
+                    viewModel.copyCaptureID()
+                }
+                copyableIDChip(
+                    label: "run",
+                    value: record.runID,
+                    copyMessage: "run_id をコピー"
+                ) {
+                    viewModel.copyRunID()
                 }
             }
+
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("使ったモデル")
+                        .font(.system(size: 13, weight: .semibold))
+                    labeledMetric(name: "STT", value: sttInfo.providerName)
+                    labeledMetric(name: "STT方式", value: sttInfo.routeName)
+                    labeledMetric(name: "整形", value: record.llmModel)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .innerCardStyle()
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("とってこれた情報")
+                        .font(.system(size: 13, weight: .semibold))
+                    availabilityRow(name: "Vision画像", isAvailable: record.visionImageFilePath != nil)
+                    availabilityRow(name: "Vision要約", isAvailable: hasVisionSummary)
+                    availabilityRow(name: "専門用語", value: "\(context?.visionTerms.count ?? 0)件")
+                    availabilityRow(name: "Accessibility文脈", isAvailable: hasAccessibilityContext)
+                    availabilityRow(name: "Window文脈", isAvailable: hasWindowContext)
+                    availabilityRow(name: "選択テキスト", isAvailable: hasFocusedSelection)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .innerCardStyle()
+            }
+
+            phaseTimingCard(analysis.timings, timeline: analysis.timeline)
         }
         .cardStyle()
     }
 
-    private func mediaSection(details: DebugCaptureDetails) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Media")
-                .font(.system(size: 14, weight: .semibold))
+    private func artifactsSection(details: DebugCaptureDetails) -> some View {
+        let record = details.record
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Text("補助情報・アーティファクト")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Text("使用アプリ: \(record.appName ?? "-")")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                iconButton(
+                    symbol: viewModel.isAudioPlaying ? "stop.fill" : "play.fill",
+                    helpText: viewModel.isAudioPlaying ? "録音を停止" : "録音を再生"
+                ) {
+                    viewModel.toggleAudioPlayback()
+                }
+                iconButton(symbol: "folder", helpText: "録音ファイルを表示") {
+                    viewModel.revealAudioFile()
+                }
+                iconButton(symbol: "photo", helpText: "画像ファイルを表示", disabled: (record.visionImageFilePath == nil)) {
+                    viewModel.revealVisionImageFile()
+                }
+                iconButton(symbol: "text.quote", helpText: "Prompt保存先を開く") {
+                    viewModel.openPromptsDirectory()
+                }
+                iconButton(symbol: "trash", helpText: "削除", role: .destructive) {
+                    showingDeleteConfirmation = true
+                }
+            }
 
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Audio")
-                        .font(.system(size: 13, weight: .semibold))
-                    Text(details.record.audioFilePath)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(2)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 8) {
                     Text("Vision Image")
                         .font(.system(size: 13, weight: .semibold))
-                    if let image = visionImage(from: details.record.visionImageFilePath) {
+                    if let image = visionImage(from: record.visionImageFilePath) {
                         Image(nsImage: image)
                             .resizable()
                             .scaledToFit()
@@ -247,48 +273,42 @@ struct DebugView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
-            if let context = details.record.context, !context.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Context")
-                        .font(.system(size: 12, weight: .semibold))
-                    if let summary = context.visionSummary, !summary.isEmpty {
-                        Text("summary: \(summary)")
-                            .font(.system(size: 11, design: .monospaced))
-                    }
-                    if !context.visionTerms.isEmpty {
-                        Text("terms: \(context.visionTerms.joined(separator: ", "))")
-                            .font(.system(size: 11, design: .monospaced))
-                    }
-                    if let accessibilityText = context.accessibilityText, !accessibilityText.isEmpty {
-                        Text("accessibility: \(accessibilityText)")
-                            .font(.system(size: 11, design: .monospaced))
+                VStack(alignment: .leading, spacing: 6) {
+                    DisclosureGroup("詳細（必要なときだけ表示）") {
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let context = record.context, !context.isEmpty {
+                                Text("context.summary: \(context.visionSummary ?? "-")")
+                                Text("context.terms: \(context.visionTerms.joined(separator: ", "))")
+                                Text("context.accessibility: \(context.accessibilityText ?? "-")")
+                                Text("context.window_text: \(context.windowText ?? "-")")
+                            } else {
+                                Text("context: なし")
+                            }
+
+                            if let accessibility = record.accessibilitySnapshot {
+                                Text("bundle: \(accessibility.bundleID ?? "-")")
+                                Text("window: \(accessibility.windowTitle ?? "-")")
+                                Text("selected: \(accessibility.focusedElement?.selectedText ?? "-")")
+                                Text("caret_context: \(accessibility.focusedElement?.caretContext ?? "-")")
+                                Text("window_text_chars: \(accessibility.windowTextChars)")
+                                if let error = accessibility.error, !error.isEmpty {
+                                    Text("accessibility_error: \(error)")
+                                        .foregroundStyle(.red)
+                                }
+                            }
+
+                            Text("sample_rate: \(record.sampleRate)")
+                            Text("audio_file: \(record.audioFilePath)")
+                            Text("run_dir: \(record.runDirectoryPath)")
+                            Text("events: \(record.eventsFilePath)")
+                        }
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                     }
                 }
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            }
-
-            if let accessibility = details.record.accessibilitySnapshot {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Accessibility Snapshot")
-                        .font(.system(size: 12, weight: .semibold))
-                    Text("trusted: \(accessibility.trusted ? "true" : "false")")
-                    Text("bundle: \(accessibility.bundleID ?? "-")")
-                    Text("window: \(accessibility.windowTitle ?? "-")")
-                    Text("role: \(accessibility.focusedElement?.role ?? "-")")
-                    Text("placeholder: \(accessibility.focusedElement?.placeholder ?? "-")")
-                    Text("selected: \(accessibility.focusedElement?.selectedText ?? "-")")
-                    Text("caret_context: \(accessibility.focusedElement?.caretContext ?? "-")")
-                    if let error = accessibility.error, !error.isEmpty {
-                        Text("error: \(error)")
-                            .foregroundStyle(.red)
-                    }
-                }
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .cardStyle()
@@ -456,6 +476,222 @@ struct DebugView: View {
         .padding(.vertical, 8)
     }
 
+    private func phaseTimingCard(_ timings: DebugPhaseTimingSummary, timeline: DebugTimelineSummary) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("実行時間 (ms)")
+                .font(.system(size: 13, weight: .semibold))
+
+            timelineSection(timeline)
+
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
+                    timingMetricRow("録音", timings.recordingMs)
+                    timingMetricRow("STT", timings.sttMs)
+                    timingMetricRow("STT finalize", timings.sttFinalizeMs)
+                    timingMetricRow("文脈要約 total", timings.visionTotalMs)
+                    timingMetricRow("Vision wait", timings.visionWaitMs)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 5) {
+                    timingMetricRow("Vision capture", timings.visionCaptureMs)
+                    timingMetricRow("Vision analyze", timings.visionAnalyzeMs)
+                    timingMetricRow("PostProcess", timings.postProcessMs)
+                    timingMetricRow("DirectInput", timings.directInputMs)
+                    timingMetricRow("Pipeline(stop後)", timings.pipelineMs)
+                    timingMetricRow("End-to-end", timings.endToEndMs)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .innerCardStyle()
+    }
+
+    private func timelineSection(_ timeline: DebugTimelineSummary) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                if let bottleneck = timeline.phases.first(where: { $0.id == timeline.bottleneckPhaseID }) {
+                    timingBadge(
+                        title: "ボトルネック候補",
+                        body: "\(bottleneck.title) \(msText(bottleneck.durationMs))ms"
+                    )
+                }
+                if let overlap = timeline.maxOverlap {
+                    timingBadge(
+                        title: "重なり",
+                        body: "\(overlap.leftTitle) × \(overlap.rightTitle) \(msText(overlap.durationMs))ms"
+                    )
+                }
+                Spacer(minLength: 0)
+            }
+
+            if timeline.phases.isEmpty || timeline.totalMs <= 0 {
+                Text("イベントが不足しているためタイムラインを表示できません。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(timeline.phases) { phase in
+                        timelineRow(
+                            phase: phase,
+                            totalMs: timeline.totalMs,
+                            isBottleneck: phase.id == timeline.bottleneckPhaseID
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func timelineRow(phase: DebugTimelinePhase, totalMs: Double, isBottleneck: Bool) -> some View {
+        HStack(spacing: 8) {
+            Text(phase.title)
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 110, alignment: .leading)
+
+            GeometryReader { proxy in
+                let width = max(proxy.size.width, 1)
+                let startRatio = max(0, min(1, phase.startMs / totalMs))
+                let durationRatio = max(0.004, min(1, phase.durationMs / totalMs))
+                let barOffset = width * startRatio
+                let barWidth = max(3, width * durationRatio)
+
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.secondary.opacity(0.12))
+                        .frame(height: 14)
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(timelineColor(for: phase.id))
+                        .frame(width: barWidth, height: 14)
+                        .offset(x: barOffset)
+                        .overlay(alignment: .leading) {
+                            if isBottleneck {
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(Color.red, lineWidth: 1)
+                                    .frame(width: barWidth, height: 14)
+                                    .offset(x: barOffset)
+                            }
+                        }
+                }
+            }
+            .frame(height: 14)
+
+            Text("\(msText(phase.durationMs))ms")
+                .font(.system(size: 11, design: .monospaced))
+                .frame(width: 86, alignment: .trailing)
+                .foregroundStyle(.secondary)
+        }
+        .help("\(phase.title)\n開始: \(msText(phase.startMs))ms / 終了: \(msText(phase.endMs))ms")
+    }
+
+    private func timingBadge(title: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            Text(body)
+                .font(.system(size: 11, design: .monospaced))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color(NSColor.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func timelineColor(for phaseID: String) -> Color {
+        switch phaseID {
+        case "recording":
+            return Color.blue.opacity(0.45)
+        case "stt":
+            return Color.blue
+        case "vision":
+            return Color.green
+        case "context_summary":
+            return Color.green
+        case "postprocess":
+            return Color.orange
+        case "direct_input":
+            return Color.pink
+        case "pipeline":
+            return Color.gray
+        default:
+            return Color.secondary
+        }
+    }
+
+    private func timingMetricRow(_ name: String, _ value: Double?) -> some View {
+        HStack(spacing: 6) {
+            Text(name)
+            Spacer(minLength: 0)
+            Text(msText(value))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(value == nil ? Color.secondary : Color.primary)
+        }
+        .font(.system(size: 11))
+    }
+
+    private func labeledMetric(name: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("\(name):")
+                .foregroundStyle(.secondary)
+            Text(value)
+                .lineLimit(2)
+                .help(value)
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 11, design: .monospaced))
+    }
+
+    private func availabilityRow(name: String, isAvailable: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: isAvailable ? "checkmark.circle.fill" : "xmark.circle")
+                .foregroundStyle(isAvailable ? Color.green : Color.secondary)
+            Text(name)
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 11))
+    }
+
+    private func availabilityRow(name: String, value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(name)
+            Spacer(minLength: 0)
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+        .font(.system(size: 11))
+    }
+
+    private func copyableIDChip(
+        label: String,
+        value: String,
+        copyMessage: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text("\(label): \(shortID(value))")
+                .font(.system(size: 11, design: .monospaced))
+        }
+        .buttonStyle(.bordered)
+        .help("\(copyMessage)\n\(value)")
+    }
+
+    private func shortID(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 18 else { return trimmed }
+        return "\(trimmed.prefix(8))...\(trimmed.suffix(6))"
+    }
+
+    private func trimmedCharCount(_ text: String?) -> Int {
+        text?.trimmingCharacters(in: .whitespacesAndNewlines).count ?? 0
+    }
+
+    private func msText(_ value: Double?) -> String {
+        guard let value else { return "-" }
+        return String(format: "%.1f", value)
+    }
+
     private func iconButton(
         symbol: String,
         helpText: String,
@@ -502,5 +738,16 @@ private extension View {
             .padding(12)
             .background(Color(NSColor.controlBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
+    func innerCardStyle() -> some View {
+        self
+            .padding(10)
+            .background(Color(NSColor.textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+            }
     }
 }

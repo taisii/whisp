@@ -66,9 +66,7 @@ if [[ "$do_kill" -eq 1 ]]; then
 fi
 
 if [[ "$do_reset" -eq 1 ]]; then
-  tccutil reset Microphone "$BUNDLE_ID"
-  tccutil reset Accessibility "$BUNDLE_ID"
-  tccutil reset ScreenCapture "$BUNDLE_ID"
+  scripts/reset_permissions.sh --bundle-id "$BUNDLE_ID"
 fi
 
 if [[ "$do_launch" -eq 1 ]]; then
@@ -78,9 +76,7 @@ if [[ "$do_launch" -eq 1 ]]; then
 fi
 
 if [[ "$open_settings" -eq 1 ]]; then
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+  scripts/reset_permissions.sh --bundle-id "$BUNDLE_ID" --skip-reset --open-settings
 fi
 
 echo "done: $APP_PATH"

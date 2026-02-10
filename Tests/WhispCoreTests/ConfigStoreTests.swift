@@ -18,9 +18,10 @@ final class ConfigStoreTests: XCTestCase {
             shortcut: "Option+Space",
             inputLanguage: "ja",
             recordingMode: .pushToTalk,
+            sttProvider: .appleSpeech,
             appPromptRules: [AppPromptRule(appName: "Slack", template: "入力: {STT結果}")],
             llmModel: .gpt5Nano,
-            context: ContextConfig(visionEnabled: true)
+            context: ContextConfig(visionEnabled: true, visionMode: .ocr)
         )
 
         try store.save(config)
@@ -35,5 +36,67 @@ final class ConfigStoreTests: XCTestCase {
 
         XCTAssertEqual(config, Config())
         XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
+    }
+
+    func testLoadLegacyConfigDefaultsSTTProvider() throws {
+        let path = tempFile("config.json")
+        let json = """
+        {
+          "apiKeys" : {
+            "deepgram" : "dg",
+            "gemini" : "gm",
+            "openai" : "oa"
+          },
+          "appPromptRules" : [],
+          "inputLanguage" : "ja",
+          "llmModel" : "gpt-5-nano",
+          "recordingMode" : "toggle",
+          "shortcut" : "Cmd+J"
+        }
+        """
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("JSON文字列のエンコードに失敗")
+            return
+        }
+        try data.write(to: path)
+
+        let store = try ConfigStore(path: path)
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.sttProvider, .deepgram)
+        XCTAssertEqual(loaded.context.visionMode, .llm)
+    }
+
+    func testLoadContextWithoutVisionModeDefaultsLLM() throws {
+        let path = tempFile("config.json")
+        let json = """
+        {
+          "apiKeys" : {
+            "deepgram" : "dg",
+            "gemini" : "gm",
+            "openai" : "oa"
+          },
+          "appPromptRules" : [],
+          "context" : {
+            "visionEnabled" : true
+          },
+          "inputLanguage" : "ja",
+          "llmModel" : "gpt-5-nano",
+          "recordingMode" : "toggle",
+          "shortcut" : "Cmd+J",
+          "sttProvider" : "deepgram"
+        }
+        """
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("JSON文字列のエンコードに失敗")
+            return
+        }
+        try data.write(to: path)
+
+        let store = try ConfigStore(path: path)
+        let loaded = try store.load()
+
+        XCTAssertEqual(loaded.context.visionEnabled, true)
+        XCTAssertEqual(loaded.context.visionMode, .llm)
     }
 }

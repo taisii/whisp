@@ -9,7 +9,9 @@ struct SettingsView: View {
     private let onCancel: @MainActor () -> Void
 
     private let recordingModes: [RecordingMode] = [.toggle, .pushToTalk]
+    private let sttProviders: [STTProvider] = [.deepgram, .whisper, .appleSpeech]
     private let llmModels: [LLMModel] = [.gemini25FlashLite, .gemini25FlashLiteAudio, .gpt4oMini, .gpt5Nano]
+    private let visionModes: [VisionContextMode] = VisionContextMode.allCases
 
     init(config: Config, onSave: @escaping @MainActor (Config) -> Void, onCancel: @escaping @MainActor () -> Void) {
         _config = State(initialValue: config)
@@ -41,6 +43,11 @@ struct SettingsView: View {
                 }
 
                 Section("モデル") {
+                    Picker("STT", selection: binding(\.sttProvider)) {
+                        ForEach(sttProviders, id: \.self) { provider in
+                            Text(sttProviderLabel(provider)).tag(provider)
+                        }
+                    }
                     Picker("LLM", selection: binding(\.llmModel)) {
                         ForEach(llmModels, id: \.self) { model in
                             Text(model.rawValue).tag(model)
@@ -50,6 +57,11 @@ struct SettingsView: View {
 
                 Section("コンテキスト") {
                     Toggle("スクリーンショット解析を使う", isOn: binding(\.context.visionEnabled))
+                    Picker("スクリーンショット文脈方式", selection: binding(\.context.visionMode)) {
+                        ForEach(visionModes, id: \.self) { mode in
+                            Text(visionModeLabel(mode)).tag(mode)
+                        }
+                    }
                 }
             }
             .formStyle(.grouped)
@@ -78,6 +90,26 @@ struct SettingsView: View {
             return "トグル"
         case .pushToTalk:
             return "押している間だけ録音"
+        }
+    }
+
+    private func sttProviderLabel(_ provider: STTProvider) -> String {
+        switch provider {
+        case .deepgram:
+            return "Deepgram (Streaming)"
+        case .whisper:
+            return "Whisper (OpenAI)"
+        case .appleSpeech:
+            return "Apple Speech (OS内蔵)"
+        }
+    }
+
+    private func visionModeLabel(_ mode: VisionContextMode) -> String {
+        switch mode {
+        case .llm:
+            return "LLM要約"
+        case .ocr:
+            return "OCR抽出"
         }
     }
 

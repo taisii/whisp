@@ -40,6 +40,8 @@ enum AccessibilityContextCollector {
         let windowTitle = focusedWindow.flatMap {
             stringAttribute($0, kAXTitleAttribute as CFString)
         }
+        let windowText = focusedWindow.flatMap { collectWindowVisibleText(from: $0) }
+        let windowTextChars = windowText?.count ?? 0
 
         guard let focusedElement else {
             let err = axErrorForAttribute(appElement, kAXFocusedUIElementAttribute as CFString)
@@ -50,9 +52,14 @@ enum AccessibilityContextCollector {
                 bundleID: bundleID,
                 processID: pid,
                 windowTitle: windowTitle,
+                windowText: windowText,
+                windowTextChars: windowTextChars,
                 error: "focused_element_unavailable:\(err)"
             )
-            return (snapshot, nil)
+            let context = windowText.flatMap { text in
+                ContextInfo(windowText: tailExcerpt(from: text, maxChars: 1200))
+            }
+            return (snapshot, context)
         }
 
         let selectedRange = rangeAttribute(focusedElement, kAXSelectedTextRangeAttribute as CFString)
@@ -100,18 +107,39 @@ enum AccessibilityContextCollector {
             bundleID: bundleID,
             processID: pid,
             windowTitle: windowTitle,
+            windowText: windowText,
+            windowTextChars: windowTextChars,
             focusedElement: element,
             error: nil
         )
 
-        let contextText = firstNonEmpty([
+        let focusedContextText = firstNonEmpty([
             selectedText,
             caretContext,
             value.flatMap { excerpt(from: $0, around: caretIndex, window: 120) },
         ])
-        let context = contextText.map { ContextInfo(accessibilityText: $0) }
+        let context = makeAccessibilityContext(
+            focusedText: focusedContextText,
+            windowText: windowText
+        )
 
         return (snapshot, context)
+    }
+
+    private static func makeAccessibilityContext(
+        focusedText: String?,
+        windowText: String?
+    ) -> ContextInfo? {
+        let focused = focusedText?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let windowExcerpt = windowText.map { tailExcerpt(from: $0, maxChars: 1200) }?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let normalizedFocused = (focused?.isEmpty == false) ? focused : nil
+        let normalizedWindow = (windowExcerpt?.isEmpty == false) ? windowExcerpt : nil
+        if normalizedFocused == nil, normalizedWindow == nil {
+            return nil
+        }
+        return ContextInfo(accessibilityText: normalizedFocused, windowText: normalizedWindow)
     }
 
     private static func labelTexts(_ element: AXUIElement) -> [String] {
@@ -131,6 +159,90 @@ enum AccessibilityContextCollector {
             }
         }
         return results
+    }
+
+    private static func collectWindowVisibleText(from root: AXUIElement) -> String? {
+        var queue: [AXUIElement] = [root]
+        var visited: Set<Int> = []
+        var uniqueLines: Set<String> = []
+        var lines: [String] = []
+        var accumulatedChars = 0
+
+        let maxNodes = 500
+        let maxLines = 120
+        let maxChars = 4000
+        let maxChildrenPerNode = 40
+
+        while !queue.isEmpty,
+              visited.count < maxNodes,
+              lines.count < maxLines,
+              accumulatedChars < maxChars {
+            let element = queue.removeFirst()
+            let key = Int(CFHash(element))
+            if visited.contains(key) {
+                continue
+            }
+            visited.insert(key)
+
+            for candidate in textCandidates(from: element) {
+                guard let normalized = normalizeWindowLine(candidate),
+                      !uniqueLines.contains(normalized)
+                else {
+                    continue
+                }
+                uniqueLines.insert(normalized)
+                lines.append(normalized)
+                accumulatedChars += normalized.count + 1
+                if lines.count >= maxLines || accumulatedChars >= maxChars {
+                    break
+                }
+            }
+
+            if let children = axElementArrayAttribute(element, kAXChildrenAttribute as CFString), !children.isEmpty {
+                queue.append(contentsOf: children.prefix(maxChildrenPerNode))
+            }
+        }
+
+        guard !lines.isEmpty else {
+            return nil
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func textCandidates(from element: AXUIElement) -> [String] {
+        [
+            stringAttribute(element, kAXValueAttribute as CFString),
+            stringAttribute(element, kAXSelectedTextAttribute as CFString),
+            stringAttribute(element, kAXTitleAttribute as CFString),
+            stringAttribute(element, kAXDescriptionAttribute as CFString),
+            stringAttribute(element, kAXHelpAttribute as CFString),
+            stringAttribute(element, kAXPlaceholderValueAttribute as CFString),
+        ]
+        .compactMap { $0 }
+    }
+
+    private static func normalizeWindowLine(_ raw: String) -> String? {
+        let flattened = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let chunks = flattened
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !chunks.isEmpty else {
+            return nil
+        }
+        let joined = chunks.joined(separator: " ")
+        let collapsed = joined.replacingOccurrences(
+            of: #"\s+"#,
+            with: " ",
+            options: .regularExpression
+        )
+        guard !collapsed.isEmpty else {
+            return nil
+        }
+        let limit = min(collapsed.count, 220)
+        return String(collapsed.prefix(limit))
     }
 
     private static func axErrorForAttribute(_ element: AXUIElement, _ attribute: CFString) -> String {
@@ -239,6 +351,15 @@ enum AccessibilityContextCollector {
             return ""
         }
         return ns.substring(with: NSRange(location: start, length: end - start))
+    }
+
+    private static func tailExcerpt(from text: String, maxChars: Int) -> String {
+        guard maxChars > 0 else { return "" }
+        let ns = text as NSString
+        guard ns.length > 0 else { return "" }
+        let length = min(ns.length, maxChars)
+        let location = ns.length - length
+        return ns.substring(with: NSRange(location: location, length: length))
     }
 
     private static func stringify(_ value: CFTypeRef?) -> String? {

@@ -12,6 +12,12 @@ public struct APIKeys: Codable, Equatable, Sendable {
     }
 }
 
+public enum STTProvider: String, Codable, Equatable, Sendable, CaseIterable {
+    case deepgram
+    case whisper
+    case appleSpeech = "apple_speech"
+}
+
 public enum RecordingMode: String, Codable, Equatable, Sendable {
     case toggle
     case pushToTalk = "push_to_talk"
@@ -53,10 +59,34 @@ public struct AppPromptRule: Codable, Equatable, Sendable {
 
 public struct ContextConfig: Codable, Equatable, Sendable {
     public var visionEnabled: Bool
+    public var visionMode: VisionContextMode
 
-    public init(visionEnabled: Bool = true) {
+    public init(visionEnabled: Bool = true, visionMode: VisionContextMode = .llm) {
         self.visionEnabled = visionEnabled
+        self.visionMode = visionMode
     }
+
+    enum CodingKeys: String, CodingKey {
+        case visionEnabled
+        case visionMode
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        visionEnabled = try container.decodeIfPresent(Bool.self, forKey: .visionEnabled) ?? true
+        visionMode = try container.decodeIfPresent(VisionContextMode.self, forKey: .visionMode) ?? .llm
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(visionEnabled, forKey: .visionEnabled)
+        try container.encode(visionMode, forKey: .visionMode)
+    }
+}
+
+public enum VisionContextMode: String, Codable, Equatable, Sendable, CaseIterable {
+    case llm
+    case ocr
 }
 
 public struct Config: Codable, Equatable, Sendable {
@@ -64,6 +94,7 @@ public struct Config: Codable, Equatable, Sendable {
     public var shortcut: String
     public var inputLanguage: String
     public var recordingMode: RecordingMode
+    public var sttProvider: STTProvider
     public var appPromptRules: [AppPromptRule]
     public var llmModel: LLMModel
     public var context: ContextConfig
@@ -73,6 +104,7 @@ public struct Config: Codable, Equatable, Sendable {
         shortcut: String = "Cmd+J",
         inputLanguage: String = "ja",
         recordingMode: RecordingMode = .toggle,
+        sttProvider: STTProvider = .deepgram,
         appPromptRules: [AppPromptRule] = [],
         llmModel: LLMModel = .gemini25FlashLite,
         context: ContextConfig = ContextConfig()
@@ -81,9 +113,33 @@ public struct Config: Codable, Equatable, Sendable {
         self.shortcut = shortcut
         self.inputLanguage = inputLanguage
         self.recordingMode = recordingMode
+        self.sttProvider = sttProvider
         self.appPromptRules = appPromptRules
         self.llmModel = llmModel
         self.context = context
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case apiKeys
+        case shortcut
+        case inputLanguage
+        case recordingMode
+        case sttProvider
+        case appPromptRules
+        case llmModel
+        case context
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        apiKeys = try container.decode(APIKeys.self, forKey: .apiKeys)
+        shortcut = try container.decode(String.self, forKey: .shortcut)
+        inputLanguage = try container.decode(String.self, forKey: .inputLanguage)
+        recordingMode = try container.decode(RecordingMode.self, forKey: .recordingMode)
+        sttProvider = try container.decodeIfPresent(STTProvider.self, forKey: .sttProvider) ?? .deepgram
+        appPromptRules = try container.decode([AppPromptRule].self, forKey: .appPromptRules)
+        llmModel = try container.decode(LLMModel.self, forKey: .llmModel)
+        context = try container.decodeIfPresent(ContextConfig.self, forKey: .context) ?? ContextConfig()
     }
 }
 

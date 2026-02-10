@@ -70,10 +70,10 @@ final class DebugCaptureService: @unchecked Sendable {
         }
     }
 
-    func appendEvent(captureID: String?, event: String, fields: [String: String]) {
+    func appendEvent(captureID: String?, event: String, fields: [String: String], timestamp: Date? = nil) {
         guard let captureID else { return }
         do {
-            try store.appendEvent(captureID: captureID, event: event, fields: fields)
+            try store.appendEvent(captureID: captureID, event: event, fields: fields, timestamp: timestamp)
         } catch {
             DevLog.info("debug_capture_event_append_failed", fields: [
                 "capture_id": captureID,
@@ -81,6 +81,15 @@ final class DebugCaptureService: @unchecked Sendable {
                 "error": error.localizedDescription,
             ])
         }
+    }
+
+    func appendEvent(
+        captureID: String?,
+        event: DebugRunEventName,
+        fields: [String: String],
+        timestamp: Date? = nil
+    ) {
+        appendEvent(captureID: captureID, event: event.rawValue, fields: fields, timestamp: timestamp)
     }
 
     func updateResult(
@@ -132,10 +141,10 @@ final class DebugCaptureService: @unchecked Sendable {
         accessibility: AccessibilitySnapshot
     ) {
         do {
-            try store.appendEvent(captureID: captureID, event: "recording_saved", fields: [
+            try store.appendEvent(captureID: captureID, event: .recordingSaved, fields: [
                 "run": runID,
-                "sample_rate": String(recording.sampleRate),
-                "audio_bytes": String(recording.pcmData.count),
+                DebugRunEventField.sampleRate.rawValue: String(recording.sampleRate),
+                DebugRunEventField.audioBytes.rawValue: String(recording.pcmData.count),
                 "accessibility_trusted": String(accessibility.trusted),
                 "accessibility_error": accessibility.error ?? "none",
                 "accessibility_role": accessibility.focusedElement?.role ?? "",
