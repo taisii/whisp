@@ -21,9 +21,6 @@ struct DebugPhaseTimingSummary: Equatable {
     let recordingMs: Double?
     let sttMs: Double?
     let sttFinalizeMs: Double?
-    let visionWaitMs: Double?
-    let visionCaptureMs: Double?
-    let visionAnalyzeMs: Double?
     let visionTotalMs: Double?
     let postProcessMs: Double?
     let directInputMs: Double?
@@ -34,9 +31,6 @@ struct DebugPhaseTimingSummary: Equatable {
         recordingMs: nil,
         sttMs: nil,
         sttFinalizeMs: nil,
-        visionWaitMs: nil,
-        visionCaptureMs: nil,
-        visionAnalyzeMs: nil,
         visionTotalMs: nil,
         postProcessMs: nil,
         directInputMs: nil,
@@ -374,12 +368,12 @@ final class DebugViewModel: ObservableObject {
         if let cached = eventAnalysisCache[captureID] {
             return cached
         }
-        let analysis = eventAnalyzer.analyze(events: loadEvents(path: eventsFilePath))
+        let analysis = eventAnalyzer.analyze(logs: loadLogs(path: eventsFilePath))
         eventAnalysisCache[captureID] = analysis
         return analysis
     }
 
-    private func loadEvents(path: String) -> [DebugRunEvent] {
+    private func loadLogs(path: String) -> [DebugRunLog] {
         guard !path.isEmpty,
               let text = try? String(contentsOfFile: path, encoding: .utf8)
         else {
@@ -391,7 +385,7 @@ final class DebugViewModel: ObservableObject {
             .split(whereSeparator: \.isNewline)
             .compactMap { line in
                 guard let data = String(line).data(using: .utf8) else { return nil }
-                return try? decoder.decode(DebugRunEvent.self, from: data)
+                return try? decoder.decode(DebugRunLog.self, from: data)
             }
     }
 

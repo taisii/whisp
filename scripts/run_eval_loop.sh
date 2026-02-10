@@ -47,11 +47,11 @@ else
 fi
 
 echo "[4/4] pipeline log analysis (if exists)"
-dev_log="$HOME/.config/whisp/dev.log"
-if [[ -f "$dev_log" ]]; then
-  scripts/analyze_pipeline_log.sh "$dev_log" 20 > "$result_root/pipeline_analysis.txt"
+runs_dir="$HOME/.config/whisp/debug/runs"
+if [[ -d "$runs_dir" ]]; then
+  scripts/analyze_pipeline_log.sh "$runs_dir" 20 > "$result_root/pipeline_analysis.txt"
 else
-  echo "dev.log not found, skipped" > "$result_root/pipeline_analysis.txt"
+  echo "runs directory not found, skipped" > "$result_root/pipeline_analysis.txt"
 fi
 
 {

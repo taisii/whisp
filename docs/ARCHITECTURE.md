@@ -133,11 +133,21 @@
 
 ### B. events.jsonl
 
-1行ごとに以下の形式:
+1行ごとに `DebugRunLog`（`log_type` ごとの厳密Union）を保存:
 
-- `timestamp`
-- `event`（例: `recording_start`, `stt_start`, `postprocess_done`, `pipeline_done`, `pipeline_error`）
-- `fields`（処理時間、文字数、モデル名、失敗理由など）
+- 共通項目:
+  - `run_id`, `capture_id`
+  - `log_type`（`recording` / `stt` / `vision` / `postprocess` / `direct_input` / `pipeline` / `context_summary`）
+  - `event_start_ms`, `event_end_ms`, `recorded_at_ms`
+  - `status`（`ok` / `error` / `cancelled`）
+- `log_type` ごとの項目:
+  - `recording`: `mode`, `model`, `stt_provider`, `stt_streaming`, `vision_enabled`, `accessibility_summary_started`, `sample_rate`, `pcm_bytes`
+  - `stt`: `provider`, `route`, `source`, `text_chars`, `sample_rate`, `audio_bytes`, `attempts`
+  - `vision`: `model`, `mode`, `context_present`, `image_bytes`, `image_width`, `image_height`, `error`
+  - `postprocess`: `model`, `context_present`, `stt_chars`, `output_chars`, `kind`
+  - `direct_input`: `success`, `output_chars`
+  - `pipeline`: `stt_chars`, `output_chars`, `error`
+  - `context_summary`: `source`, `app_name`, `source_chars`, `summary_chars`, `terms_count`, `error`
 
 ### C. prompts/
 

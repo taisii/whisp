@@ -1,233 +1,176 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-log_file="${1:-$HOME/.config/whisp/dev.log}"
+input_path="${1:-$HOME/.config/whisp/debug/runs}"
 runs="${2:-10}"
-
-if [[ ! -f "$log_file" ]]; then
-  echo "log file not found: $log_file"
-  exit 1
-fi
 
 if ! [[ "$runs" =~ ^[0-9]+$ ]] || [[ "$runs" -lt 1 ]]; then
   echo "runs must be positive integer"
   exit 1
 fi
 
-awk -v max_runs="$runs" '
-function num(raw) {
-  if (raw == "") {
-    return 0
-  }
-  return raw + 0
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required"
+  exit 1
+fi
+
+collect_event_files() {
+  local path="$1"
+  local limit="$2"
+
+  if [[ -f "$path" ]]; then
+    echo "$path"
+    return
+  fi
+
+  if [[ ! -d "$path" ]]; then
+    echo "path not found: $path" >&2
+    exit 1
+  fi
+
+  while IFS= read -r -d '' file; do
+    printf "%s\t%s\n" "$(stat -f '%m' "$file")" "$file"
+  done < <(find "$path" -type f -name "events.jsonl" -print0) \
+    | sort -rn \
+    | cut -f2- \
+    | head -n "$limit"
 }
 
-BEGIN {
-  dominantCount["stt"] = 0
-  dominantCount["vision_wait"] = 0
-  dominantCount["post"] = 0
-  dominantCount["direct"] = 0
-  dominantCount["other"] = 0
-}
+mapfile -t event_files < <(collect_event_files "$input_path" "$runs")
 
-{
-  if ($0 !~ /^\[dev\]/) {
-    next
-  }
+if [[ "${#event_files[@]}" -eq 0 ]]; then
+  echo "no events.jsonl found"
+  exit 2
+fi
 
-  if (NF < 2) {
-    next
-  }
-  event = $2
+echo "analyzed_runs=${#event_files[@]} (latest $runs)"
+echo "run recording_ms pipeline_ms stt_ms context_ms post_ms direct_ms other_ms dominant_stage stt_source status"
 
-  delete fields
-  for (i = 3; i <= NF; i++) {
-    split($i, kv, "=")
-    if (length(kv) >= 2) {
-      key = kv[1]
-      value = substr($i, length(key) + 2)
-      fields[key] = value
-    }
-  }
+total_recording=0
+total_pipeline=0
+total_end_to_end=0
+total_stt=0
+total_context=0
+total_post=0
+total_direct=0
+total_other=0
+completed=0
 
-  run = fields["run"]
-  if (run == "") {
-    next
-  }
+dominant_stt=0
+dominant_context=0
+dominant_post=0
+dominant_direct=0
+dominant_other=0
 
-  if (!(run in seen)) {
-    seen[run] = 1
-    order[++runCount] = run
-  }
+for file in "${event_files[@]}"; do
+  [[ -s "$file" ]] || continue
 
-  if (event == "recording_stop") {
-    recordingMs[run] = num(fields["recording_ms"])
-  } else if (event == "vision_done") {
-    visionWaitMs[run] = num(fields["wait_ms"])
-    visionTotalMs[run] = num(fields["total_ms"])
-  } else if (event == "stt_done") {
-    sttMs[run] = num(fields["duration_ms"])
-    sttSource[run] = fields["source"]
-  } else if (event == "stt_stream_finalize_done") {
-    sttMs[run] = num(fields["duration_ms"])
-    sttSource[run] = "stream_finalize"
-  } else if (event == "postprocess_done") {
-    postMs[run] = num(fields["duration_ms"])
-  } else if (event == "direct_input_done") {
-    directMs[run] = num(fields["duration_ms"])
-  } else if (event == "pipeline_done") {
-    pipelineMs[run] = num(fields["pipeline_ms"])
-    endToEndMs[run] = num(fields["end_to_end_ms"])
-  } else if (event == "pipeline_error") {
-    hasError[run] = 1
-  }
-}
+  row="$(jq -sr '
+    def duration($type):
+      (first(.[] | select(.log_type == $type) | (.event_end_ms - .event_start_ms)) // 0);
+    def context_duration:
+      (first(.[] | select(.log_type == "context_summary") | (.event_end_ms - .event_start_ms))
+       // first(.[] | select(.log_type == "vision") | (.event_end_ms - .event_start_ms))
+       // 0);
 
-END {
-  if (runCount == 0) {
-    print "no run events found"
-    exit 2
-  }
+    [
+      (first(.[] | .run_id) // "unknown"),
+      duration("recording"),
+      duration("pipeline"),
+      duration("stt"),
+      context_duration,
+      duration("postprocess"),
+      duration("direct_input"),
+      (first(.[] | select(.log_type == "stt") | .source) // "n/a"),
+      (first(.[] | select(.log_type == "pipeline") | .status) // "unknown")
+    ] | @tsv
+  ' "$file")"
 
-  start = runCount - max_runs + 1
-  if (start < 1) {
-    start = 1
-  }
+  IFS=$'\t' read -r run recording pipeline stt context post direct source status <<< "$row"
 
-  print "analyzed_runs=" (runCount - start + 1) " (latest " max_runs ")"
-  print "run recording_ms pipeline_ms stt_ms vision_wait_ms post_ms direct_ms other_ms dominant_stage stt_source status"
+  if [[ "$pipeline" -le 0 && "$recording" -le 0 ]]; then
+    continue
+  fi
 
-  totalRecording = 0
-  totalPipeline = 0
-  totalEndToEnd = 0
-  totalStt = 0
-  totalVisionWait = 0
-  totalPost = 0
-  totalDirect = 0
-  totalOther = 0
-  completed = 0
+  other=$((pipeline - stt - context - post - direct))
+  if [[ "$other" -lt 0 ]]; then
+    other=0
+  fi
 
-  for (i = start; i <= runCount; i++) {
-    run = order[i]
-    if (pipelineMs[run] <= 0 && endToEndMs[run] <= 0) {
-      continue
-    }
+  dominant="stt"
+  dominant_value="$stt"
+  if [[ "$context" -gt "$dominant_value" ]]; then dominant="context"; dominant_value="$context"; fi
+  if [[ "$post" -gt "$dominant_value" ]]; then dominant="post"; dominant_value="$post"; fi
+  if [[ "$direct" -gt "$dominant_value" ]]; then dominant="direct"; dominant_value="$direct"; fi
+  if [[ "$other" -gt "$dominant_value" ]]; then dominant="other"; dominant_value="$other"; fi
 
-    rec = recordingMs[run] + 0
-    pipe = pipelineMs[run] + 0
-    stt = sttMs[run] + 0
-    visionWait = visionWaitMs[run] + 0
-    post = postMs[run] + 0
-    direct = directMs[run] + 0
+  printf "%s %.1f %.1f %.1f %.1f %.1f %.1f %.1f %s %s %s\n" \
+    "$run" "$recording" "$pipeline" "$stt" "$context" "$post" "$direct" "$other" "$dominant" "$source" "$status"
 
-    other = pipe - stt - visionWait - post - direct
-    if (other < 0) {
-      other = 0
-    }
+  total_recording=$((total_recording + recording))
+  total_pipeline=$((total_pipeline + pipeline))
+  total_end_to_end=$((total_end_to_end + pipeline + recording))
+  total_stt=$((total_stt + stt))
+  total_context=$((total_context + context))
+  total_post=$((total_post + post))
+  total_direct=$((total_direct + direct))
+  total_other=$((total_other + other))
+  completed=$((completed + 1))
 
-    dominant = "stt"
-    dominantValue = stt
-    if (visionWait > dominantValue) {
-      dominant = "vision_wait"
-      dominantValue = visionWait
-    }
-    if (post > dominantValue) {
-      dominant = "post"
-      dominantValue = post
-    }
-    if (direct > dominantValue) {
-      dominant = "direct"
-      dominantValue = direct
-    }
-    if (other > dominantValue) {
-      dominant = "other"
-      dominantValue = other
-    }
+  case "$dominant" in
+    stt) dominant_stt=$((dominant_stt + 1)) ;;
+    context) dominant_context=$((dominant_context + 1)) ;;
+    post) dominant_post=$((dominant_post + 1)) ;;
+    direct) dominant_direct=$((dominant_direct + 1)) ;;
+    other) dominant_other=$((dominant_other + 1)) ;;
+  esac
 
-    source = sttSource[run]
-    if (source == "") {
-      source = "n/a"
-    }
-    status = (hasError[run] ? "error" : "ok")
+done
 
-    printf "%s %.1f %.1f %.1f %.1f %.1f %.1f %.1f %s %s %s\n",
-      run, rec, pipe, stt, visionWait, post, direct, other, dominant, source, status
+if [[ "$completed" -eq 0 ]]; then
+  echo "no analyzable runs found"
+  exit 3
+fi
 
-    totalRecording += rec
-    totalPipeline += pipe
-    totalEndToEnd += endToEndMs[run]
-    totalStt += stt
-    totalVisionWait += visionWait
-    totalPost += post
-    totalDirect += direct
-    totalOther += other
-    completed++
-    dominantCount[dominant]++
-  }
+avg_recording="$(awk -v t="$total_recording" -v c="$completed" 'BEGIN { printf "%.1f", t / c }')"
+avg_pipeline="$(awk -v t="$total_pipeline" -v c="$completed" 'BEGIN { printf "%.1f", t / c }')"
+avg_end_to_end="$(awk -v t="$total_end_to_end" -v c="$completed" 'BEGIN { printf "%.1f", t / c }')"
+avg_stt="$(awk -v t="$total_stt" -v c="$completed" 'BEGIN { printf "%.1f", t / c }')"
+avg_context="$(awk -v t="$total_context" -v c="$completed" 'BEGIN { printf "%.1f", t / c }')"
+avg_post="$(awk -v t="$total_post" -v c="$completed" 'BEGIN { printf "%.1f", t / c }')"
+avg_direct="$(awk -v t="$total_direct" -v c="$completed" 'BEGIN { printf "%.1f", t / c }')"
+avg_other="$(awk -v t="$total_other" -v c="$completed" 'BEGIN { printf "%.1f", t / c }')"
 
-  if (completed == 0) {
-    print "no completed pipeline_done runs found"
-    exit 3
-  }
+echo ""
+echo "avg_recording_ms=$avg_recording"
+echo "avg_pipeline_ms=$avg_pipeline"
+echo "avg_end_to_end_ms=$avg_end_to_end"
+echo "avg_stt_ms=$avg_stt"
+echo "avg_context_ms=$avg_context"
+echo "avg_post_ms=$avg_post"
+echo "avg_direct_ms=$avg_direct"
+echo "avg_other_ms=$avg_other"
 
-  avgRecording = totalRecording / completed
-  avgPipeline = totalPipeline / completed
-  avgEndToEnd = totalEndToEnd / completed
-  avgStt = totalStt / completed
-  avgVisionWait = totalVisionWait / completed
-  avgPost = totalPost / completed
-  avgDirect = totalDirect / completed
-  avgOther = totalOther / completed
+dominant_average="stt"
+dominant_average_value="$avg_stt"
+if awk -v a="$avg_context" -v b="$dominant_average_value" 'BEGIN { exit !(a > b) }'; then dominant_average="context"; dominant_average_value="$avg_context"; fi
+if awk -v a="$avg_post" -v b="$dominant_average_value" 'BEGIN { exit !(a > b) }'; then dominant_average="post"; dominant_average_value="$avg_post"; fi
+if awk -v a="$avg_direct" -v b="$dominant_average_value" 'BEGIN { exit !(a > b) }'; then dominant_average="direct"; dominant_average_value="$avg_direct"; fi
+if awk -v a="$avg_other" -v b="$dominant_average_value" 'BEGIN { exit !(a > b) }'; then dominant_average="other"; dominant_average_value="$avg_other"; fi
 
-  print ""
-  printf "avg_recording_ms=%.1f\n", avgRecording
-  printf "avg_pipeline_ms=%.1f\n", avgPipeline
-  printf "avg_end_to_end_ms=%.1f\n", avgEndToEnd
-  printf "avg_stt_ms=%.1f\n", avgStt
-  printf "avg_vision_wait_ms=%.1f\n", avgVisionWait
-  printf "avg_post_ms=%.1f\n", avgPost
-  printf "avg_direct_ms=%.1f\n", avgDirect
-  printf "avg_other_ms=%.1f\n", avgOther
+echo "dominant_stage_by_average=$dominant_average (${dominant_average_value}ms)"
+echo "dominant_count stt=$dominant_stt post=$dominant_post context=$dominant_context direct=$dominant_direct other=$dominant_other"
 
-  dominantAverage = "stt"
-  dominantAverageValue = avgStt
-  if (avgVisionWait > dominantAverageValue) {
-    dominantAverage = "vision_wait"
-    dominantAverageValue = avgVisionWait
-  }
-  if (avgPost > dominantAverageValue) {
-    dominantAverage = "post"
-    dominantAverageValue = avgPost
-  }
-  if (avgDirect > dominantAverageValue) {
-    dominantAverage = "direct"
-    dominantAverageValue = avgDirect
-  }
-  if (avgOther > dominantAverageValue) {
-    dominantAverage = "other"
-    dominantAverageValue = avgOther
-  }
-
-  printf "dominant_stage_by_average=%s (%.1fms)\n", dominantAverage, dominantAverageValue
-  printf "dominant_count stt=%d post=%d vision_wait=%d direct=%d other=%d\n",
-    dominantCount["stt"],
-    dominantCount["post"],
-    dominantCount["vision_wait"],
-    dominantCount["direct"],
-    dominantCount["other"]
-
-  print ""
-  print "suggestions:"
-  if (dominantAverage == "stt") {
-    print "- STT支配: 無音区間トリム、入力長制限、モデル設定を見直す"
-  } else if (dominantAverage == "post") {
-    print "- Post-process支配: プロンプト短縮、コンテキスト量削減、軽量モデルへ切替"
-  } else if (dominantAverage == "vision_wait") {
-    print "- Vision待ち支配: 画像をさらに縮小、Visionタイムアウト短縮、必要時のみ有効化"
-  } else if (dominantAverage == "direct") {
-    print "- DirectInput支配: 入力方式見直し（paste優先）と送信イベント回数削減"
-  } else {
-    print "- other支配: 未計測区間をさらにログ分割して原因特定を進める"
-  }
-}
-' "$log_file"
+echo ""
+echo "suggestions:"
+if [[ "$dominant_average" == "stt" ]]; then
+  echo "- STT支配: 音声長の短縮やSTT設定を見直す"
+elif [[ "$dominant_average" == "post" ]]; then
+  echo "- Post-process支配: プロンプトとコンテキスト量を削減する"
+elif [[ "$dominant_average" == "context" ]]; then
+  echo "- 文脈取得支配: context_summary / vision を必要時のみに絞る"
+elif [[ "$dominant_average" == "direct" ]]; then
+  echo "- DirectInput支配: 入力先アプリ状態と権限を確認する"
+else
+  echo "- その他支配: pipeline内の待機区間（I/Oや同期）を調査する"
+fi

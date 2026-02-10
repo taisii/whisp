@@ -5,9 +5,25 @@ private func epochMsString(_ date: Date = Date()) -> String {
     String(format: "%.3f", date.timeIntervalSince1970 * 1000)
 }
 
+private func epochMs(_ date: Date = Date()) -> Int64 {
+    Int64((date.timeIntervalSince1970 * 1000).rounded())
+}
+
+struct STTStreamingDrainStats {
+    let submittedChunks: Int
+    let submittedBytes: Int
+    let droppedChunks: Int
+}
+
+struct STTStreamingFinalizeResult {
+    let transcript: String
+    let usage: STTUsage?
+    let drainStats: STTStreamingDrainStats
+}
+
 protocol STTStreamingSession: AnyObject, Sendable {
     func submit(chunk: Data)
-    func finish() async throws -> (transcript: String, usage: STTUsage?)
+    func finish() async throws -> STTStreamingFinalizeResult
 }
 
 protocol STTService: Sendable {
@@ -117,13 +133,13 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
                     sampleRate: AudioRecorder.targetSampleRate,
                     language: language
                 )
-                logger(DebugRunEventName.sttStreamConnected.rawValue, [
-                    DebugRunEventField.sampleRate.rawValue: String(AudioRecorder.targetSampleRate),
+                logger("stt_stream_connected", [
+                    "sample_rate": String(AudioRecorder.targetSampleRate),
                     "language": language ?? "auto",
                 ])
             } catch {
-                logger(DebugRunEventName.sttStreamConnectFailed.rawValue, [
-                    DebugRunEventField.error.rawValue: error.localizedDescription,
+                logger("stt_stream_connect_failed", [
+                    "error": error.localizedDescription,
                 ])
             }
         }
@@ -134,7 +150,7 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
         config: Config,
         recording: RecordingResult,
         language: String?,
-        runID: String,
+        runID _: String,
         streamingSession: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
@@ -144,33 +160,77 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
         }
 
         if let streamingSession {
-            let streamFinalizeStartedAt = DispatchTime.now()
             let finalizeRequestedAt = Date()
-            logger(DebugRunEventName.sttStreamFinalizeStart.rawValue, [
-                DebugRunEventField.requestSentAtMs.rawValue: epochMsString(finalizeRequestedAt),
+            let finalizeRequestedAtMs = epochMs(finalizeRequestedAt)
+            logger("stt_stream_finalize_start", [
+                "request_sent_at_ms": epochMsString(finalizeRequestedAt),
             ])
+
             do {
                 let result = try await streamingSession.finish()
                 let finalizeResponseAt = Date()
-                logger(DebugRunEventName.sttStreamFinalizeDone.rawValue, [
-                    DebugRunEventField.durationMs.rawValue: msString(elapsedMs(since: streamFinalizeStartedAt)),
-                    DebugRunEventField.requestSentAtMs.rawValue: epochMsString(finalizeRequestedAt),
-                    DebugRunEventField.responseReceivedAtMs.rawValue: epochMsString(finalizeResponseAt),
-                    DebugRunEventField.textChars.rawValue: String(result.transcript.count),
+                let finalizeResponseAtMs = epochMs(finalizeResponseAt)
+                logger("stt_stream_finalize_done", [
+                    "request_sent_at_ms": epochMsString(finalizeRequestedAt),
+                    "response_received_at_ms": epochMsString(finalizeResponseAt),
+                    "text_chars": String(result.transcript.count),
                 ])
-                return STTTranscriptionResult(transcript: result.transcript, usage: result.usage)
+
+                let attempt = DebugSTTAttempt(
+                    kind: .streamFinalize,
+                    status: .ok,
+                    eventStartMs: finalizeRequestedAtMs,
+                    eventEndMs: finalizeResponseAtMs,
+                    source: "stream_finalize",
+                    textChars: result.transcript.count,
+                    sampleRate: recording.sampleRate,
+                    audioBytes: recording.pcmData.count,
+                    submittedChunks: result.drainStats.submittedChunks,
+                    submittedBytes: result.drainStats.submittedBytes,
+                    droppedChunks: result.drainStats.droppedChunks
+                )
+
+                let trace = STTTrace(
+                    provider: config.sttProvider.rawValue,
+                    route: .streaming,
+                    mainSpan: STTMainSpanTrace(
+                        eventStartMs: finalizeRequestedAtMs,
+                        eventEndMs: finalizeResponseAtMs,
+                        status: .ok,
+                        source: "stream_finalize",
+                        textChars: result.transcript.count,
+                        sampleRate: recording.sampleRate,
+                        audioBytes: recording.pcmData.count,
+                        error: nil
+                    ),
+                    attempts: [attempt]
+                )
+                return STTTranscriptionResult(transcript: result.transcript, usage: result.usage, trace: trace)
             } catch {
-                logger(DebugRunEventName.sttStreamFailedFallbackREST.rawValue, [
-                    DebugRunEventField.error.rawValue: error.localizedDescription,
+                logger("stt_stream_failed_fallback_rest", [
+                    "error": error.localizedDescription,
                 ])
-                let sttStartedAt = DispatchTime.now()
+
+                let failedFinalizeAttempt = DebugSTTAttempt(
+                    kind: .streamFinalize,
+                    status: .error,
+                    eventStartMs: finalizeRequestedAtMs,
+                    eventEndMs: epochMs(),
+                    source: "stream_finalize",
+                    error: error.localizedDescription,
+                    sampleRate: recording.sampleRate,
+                    audioBytes: recording.pcmData.count
+                )
+
                 let restRequestedAt = Date()
-                logger(DebugRunEventName.sttStart.rawValue, [
-                    DebugRunEventField.source.rawValue: DebugSTTSource.restFallback.rawValue,
-                    DebugRunEventField.sampleRate.rawValue: String(recording.sampleRate),
-                    DebugRunEventField.audioBytes.rawValue: String(recording.pcmData.count),
-                    DebugRunEventField.requestSentAtMs.rawValue: epochMsString(restRequestedAt),
+                let restRequestedAtMs = epochMs(restRequestedAt)
+                logger("stt_start", [
+                    "source": "rest_fallback",
+                    "sample_rate": String(recording.sampleRate),
+                    "audio_bytes": String(recording.pcmData.count),
+                    "request_sent_at_ms": epochMsString(restRequestedAt),
                 ])
+
                 let stt = try await restClient.transcribe(
                     apiKey: deepgramKey,
                     sampleRate: recording.sampleRate,
@@ -178,23 +238,51 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
                     language: language
                 )
                 let restResponseAt = Date()
-                logger(DebugRunEventName.sttDone.rawValue, [
-                    DebugRunEventField.source.rawValue: DebugSTTSource.restFallback.rawValue,
-                    DebugRunEventField.durationMs.rawValue: msString(elapsedMs(since: sttStartedAt)),
-                    DebugRunEventField.requestSentAtMs.rawValue: epochMsString(restRequestedAt),
-                    DebugRunEventField.responseReceivedAtMs.rawValue: epochMsString(restResponseAt),
-                    DebugRunEventField.textChars.rawValue: String(stt.transcript.count),
+                let restResponseAtMs = epochMs(restResponseAt)
+                logger("stt_done", [
+                    "source": "rest_fallback",
+                    "request_sent_at_ms": epochMsString(restRequestedAt),
+                    "response_received_at_ms": epochMsString(restResponseAt),
+                    "text_chars": String(stt.transcript.count),
                 ])
-                return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage)
+
+                let restAttempt = DebugSTTAttempt(
+                    kind: .restFallback,
+                    status: .ok,
+                    eventStartMs: restRequestedAtMs,
+                    eventEndMs: restResponseAtMs,
+                    source: "rest_fallback",
+                    textChars: stt.transcript.count,
+                    sampleRate: recording.sampleRate,
+                    audioBytes: recording.pcmData.count
+                )
+
+                let trace = STTTrace(
+                    provider: config.sttProvider.rawValue,
+                    route: .streamingFallbackREST,
+                    mainSpan: STTMainSpanTrace(
+                        eventStartMs: finalizeRequestedAtMs,
+                        eventEndMs: restResponseAtMs,
+                        status: .ok,
+                        source: "rest_fallback",
+                        textChars: stt.transcript.count,
+                        sampleRate: recording.sampleRate,
+                        audioBytes: recording.pcmData.count,
+                        error: nil
+                    ),
+                    attempts: [failedFinalizeAttempt, restAttempt]
+                )
+                return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
             }
         }
 
-        let sttStartedAt = DispatchTime.now()
         let restRequestedAt = Date()
-        logger(DebugRunEventName.sttStart.rawValue, [
-            DebugRunEventField.sampleRate.rawValue: String(recording.sampleRate),
-            DebugRunEventField.audioBytes.rawValue: String(recording.pcmData.count),
-            DebugRunEventField.requestSentAtMs.rawValue: epochMsString(restRequestedAt),
+        let restRequestedAtMs = epochMs(restRequestedAt)
+        logger("stt_start", [
+            "source": "rest",
+            "sample_rate": String(recording.sampleRate),
+            "audio_bytes": String(recording.pcmData.count),
+            "request_sent_at_ms": epochMsString(restRequestedAt),
         ])
         let stt = try await restClient.transcribe(
             apiKey: deepgramKey,
@@ -203,23 +291,40 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
             language: language
         )
         let restResponseAt = Date()
-        logger(DebugRunEventName.sttDone.rawValue, [
-            DebugRunEventField.source.rawValue: DebugSTTSource.rest.rawValue,
-            DebugRunEventField.durationMs.rawValue: msString(elapsedMs(since: sttStartedAt)),
-            DebugRunEventField.requestSentAtMs.rawValue: epochMsString(restRequestedAt),
-            DebugRunEventField.responseReceivedAtMs.rawValue: epochMsString(restResponseAt),
-            DebugRunEventField.textChars.rawValue: String(stt.transcript.count),
+        let restResponseAtMs = epochMs(restResponseAt)
+        logger("stt_done", [
+            "source": "rest",
+            "request_sent_at_ms": epochMsString(restRequestedAt),
+            "response_received_at_ms": epochMsString(restResponseAt),
+            "text_chars": String(stt.transcript.count),
         ])
-        return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage)
-    }
 
-    private func elapsedMs(since start: DispatchTime, to end: DispatchTime = .now()) -> Double {
-        let nanos = end.uptimeNanoseconds - start.uptimeNanoseconds
-        return Double(nanos) / 1_000_000
-    }
-
-    private func msString(_ value: Double) -> String {
-        String(format: "%.1f", value)
+        let attempt = DebugSTTAttempt(
+            kind: .rest,
+            status: .ok,
+            eventStartMs: restRequestedAtMs,
+            eventEndMs: restResponseAtMs,
+            source: "rest",
+            textChars: stt.transcript.count,
+            sampleRate: recording.sampleRate,
+            audioBytes: recording.pcmData.count
+        )
+        let trace = STTTrace(
+            provider: config.sttProvider.rawValue,
+            route: .rest,
+            mainSpan: STTMainSpanTrace(
+                eventStartMs: restRequestedAtMs,
+                eventEndMs: restResponseAtMs,
+                status: .ok,
+                source: "rest",
+                textChars: stt.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                error: nil
+            ),
+            attempts: [attempt]
+        )
+        return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
     }
 }
 
@@ -236,7 +341,7 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
         language _: String?,
         logger _: @escaping PipelineEventLogger
     ) -> (any STTStreamingSession)? {
-        return nil
+        nil
     }
 
     func transcribe(
@@ -252,13 +357,13 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
             throw AppError.invalidArgument("OpenAI APIキーが未設定です（Whisper STT）")
         }
 
-        let sttStartedAt = DispatchTime.now()
         let requestSentAt = Date()
-        logger(DebugRunEventName.sttStart.rawValue, [
-            DebugRunEventField.sampleRate.rawValue: String(recording.sampleRate),
-            DebugRunEventField.audioBytes.rawValue: String(recording.pcmData.count),
-            DebugRunEventField.source.rawValue: DebugSTTSource.whisper.rawValue,
-            DebugRunEventField.requestSentAtMs.rawValue: epochMsString(requestSentAt),
+        let requestSentAtMs = epochMs(requestSentAt)
+        logger("stt_start", [
+            "source": "whisper_rest",
+            "sample_rate": String(recording.sampleRate),
+            "audio_bytes": String(recording.pcmData.count),
+            "request_sent_at_ms": epochMsString(requestSentAt),
         ])
         let stt = try await client.transcribe(
             apiKey: openAIKey,
@@ -267,23 +372,40 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
             language: language
         )
         let responseReceivedAt = Date()
-        logger(DebugRunEventName.sttDone.rawValue, [
-            DebugRunEventField.source.rawValue: DebugSTTSource.whisperREST.rawValue,
-            DebugRunEventField.durationMs.rawValue: msString(elapsedMs(since: sttStartedAt)),
-            DebugRunEventField.requestSentAtMs.rawValue: epochMsString(requestSentAt),
-            DebugRunEventField.responseReceivedAtMs.rawValue: epochMsString(responseReceivedAt),
-            DebugRunEventField.textChars.rawValue: String(stt.transcript.count),
+        let responseReceivedAtMs = epochMs(responseReceivedAt)
+        logger("stt_done", [
+            "source": "whisper_rest",
+            "request_sent_at_ms": epochMsString(requestSentAt),
+            "response_received_at_ms": epochMsString(responseReceivedAt),
+            "text_chars": String(stt.transcript.count),
         ])
-        return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage)
-    }
 
-    private func elapsedMs(since start: DispatchTime, to end: DispatchTime = .now()) -> Double {
-        let nanos = end.uptimeNanoseconds - start.uptimeNanoseconds
-        return Double(nanos) / 1_000_000
-    }
-
-    private func msString(_ value: Double) -> String {
-        String(format: "%.1f", value)
+        let attempt = DebugSTTAttempt(
+            kind: .whisperREST,
+            status: .ok,
+            eventStartMs: requestSentAtMs,
+            eventEndMs: responseReceivedAtMs,
+            source: "whisper_rest",
+            textChars: stt.transcript.count,
+            sampleRate: recording.sampleRate,
+            audioBytes: recording.pcmData.count
+        )
+        let trace = STTTrace(
+            provider: config.sttProvider.rawValue,
+            route: .rest,
+            mainSpan: STTMainSpanTrace(
+                eventStartMs: requestSentAtMs,
+                eventEndMs: responseReceivedAtMs,
+                status: .ok,
+                source: "whisper_rest",
+                textChars: stt.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                error: nil
+            ),
+            attempts: [attempt]
+        )
+        return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
     }
 }
 
@@ -311,13 +433,13 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         streamingSession _: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
-        let sttStartedAt = DispatchTime.now()
         let requestSentAt = Date()
-        logger(DebugRunEventName.sttStart.rawValue, [
-            DebugRunEventField.sampleRate.rawValue: String(recording.sampleRate),
-            DebugRunEventField.audioBytes.rawValue: String(recording.pcmData.count),
-            DebugRunEventField.source.rawValue: DebugSTTSource.appleSpeech.rawValue,
-            DebugRunEventField.requestSentAtMs.rawValue: epochMsString(requestSentAt),
+        let requestSentAtMs = epochMs(requestSentAt)
+        logger("stt_start", [
+            "source": "apple_speech",
+            "sample_rate": String(recording.sampleRate),
+            "audio_bytes": String(recording.pcmData.count),
+            "request_sent_at_ms": epochMsString(requestSentAt),
         ])
         let stt = try await client.transcribe(
             sampleRate: recording.sampleRate,
@@ -325,34 +447,45 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
             language: language
         )
         let responseReceivedAt = Date()
-        logger(DebugRunEventName.sttDone.rawValue, [
-            DebugRunEventField.source.rawValue: DebugSTTSource.appleSpeech.rawValue,
-            DebugRunEventField.durationMs.rawValue: msString(elapsedMs(since: sttStartedAt)),
-            DebugRunEventField.requestSentAtMs.rawValue: epochMsString(requestSentAt),
-            DebugRunEventField.responseReceivedAtMs.rawValue: epochMsString(responseReceivedAt),
-            DebugRunEventField.textChars.rawValue: String(stt.transcript.count),
+        let responseReceivedAtMs = epochMs(responseReceivedAt)
+        logger("stt_done", [
+            "source": "apple_speech",
+            "request_sent_at_ms": epochMsString(requestSentAt),
+            "response_received_at_ms": epochMsString(responseReceivedAt),
+            "text_chars": String(stt.transcript.count),
         ])
-        return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage)
-    }
 
-    private func elapsedMs(since start: DispatchTime, to end: DispatchTime = .now()) -> Double {
-        let nanos = end.uptimeNanoseconds - start.uptimeNanoseconds
-        return Double(nanos) / 1_000_000
-    }
-
-    private func msString(_ value: Double) -> String {
-        String(format: "%.1f", value)
+        let attempt = DebugSTTAttempt(
+            kind: .appleSpeech,
+            status: .ok,
+            eventStartMs: requestSentAtMs,
+            eventEndMs: responseReceivedAtMs,
+            source: "apple_speech",
+            textChars: stt.transcript.count,
+            sampleRate: recording.sampleRate,
+            audioBytes: recording.pcmData.count
+        )
+        let trace = STTTrace(
+            provider: STTProvider.appleSpeech.rawValue,
+            route: .onDevice,
+            mainSpan: STTMainSpanTrace(
+                eventStartMs: requestSentAtMs,
+                eventEndMs: responseReceivedAtMs,
+                status: .ok,
+                source: "apple_speech",
+                textChars: stt.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                error: nil
+            ),
+            attempts: [attempt]
+        )
+        return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
     }
 }
 
 private final class DeepgramLiveSession: STTStreamingSession, @unchecked Sendable {
     private final class ChunkTracker: @unchecked Sendable {
-        struct DrainStats {
-            let submittedChunks: Int
-            let submittedBytes: Int
-            let droppedChunks: Int
-        }
-
         private let lock = NSLock()
         private var pendingTasks: [Task<Void, Never>] = []
         private var closed = false
@@ -387,9 +520,9 @@ private final class DeepgramLiveSession: STTStreamingSession, @unchecked Sendabl
             return tasks
         }
 
-        func stats() -> DrainStats {
+        func stats() -> STTStreamingDrainStats {
             lock.lock()
-            let stats = DrainStats(
+            let stats = STTStreamingDrainStats(
                 submittedChunks: submittedChunks,
                 submittedBytes: submittedBytes,
                 droppedChunks: droppedChunks
@@ -414,37 +547,35 @@ private final class DeepgramLiveSession: STTStreamingSession, @unchecked Sendabl
         tracker.submit(chunk: chunk, stream: stream)
     }
 
-    func finish() async throws -> (transcript: String, usage: STTUsage?) {
-        let drainStartedAt = DispatchTime.now()
+    func finish() async throws -> STTStreamingFinalizeResult {
+        let drainStartedAt = Date()
         let tasks = tracker.close()
         for task in tasks {
             await task.value
         }
         let stats = tracker.stats()
-        let drainMs = elapsedMs(since: drainStartedAt)
-        logger(DebugRunEventName.sttStreamChunksDrained.rawValue, [
-            DebugRunEventField.durationMs.rawValue: msString(drainMs),
+        let drainDoneAt = Date()
+        logger("stt_stream_chunks_drained", [
+            "request_sent_at_ms": epochMsString(drainStartedAt),
+            "response_received_at_ms": epochMsString(drainDoneAt),
             "submitted_chunks": String(stats.submittedChunks),
             "submitted_bytes": String(stats.submittedBytes),
             "dropped_chunks": String(stats.droppedChunks),
         ])
         SystemLog.stt("app_stream_chunks_drained", fields: [
             "run": runID,
-            DebugRunEventField.durationMs.rawValue: msString(drainMs),
+            "request_sent_at_ms": epochMsString(drainStartedAt),
+            "response_received_at_ms": epochMsString(drainDoneAt),
             "submitted_chunks": String(stats.submittedChunks),
             "submitted_bytes": String(stats.submittedBytes),
             "dropped_chunks": String(stats.droppedChunks),
         ])
 
-        return try await stream.finish()
-    }
-
-    private func elapsedMs(since start: DispatchTime, to end: DispatchTime = .now()) -> Double {
-        let nanos = end.uptimeNanoseconds - start.uptimeNanoseconds
-        return Double(nanos) / 1_000_000
-    }
-
-    private func msString(_ value: Double) -> String {
-        String(format: "%.1f", value)
+        let finalized = try await stream.finish()
+        return STTStreamingFinalizeResult(
+            transcript: finalized.transcript,
+            usage: finalized.usage,
+            drainStats: stats
+        )
     }
 }

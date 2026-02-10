@@ -209,7 +209,7 @@ scripts/benchmark_full_pipeline.sh Tests/Fixtures/benchmark_ja_10s.wav 3 discard
 # 1) manualケース評価（短音声除外、intent judge含む）
 # 2) STT latency
 # 3) full pipeline
-# 4) dev.log解析（存在時）
+# 4) events.jsonl解析
 scripts/run_eval_loop.sh ~/.config/whisp/debug/manual_test_cases.jsonl Tests/Fixtures/benchmark_ja_10s.wav
 ```
 
@@ -243,7 +243,7 @@ WHISP_DEV_LOG=1 swift run WhispApp
 
 ### Full pipeline bottleneck analysis (real app flow)
 
-`WHISP_DEV_LOG=1` でアプリを動かして数回録音し、`dev.log` を解析します。
+`WHISP_DEV_LOG=1` でアプリを動かして数回録音し、`events.jsonl` を解析します。
 
 ```bash
 # 1) launch app with dev logging
@@ -251,15 +251,17 @@ WHISP_DEV_LOG=1 swift run WhispApp
 
 # 2) in app: record a few times (Cmd+J start/stop)
 
-# 3) analyze latest runs (default: ~/.config/whisp/dev.log)
-scripts/analyze_pipeline_log.sh ~/.config/whisp/dev.log 10
+# 3) analyze latest runs (default: ~/.config/whisp/debug/runs)
+scripts/analyze_pipeline_log.sh ~/.config/whisp/debug/runs 10
+# or single capture
+scripts/analyze_pipeline_log.sh ~/.config/whisp/debug/runs/<capture-id>/events.jsonl
 ```
 
 出力される主な指標:
 - `recording_ms`: 録音区間
 - `pipeline_ms`: 録音停止後の処理全体
 - `stt_ms`: 音声認識
-- `vision_wait_ms`: Vision結果待ち（クリティカルパス上の待ち時間）
+- `context_ms`: 文脈収集（`log_type=context_summary` があればそれを優先、なければ `log_type=vision`）
 - `post_ms`: LLM整形
 - `direct_ms`: 直接入力
 - `other_ms`: 未分解時間
@@ -285,6 +287,44 @@ scripts/analyze_pipeline_log.sh ~/.config/whisp/dev.log 10
 - 録音/メタ/イベント: `~/.config/whisp/debug/runs/<capture-id>/`
 - プロンプト: `~/.config/whisp/debug/runs/<capture-id>/prompts`（`run_dir` 未指定時は `~/.config/whisp/debug/runs/_default/prompts`）
 - 手動テストケース: `~/.config/whisp/debug/manual_test_cases.jsonl`
+
+`events.jsonl` は 1 行 1 JSON で、`log_type` ごとの厳密Unionを保存します。例:
+
+```json
+{
+  "run_id": "a1b2c3d4",
+  "capture_id": "20260211-....",
+  "log_type": "stt",
+  "event_start_ms": 1770757820523,
+  "event_end_ms": 1770757820829,
+  "recorded_at_ms": 1770757820831,
+  "status": "ok",
+  "provider": "deepgram",
+  "route": "streaming_fallback_rest",
+  "source": "rest_fallback",
+  "text_chars": 16,
+  "sample_rate": 16000,
+  "audio_bytes": 240000,
+  "attempts": [
+    {
+      "kind": "stream_finalize",
+      "status": "error",
+      "event_start_ms": 1770757820523,
+      "event_end_ms": 1770757820600,
+      "source": "stream_finalize",
+      "error": "timeout"
+    },
+    {
+      "kind": "rest_fallback",
+      "status": "ok",
+      "event_start_ms": 1770757820601,
+      "event_end_ms": 1770757820829,
+      "source": "rest_fallback",
+      "text_chars": 16
+    }
+  ]
+}
+```
 
 ## Run as menu bar app (debug)
 

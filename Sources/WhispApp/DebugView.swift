@@ -148,11 +148,8 @@ struct DebugView: View {
         let record = details.record
         let analysis = viewModel.selectedEventAnalysis
         let sttInfo = analysis.sttInfo
-        let context = record.context
-        let hasVisionSummary = !(context?.visionSummary?.isEmpty ?? true)
-        let hasAccessibilityContext = !(context?.accessibilityText?.isEmpty ?? true)
-        let hasWindowContext = !(context?.windowText?.isEmpty ?? true)
-        let hasFocusedSelection = !(record.accessibilitySnapshot?.focusedElement?.selectedText?.isEmpty ?? true)
+        let accessibility = record.accessibilitySnapshot
+        let focusedElement = accessibility?.focusedElement
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 8) {
@@ -190,12 +187,39 @@ struct DebugView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("とってこれた情報")
                         .font(.system(size: 13, weight: .semibold))
-                    availabilityRow(name: "Vision画像", isAvailable: record.visionImageFilePath != nil)
-                    availabilityRow(name: "Vision要約", isAvailable: hasVisionSummary)
-                    availabilityRow(name: "専門用語", value: "\(context?.visionTerms.count ?? 0)件")
-                    availabilityRow(name: "Accessibility文脈", isAvailable: hasAccessibilityContext)
-                    availabilityRow(name: "Window文脈", isAvailable: hasWindowContext)
-                    availabilityRow(name: "選択テキスト", isAvailable: hasFocusedSelection)
+                    availabilitySection(title: "Vision", rows: [
+                        ("Vision画像", hasText(record.visionImageFilePath)),
+                        ("Vision MIMEタイプ", hasText(record.visionImageMimeType)),
+                    ])
+
+                    availabilitySection(title: "Accessibility", rows: [
+                        ("Snapshot", accessibility != nil),
+                        ("アクセシビリティ許可", accessibility?.trusted == true),
+                        ("取得時刻", hasText(accessibility?.capturedAt)),
+                        ("前面アプリ名", hasText(accessibility?.appName)),
+                        ("Bundle ID", hasText(accessibility?.bundleID)),
+                        ("Process ID", accessibility?.processID != nil),
+                        ("Window Title", hasText(accessibility?.windowTitle)),
+                        ("Window Text", hasText(accessibility?.windowText)),
+                        ("エラー情報", hasText(accessibility?.error)),
+                    ])
+
+                    availabilitySection(title: "Focused Element", rows: [
+                        ("フォーカス要素", focusedElement != nil),
+                        ("Role", hasText(focusedElement?.role)),
+                        ("Subrole", hasText(focusedElement?.subrole)),
+                        ("Title", hasText(focusedElement?.title)),
+                        ("Description", hasText(focusedElement?.elementDescription)),
+                        ("Help", hasText(focusedElement?.help)),
+                        ("Placeholder", hasText(focusedElement?.placeholder)),
+                        ("Value", hasText(focusedElement?.value)),
+                        ("選択テキスト", hasText(focusedElement?.selectedText)),
+                        ("選択範囲", focusedElement?.selectedRange != nil),
+                        ("カーソル行番号", focusedElement?.insertionPointLineNumber != nil),
+                        ("ラベルテキスト", !(focusedElement?.labelTexts.isEmpty ?? true)),
+                        ("Caret Context", hasText(focusedElement?.caretContext)),
+                        ("Caret Context Range", focusedElement?.caretContextRange != nil),
+                    ])
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .innerCardStyle()
@@ -489,13 +513,10 @@ struct DebugView: View {
                     timingMetricRow("STT", timings.sttMs)
                     timingMetricRow("STT finalize", timings.sttFinalizeMs)
                     timingMetricRow("文脈要約 total", timings.visionTotalMs)
-                    timingMetricRow("Vision wait", timings.visionWaitMs)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 5) {
-                    timingMetricRow("Vision capture", timings.visionCaptureMs)
-                    timingMetricRow("Vision analyze", timings.visionAnalyzeMs)
                     timingMetricRow("PostProcess", timings.postProcessMs)
                     timingMetricRow("DirectInput", timings.directInputMs)
                     timingMetricRow("Pipeline(stop後)", timings.pipelineMs)
@@ -652,15 +673,20 @@ struct DebugView: View {
         .font(.system(size: 11))
     }
 
-    private func availabilityRow(name: String, value: String) -> some View {
-        HStack(spacing: 6) {
-            Text(name)
-            Spacer(minLength: 0)
-            Text(value)
-                .font(.system(size: 11, design: .monospaced))
+    private func availabilitySection(title: String, rows: [(String, Bool)]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
                 .foregroundStyle(.secondary)
+            ForEach(rows, id: \.0) { row in
+                availabilityRow(name: row.0, isAvailable: row.1)
+            }
         }
-        .font(.system(size: 11))
+    }
+
+    private func hasText(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func copyableIDChip(
@@ -681,10 +707,6 @@ struct DebugView: View {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count > 18 else { return trimmed }
         return "\(trimmed.prefix(8))...\(trimmed.suffix(6))"
-    }
-
-    private func trimmedCharCount(_ text: String?) -> Int {
-        text?.trimmingCharacters(in: .whitespacesAndNewlines).count ?? 0
     }
 
     private func msText(_ value: Double?) -> String {

@@ -4,7 +4,7 @@ import WhispCore
 @testable import WhispApp
 
 final class ContextServiceTests: XCTestCase {
-    func testResolveVisionIfReadyKeepsTaskAliveWhenNotReady() async {
+    func testResolveVisionIfReadyReturnsNilWhenTaskNotReady() async {
         let service = ContextService(
             accessibilityProvider: StubAccessibilityProvider(),
             visionProvider: StubVisionProvider()
@@ -26,16 +26,39 @@ final class ContextServiceTests: XCTestCase {
             )
         }
 
-        let immediate = await service.resolveVisionIfReady(task: task) { _, _ in }
-        XCTAssertNil(immediate)
+        let resolved = await service.resolveVisionIfReady(task: task) { _, _ in }
+        XCTAssertNil(resolved)
         XCTAssertFalse(task.isCancelled)
-
-        let deferred = await task.value
-        XCTAssertEqual(deferred.imageBytes, 3)
-        XCTAssertEqual(deferred.context?.visionSummary, "summary")
     }
 
-    func testStartVisionCollectionRequiresKeyOnlyForLLMMode() async {
+    func testResolveVisionIfReadyReturnsResultWhenTaskAlreadyDone() async {
+        let service = ContextService(
+            accessibilityProvider: StubAccessibilityProvider(),
+            visionProvider: StubVisionProvider()
+        )
+        let task = Task<VisionContextCollectionResult, Never> {
+            VisionContextCollectionResult(
+                context: ContextInfo(visionSummary: "summary", visionTerms: ["term"]),
+                captureMs: 10,
+                analyzeMs: 20,
+                totalMs: 30,
+                imageData: Data([0x01, 0x02, 0x03]),
+                imageMimeType: "image/jpeg",
+                imageBytes: 3,
+                imageWidth: 100,
+                imageHeight: 80,
+                mode: VisionContextMode.llm.rawValue,
+                error: nil
+            )
+        }
+
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        let resolved = await service.resolveVisionIfReady(task: task) { _, _ in }
+        XCTAssertEqual(resolved?.imageBytes, 3)
+        XCTAssertEqual(resolved?.context?.visionSummary, "summary")
+    }
+
+    func testStartVisionCollectionDoesNotRequireAPIKey() async {
         let service = ContextService(
             accessibilityProvider: StubAccessibilityProvider(),
             visionProvider: StubVisionProvider()
@@ -48,10 +71,10 @@ final class ContextServiceTests: XCTestCase {
             config: llmConfig,
             runID: "run-llm",
             runDirectory: nil,
-            llmAPIKey: nil,
             logger: { _, _ in }
         )
-        XCTAssertNil(llmTask)
+        XCTAssertNotNil(llmTask)
+        _ = await llmTask?.value
 
         var ocrConfig = Config()
         ocrConfig.context.visionEnabled = true
@@ -60,7 +83,6 @@ final class ContextServiceTests: XCTestCase {
             config: ocrConfig,
             runID: "run-ocr",
             runDirectory: nil,
-            llmAPIKey: nil,
             logger: { _, _ in }
         )
         XCTAssertNotNil(ocrTask)
@@ -88,8 +110,8 @@ private struct StubVisionProvider: VisionContextProvider {
     func collect(
         mode _: VisionContextMode,
         model: LLMModel,
-        apiKey: String?,
         runID: String,
+        preferredWindowOwnerPID: Int32?,
         runDirectory: String?,
         logger: @escaping PipelineEventLogger
     ) async -> VisionContextCollectionResult {

@@ -3,9 +3,28 @@ import WhispCore
 
 typealias PipelineEventLogger = @Sendable (_ event: String, _ fields: [String: String]) -> Void
 
+struct STTMainSpanTrace {
+    let eventStartMs: Int64
+    let eventEndMs: Int64
+    let status: DebugLogStatus
+    let source: String
+    let textChars: Int
+    let sampleRate: Int
+    let audioBytes: Int
+    let error: String?
+}
+
+struct STTTrace {
+    let provider: String
+    let route: DebugSTTRoute
+    let mainSpan: STTMainSpanTrace
+    let attempts: [DebugSTTAttempt]
+}
+
 struct STTTranscriptionResult {
     let transcript: String
     let usage: STTUsage?
+    let trace: STTTrace
 }
 
 struct VisionContextCollectionResult {

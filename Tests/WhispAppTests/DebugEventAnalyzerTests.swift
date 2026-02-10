@@ -3,90 +3,124 @@ import WhispCore
 @testable import WhispApp
 
 final class DebugEventAnalyzerTests: XCTestCase {
-    func testAnalyzeResolvesSTTProviderAndRouteFromSharedSchema() {
+    func testAnalyzeResolvesSTTProviderAndRouteFromStructuredLog() {
         let analyzer = DebugEventAnalyzer()
-        let events: [DebugRunEvent] = [
-            makeEvent(.recordingStart, fields: [
-                .sttProvider: STTProvider.whisper.rawValue,
-                .recordingStartedAtMs: "1000",
-            ]),
-            makeEvent(.recordingStop, fields: [
-                .recordingMs: "1000",
-                .recordingStoppedAtMs: "2000",
-            ]),
-            makeEvent(.sttStart, fields: [
-                .source: DebugSTTSource.whisper.rawValue,
-                .requestSentAtMs: "2000",
-            ]),
-            makeEvent(.sttDone, fields: [
-                .source: DebugSTTSource.whisperREST.rawValue,
-                .durationMs: "120",
-                .requestSentAtMs: "2000",
-                .responseReceivedAtMs: "2120",
-            ]),
-            makeEvent(.postprocessDone, fields: [
-                .durationMs: "85",
-            ]),
-            makeEvent(.directInputDone, fields: [
-                .durationMs: "10",
-            ]),
-            makeEvent(.pipelineDone, fields: [
-                .pipelineMs: "250",
-                .endToEndMs: "1250",
-            ]),
+        let logs: [DebugRunLog] = [
+            makeRecordingLog(start: 1000, end: 2000),
+            .stt(DebugSTTLog(
+                base: base(type: .stt, start: 2000, end: 2120),
+                provider: STTProvider.whisper.rawValue,
+                route: .rest,
+                source: "whisper_rest",
+                textChars: 16,
+                sampleRate: 16_000,
+                audioBytes: 40_000,
+                attempts: [
+                    DebugSTTAttempt(
+                        kind: .whisperREST,
+                        status: .ok,
+                        eventStartMs: 2000,
+                        eventEndMs: 2120,
+                        source: "whisper_rest",
+                        textChars: 16,
+                        sampleRate: 16_000,
+                        audioBytes: 40_000
+                    ),
+                ]
+            )),
+            .postprocess(DebugPostProcessLog(
+                base: base(type: .postprocess, start: 2125, end: 2210),
+                model: "gpt-5-nano",
+                contextPresent: true,
+                sttChars: 16,
+                outputChars: 14,
+                kind: .textPostprocess
+            )),
+            .directInput(DebugDirectInputLog(
+                base: base(type: .directInput, start: 2210, end: 2220),
+                success: true,
+                outputChars: 14
+            )),
+            .pipeline(DebugPipelineLog(
+                base: base(type: .pipeline, start: 2000, end: 2250),
+                sttChars: 16,
+                outputChars: 14,
+                error: nil
+            )),
         ]
 
-        let analysis = analyzer.analyze(events: events)
+        let analysis = analyzer.analyze(logs: logs)
 
         XCTAssertEqual(analysis.sttInfo.providerName, "Whisper (OpenAI)")
         XCTAssertEqual(analysis.sttInfo.routeName, "REST")
-        XCTAssertEqual(analysis.timings.recordingMs, 1000)
-        XCTAssertEqual(analysis.timings.sttMs, 120)
-        XCTAssertEqual(analysis.timings.postProcessMs, 85)
-        XCTAssertEqual(analysis.timings.pipelineMs, 250)
+        XCTAssertEqual(analysis.timings.recordingMs ?? 0, 1000, accuracy: 0.001)
+        XCTAssertEqual(analysis.timings.sttMs ?? 0, 120, accuracy: 0.001)
+        XCTAssertEqual(analysis.timings.postProcessMs ?? 0, 85, accuracy: 0.001)
+        XCTAssertEqual(analysis.timings.directInputMs ?? 0, 10, accuracy: 0.001)
+        XCTAssertEqual(analysis.timings.pipelineMs ?? 0, 250, accuracy: 0.001)
+        XCTAssertEqual(analysis.timings.endToEndMs ?? 0, 1250, accuracy: 0.001)
     }
 
     func testAnalyzePrefersContextSummaryTimelineWhenPresent() {
         let analyzer = DebugEventAnalyzer()
-        let events: [DebugRunEvent] = [
-            makeEvent(.contextSummaryStart, fields: [
-                .requestSentAtMs: "5000",
-            ]),
-            makeEvent(.contextSummaryDone, fields: [
-                .durationMs: "180",
-                .requestSentAtMs: "5000",
-                .responseReceivedAtMs: "5180",
-            ]),
-            makeEvent(.visionStart, fields: [
-                .requestSentAtMs: "6000",
-            ]),
-            makeEvent(.visionDone, fields: [
-                .totalMs: "220",
-                .requestSentAtMs: "6000",
-                .responseReceivedAtMs: "6220",
-            ]),
-            makeEvent(.pipelineDone, fields: [
-                .pipelineMs: "300",
-                .endToEndMs: "1500",
-            ]),
+        let logs: [DebugRunLog] = [
+            .contextSummary(DebugContextSummaryLog(
+                base: base(type: .contextSummary, start: 5000, end: 5180),
+                source: "accessibility",
+                appName: "Xcode",
+                sourceChars: 200,
+                summaryChars: 80,
+                termsCount: 5,
+                error: nil
+            )),
+            .vision(DebugVisionLog(
+                base: base(type: .vision, start: 6000, end: 6220),
+                model: "gpt-5-nano",
+                mode: "ocr",
+                contextPresent: true,
+                imageBytes: 100,
+                imageWidth: 100,
+                imageHeight: 80,
+                error: nil
+            )),
+            .pipeline(DebugPipelineLog(
+                base: base(type: .pipeline, start: 5000, end: 5300),
+                sttChars: 0,
+                outputChars: 0,
+                error: nil
+            )),
         ]
 
-        let analysis = analyzer.analyze(events: events)
+        let analysis = analyzer.analyze(logs: logs)
 
-        XCTAssertEqual(analysis.timings.visionTotalMs, 180)
+        XCTAssertEqual(analysis.timings.visionTotalMs ?? 0, 180, accuracy: 0.001)
         XCTAssertTrue(analysis.timeline.phases.contains { $0.id == "context_summary" })
         XCTAssertFalse(analysis.timeline.phases.contains { $0.id == "vision" })
     }
 
-    private func makeEvent(
-        _ name: DebugRunEventName,
-        timestamp: String = "2026-02-10T00:00:00.000Z",
-        fields: [DebugRunEventField: String] = [:]
-    ) -> DebugRunEvent {
-        DebugRunEvent(
-            timestamp: timestamp,
-            event: name.rawValue,
-            fields: Dictionary(uniqueKeysWithValues: fields.map { ($0.key.rawValue, $0.value) })
+    private func makeRecordingLog(start: Int64, end: Int64) -> DebugRunLog {
+        .recording(DebugRecordingLog(
+            base: base(type: .recording, start: start, end: end),
+            mode: "toggle",
+            model: "gpt-5-nano",
+            sttProvider: STTProvider.whisper.rawValue,
+            sttStreaming: false,
+            visionEnabled: true,
+            accessibilitySummaryStarted: true,
+            sampleRate: 16_000,
+            pcmBytes: 40_000
+        ))
+    }
+
+    private func base(type: DebugLogType, start: Int64, end: Int64) -> DebugRunLogBase {
+        DebugRunLogBase(
+            runID: "run-1",
+            captureID: "cap-1",
+            logType: type,
+            eventStartMs: start,
+            eventEndMs: end,
+            recordedAtMs: end + 1,
+            status: .ok
         )
     }
 }

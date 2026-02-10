@@ -171,18 +171,6 @@ public struct AccessibilitySnapshot: Codable, Equatable, Sendable {
     }
 }
 
-public struct DebugRunEvent: Codable, Equatable, Sendable {
-    public let timestamp: String
-    public let event: String
-    public let fields: [String: String]
-
-    public init(timestamp: String, event: String, fields: [String: String]) {
-        self.timestamp = timestamp
-        self.event = event
-        self.fields = fields
-    }
-}
-
 public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let runID: String

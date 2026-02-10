@@ -4,15 +4,23 @@ import WhispCore
 
 private struct RecordingRun {
     let id: String
-    let startedAt: DispatchTime
     let startedAtDate: Date
     let appNameAtStart: String?
-    let recordingStartFields: [String: String]
+    let appPIDAtStart: Int32?
+    let accessibilitySummarySourceAtStart: String?
+    let accessibilitySummaryTask: AccessibilitySummaryTask?
+    let recordingMode: String
+    let model: String
+    let sttProvider: String
+    let sttStreaming: Bool
+    let visionEnabled: Bool
+    let accessibilitySummaryStarted: Bool
 }
 
-private struct PendingCaptureRunEvent {
-    let event: DebugRunEventName
-    let fields: [String: String]
+private struct AccessibilitySummaryTask {
+    let sourceText: String
+    let startedAtDate: Date
+    let task: Task<ContextInfo?, Never>
 }
 
 @MainActor
@@ -45,10 +53,6 @@ final class AppCoordinator {
     private var recorder: AudioRecorder?
     private var processingTask: Task<Void, Never>?
     private var sttStreamingSession: (any STTStreamingSession)?
-    private var pendingAccessibilitySummaryTask: Task<ContextInfo?, Never>?
-    private var pendingAccessibilitySummaryRunID: String?
-    private var captureIDByRunID: [String: String] = [:]
-    private var pendingCaptureEventsByRunID: [String: [PendingCaptureRunEvent]] = [:]
 
     init() throws {
         configStore = try ConfigStore()
@@ -59,7 +63,7 @@ final class AppCoordinator {
         sttService = ProviderSwitchingSTTService()
         contextService = ContextService(
             accessibilityProvider: SystemAccessibilityContextProvider(),
-            visionProvider: ScreenVisionContextProvider(postProcessor: postProcessor)
+            visionProvider: ScreenVisionContextProvider()
         )
         recordingService = SystemRecordingService()
         outputService = DirectInputOutputService()
@@ -73,11 +77,6 @@ final class AppCoordinator {
 
     deinit {
         processingTask?.cancel()
-        pendingAccessibilitySummaryTask?.cancel()
-        pendingAccessibilitySummaryTask = nil
-        pendingAccessibilitySummaryRunID = nil
-        captureIDByRunID.removeAll()
-        pendingCaptureEventsByRunID.removeAll()
         sttStreamingSession = nil
         hotKeyMonitor.unregister()
     }
@@ -165,13 +164,14 @@ final class AppCoordinator {
 
     private func startRecording() {
         let runID = Self.makeRunID()
-        let startedAt: DispatchTime = .now()
         let startedAtDate = Date()
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let appNameAtStart = frontmostApp?.localizedName
-        let accessibilityAtStart = contextService.captureAccessibility(frontmostApp: frontmostApp)
+        let appPIDAtStart = frontmostApp?.processIdentifier
+        var startedSummaryTask: AccessibilitySummaryTask?
         do {
             try validateBeforeRecording()
+            let llmKey = try llmAPIKey(config: config)
 
             let logger = pipelineLogger(runID: runID, captureID: nil)
             let streamingSession = sttService.startStreamingSessionIfNeeded(
@@ -181,37 +181,50 @@ final class AppCoordinator {
                 logger: logger
             )
             sttStreamingSession = streamingSession
-
-            let recordingStartFields: [String: String] = [
-                DebugRunEventField.mode.rawValue: config.recordingMode.rawValue,
-                DebugRunEventField.model.rawValue: config.llmModel.rawValue,
-                DebugRunEventField.sttProvider.rawValue: config.sttProvider.rawValue,
-                "vision_enabled": String(config.context.visionEnabled),
-                DebugRunEventField.sttStreaming.rawValue: String(streamingSession != nil),
-                "log_file": DevLog.filePath ?? "n/a",
-                DebugRunEventField.recordingStartedAtMs.rawValue: epochMsString(startedAtDate),
-            ]
+            let accessibilityAtStart = contextService.captureAccessibility(frontmostApp: frontmostApp)
+            let accessibilitySummarySource = accessibilitySummarySourceText(from: accessibilityAtStart)
+            let accessibilitySummaryTask = startAccessibilitySummaryTask(
+                sourceText: accessibilitySummarySource,
+                model: config.llmModel,
+                apiKey: llmKey,
+                appName: appNameAtStart,
+                runID: runID
+            )
+            startedSummaryTask = accessibilitySummaryTask
             let run = RecordingRun(
                 id: runID,
-                startedAt: startedAt,
                 startedAtDate: startedAtDate,
                 appNameAtStart: appNameAtStart,
-                recordingStartFields: recordingStartFields
+                appPIDAtStart: appPIDAtStart,
+                accessibilitySummarySourceAtStart: normalizeSummarySource(accessibilitySummarySource),
+                accessibilitySummaryTask: accessibilitySummaryTask,
+                recordingMode: config.recordingMode.rawValue,
+                model: config.llmModel.rawValue,
+                sttProvider: config.sttProvider.rawValue,
+                sttStreaming: streamingSession != nil,
+                visionEnabled: config.context.visionEnabled,
+                accessibilitySummaryStarted: accessibilitySummaryTask != nil
             )
             currentRun = run
-            startAccessibilitySummaryTask(run: run, config: config, context: accessibilityAtStart.context)
 
             let recorder = try recordingService.startRecording(onChunk: { [weak streamingSession] chunk in
                 streamingSession?.submit(chunk: chunk)
             })
             self.recorder = recorder
             transition(.startRecording)
-            devLog(.recordingStart, runID: run.id, fields: run.recordingStartFields)
+            devLog("recording_start", runID: run.id, fields: [
+                "mode": run.recordingMode,
+                "model": run.model,
+                "stt_provider": run.sttProvider,
+                "vision_enabled": String(run.visionEnabled),
+                "stt_streaming": String(run.sttStreaming),
+                "accessibility_summary_started": String(run.accessibilitySummaryStarted),
+                "log_file": DevLog.filePath ?? "n/a",
+                "recording_started_at_ms": epochMsString(startedAtDate),
+            ])
             _ = outputService.playStartSound()
         } catch {
-            pendingAccessibilitySummaryTask?.cancel()
-            pendingAccessibilitySummaryTask = nil
-            pendingAccessibilitySummaryRunID = nil
+            (currentRun?.accessibilitySummaryTask ?? startedSummaryTask)?.task.cancel()
             currentRun = nil
             sttStreamingSession = nil
             reportError("録音開始に失敗: \(error.localizedDescription)")
@@ -222,10 +235,17 @@ final class AppCoordinator {
         guard let recorder else { return }
         let run = currentRun ?? RecordingRun(
             id: Self.makeRunID(),
-            startedAt: .now(),
             startedAtDate: Date(),
             appNameAtStart: nil,
-            recordingStartFields: [:]
+            appPIDAtStart: nil,
+            accessibilitySummarySourceAtStart: nil,
+            accessibilitySummaryTask: nil,
+            recordingMode: config.recordingMode.rawValue,
+            model: config.llmModel.rawValue,
+            sttProvider: config.sttProvider.rawValue,
+            sttStreaming: sttStreamingSession != nil,
+            visionEnabled: config.context.visionEnabled,
+            accessibilitySummaryStarted: false
         )
         currentRun = nil
 
@@ -234,17 +254,16 @@ final class AppCoordinator {
         self.recorder = nil
         transition(.stopRecording)
 
-        let recordingMs = elapsedMs(since: run.startedAt)
         let recordingStopFields: [String: String] = [
-            DebugRunEventField.recordingMs.rawValue: msString(recordingMs),
-            DebugRunEventField.pcmBytes.rawValue: String(result.pcmData.count),
-            DebugRunEventField.sampleRate.rawValue: String(result.sampleRate),
-            DebugRunEventField.recordingStoppedAtMs.rawValue: epochMsString(stoppedAtDate),
+            "pcm_bytes": String(result.pcmData.count),
+            "sample_rate": String(result.sampleRate),
+            "recording_stopped_at_ms": epochMsString(stoppedAtDate),
         ]
-        devLog(.recordingStop, runID: run.id, fields: recordingStopFields)
+        devLog("recording_stop", runID: run.id, fields: recordingStopFields)
 
         let frontmostApp = NSWorkspace.shared.frontmostApplication
         let accessibility = contextService.captureAccessibility(frontmostApp: frontmostApp)
+        let accessibilitySummarySourceAtStop = normalizeSummarySource(accessibilitySummarySourceText(from: accessibility))
         let artifacts = debugCaptureService.saveRecording(
             runID: run.id,
             recording: result,
@@ -254,22 +273,25 @@ final class AppCoordinator {
         )
 
         if let captureID = artifacts.captureID {
-            captureIDByRunID[run.id] = captureID
-            flushPendingCaptureEvents(runID: run.id, captureID: captureID)
-            if !run.recordingStartFields.isEmpty {
-                debugCaptureService.appendEvent(
+            let recordingLog = DebugRunLog.recording(DebugRecordingLog(
+                base: makeLogBase(
+                    runID: run.id,
                     captureID: captureID,
-                    event: .recordingStart,
-                    fields: run.recordingStartFields,
-                    timestamp: run.startedAtDate
-                )
-            }
-            debugCaptureService.appendEvent(
-                captureID: captureID,
-                event: .recordingStop,
-                fields: recordingStopFields,
-                timestamp: stoppedAtDate
-            )
+                    logType: .recording,
+                    eventStartMs: epochMs(run.startedAtDate),
+                    eventEndMs: epochMs(stoppedAtDate),
+                    status: .ok
+                ),
+                mode: run.recordingMode,
+                model: run.model,
+                sttProvider: run.sttProvider,
+                sttStreaming: run.sttStreaming,
+                visionEnabled: run.visionEnabled,
+                accessibilitySummaryStarted: run.accessibilitySummaryStarted,
+                sampleRate: result.sampleRate,
+                pcmBytes: result.pcmData.count
+            ))
+            debugCaptureService.appendLog(captureID: captureID, log: recordingLog)
             devLog("debug_capture_saved", runID: run.id, captureID: captureID, fields: [
                 "capture_id": captureID,
                 "capture_dir": artifacts.runDirectory ?? debugCaptureService.capturesDirectoryPath,
@@ -287,7 +309,8 @@ final class AppCoordinator {
                 config: snapshot,
                 run: run,
                 artifacts: artifacts,
-                sttStreamingSession: streamingSession
+                sttStreamingSession: streamingSession,
+                accessibilitySummarySourceAtStop: accessibilitySummarySourceAtStop
             )
         }
     }
@@ -297,22 +320,66 @@ final class AppCoordinator {
         config: Config,
         run: RecordingRun,
         artifacts: DebugRunArtifacts,
-        sttStreamingSession: (any STTStreamingSession)?
+        sttStreamingSession: (any STTStreamingSession)?,
+        accessibilitySummarySourceAtStop: String?
     ) async {
-        let pipelineStartedAt = DispatchTime.now()
+        let pipelineStartedAtDate = Date()
+        let pipelineStartedAtMs = epochMs(pipelineStartedAtDate)
         let captureID = artifacts.captureID
         let debugRunDirectory = artifacts.runDirectory
         let accessibilityContext = artifacts.accessibilityContext
-        let contextSummaryTask = takePendingAccessibilitySummaryTask(for: run.id)
         let logger = pipelineLogger(runID: run.id, captureID: captureID)
+        devLog("pipeline_start", runID: run.id, captureID: captureID, fields: [
+            "request_sent_at_ms": epochMsString(pipelineStartedAtDate),
+        ])
+
+        let shouldApplyAccessibilitySummary = shouldApplyAccessibilitySummary(
+            startSource: run.accessibilitySummarySourceAtStart,
+            stopSource: accessibilitySummarySourceAtStop
+        )
+        let summaryTask = run.accessibilitySummaryTask
+        var contextSummaryLog: DebugRunLog?
+        var accessibilitySummary: ContextInfo?
+        if let summaryTask, !shouldApplyAccessibilitySummary {
+            summaryTask.task.cancel()
+            if let captureID {
+                contextSummaryLog = makeContextSummaryLog(
+                    run: run,
+                    captureID: captureID,
+                    task: summaryTask,
+                    endedAt: Date(),
+                    status: .cancelled,
+                    summary: nil,
+                    error: "source_changed"
+                )
+            }
+        }
 
         var debugSTTText: String?
         var debugOutputText: String?
+        var sttLog: DebugRunLog?
+        var visionLog: DebugRunLog?
+        var postProcessLog: DebugRunLog?
+        var directInputLog: DebugRunLog?
+        var sttChars = 0
+        var outputChars = 0
 
         do {
             guard !result.pcmData.isEmpty else {
-                contextSummaryTask?.cancel()
-                clearRunCaptureState(runID: run.id)
+                if let summaryTask, shouldApplyAccessibilitySummary, contextSummaryLog == nil {
+                    summaryTask.task.cancel()
+                    if let captureID {
+                        contextSummaryLog = makeContextSummaryLog(
+                            run: run,
+                            captureID: captureID,
+                            task: summaryTask,
+                            endedAt: Date(),
+                            status: .cancelled,
+                            summary: nil,
+                            error: "cancelled_empty_audio"
+                        )
+                    }
+                }
                 debugCaptureService.updateResult(
                     captureID: captureID,
                     sttText: nil,
@@ -320,6 +387,23 @@ final class AppCoordinator {
                     status: "skipped_empty_audio"
                 )
                 devLog("pipeline_skip_empty_audio", runID: run.id, captureID: captureID)
+                if let captureID {
+                    appendStructuredLogs(captureID: captureID, logs: [contextSummaryLog])
+                    let cancelledPipeline = DebugRunLog.pipeline(DebugPipelineLog(
+                        base: makeLogBase(
+                            runID: run.id,
+                            captureID: captureID,
+                            logType: .pipeline,
+                            eventStartMs: pipelineStartedAtMs,
+                            eventEndMs: epochMs(),
+                            status: .cancelled
+                        ),
+                        sttChars: 0,
+                        outputChars: 0,
+                        error: nil
+                    ))
+                    debugCaptureService.appendLog(captureID: captureID, log: cancelledPipeline)
+                }
                 transition(.reset)
                 return
             }
@@ -333,12 +417,47 @@ final class AppCoordinator {
                 transition(.startPostProcessing)
                 let wav = buildWAVBytes(sampleRate: UInt32(result.sampleRate), pcmData: result.pcmData)
                 let llmKey = try llmAPIKey(config: config)
-                let summaryContext = await resolveContextSummaryIfReady(task: contextSummaryTask)
-                let context = contextService.compose(accessibility: accessibilityContext, vision: summaryContext)
-                let llmStartedAt = DispatchTime.now()
-                devLog(.audioLLMStart, runID: run.id, captureID: captureID, fields: [
-                    DebugRunEventField.pcmBytes.rawValue: String(result.pcmData.count),
-                    DebugRunEventField.contextPresent.rawValue: String(context != nil),
+                if let summaryTask, shouldApplyAccessibilitySummary, contextSummaryLog == nil {
+                    let summaryResolution = await resolveAccessibilitySummaryIfReady(task: summaryTask.task)
+                    if summaryResolution.ready {
+                        accessibilitySummary = summaryResolution.summary
+                        if let captureID {
+                            let status: DebugLogStatus = accessibilitySummary == nil ? .error : .ok
+                            contextSummaryLog = makeContextSummaryLog(
+                                run: run,
+                                captureID: captureID,
+                                task: summaryTask,
+                                endedAt: Date(),
+                                status: status,
+                                summary: accessibilitySummary,
+                                error: accessibilitySummary == nil ? "summary_unavailable" : nil
+                            )
+                        }
+                    } else {
+                        summaryTask.task.cancel()
+                        if let captureID {
+                            contextSummaryLog = makeContextSummaryLog(
+                                run: run,
+                                captureID: captureID,
+                                task: summaryTask,
+                                endedAt: Date(),
+                                status: .cancelled,
+                                summary: nil,
+                                error: "cancelled_audio_llm_start"
+                            )
+                        }
+                    }
+                }
+                let context = applyAccessibilitySummary(
+                    base: accessibilityContext,
+                    summary: accessibilitySummary
+                )
+                let llmStartedAtDate = Date()
+                let llmStartedAtMs = epochMs(llmStartedAtDate)
+                devLog("audio_llm_start", runID: run.id, captureID: captureID, fields: [
+                    "pcm_bytes": String(result.pcmData.count),
+                    "context_present": String(context != nil),
+                    "request_sent_at_ms": epochMsString(llmStartedAtDate),
                 ])
                 let transcription = try await postProcessor.transcribeAudio(
                     model: config.llmModel,
@@ -349,22 +468,64 @@ final class AppCoordinator {
                     debugRunID: run.id,
                     debugRunDirectory: debugRunDirectory
                 )
-                devLog(.audioLLMDone, runID: run.id, captureID: captureID, fields: [
-                    DebugRunEventField.durationMs.rawValue: msString(elapsedMs(since: llmStartedAt)),
-                    DebugRunEventField.outputChars.rawValue: String(transcription.text.count),
+                let llmResponseAt = Date()
+                let llmResponseAtMs = epochMs(llmResponseAt)
+                devLog("audio_llm_done", runID: run.id, captureID: captureID, fields: [
+                    "output_chars": String(transcription.text.count),
+                    "response_received_at_ms": epochMsString(llmResponseAt),
                 ])
                 processedText = transcription.text
                 sttText = transcription.text
                 llmUsage = transcription.usage
+                sttChars = sttText.count
+                outputChars = processedText.count
+                if let captureID {
+                    postProcessLog = .postprocess(DebugPostProcessLog(
+                        base: makeLogBase(
+                            runID: run.id,
+                            captureID: captureID,
+                            logType: .postprocess,
+                            eventStartMs: llmStartedAtMs,
+                            eventEndMs: llmResponseAtMs,
+                            status: .ok
+                        ),
+                        model: config.llmModel.rawValue,
+                        contextPresent: context != nil,
+                        sttChars: 0,
+                        outputChars: processedText.count,
+                        kind: .audioTranscribe
+                    ))
+                }
             } else {
                 let llmKey = try llmAPIKey(config: config)
+                let visionStartedAtDate = Date()
                 let visionTask = contextService.startVisionCollection(
                     config: config,
                     runID: run.id,
+                    preferredWindowOwnerPID: run.appPIDAtStart,
                     runDirectory: debugRunDirectory,
-                    llmAPIKey: llmKey,
                     logger: logger
                 )
+                if visionTask == nil, let captureID {
+                    let now = Date()
+                    visionLog = .vision(DebugVisionLog(
+                        base: makeLogBase(
+                            runID: run.id,
+                            captureID: captureID,
+                            logType: .vision,
+                            eventStartMs: epochMs(visionStartedAtDate),
+                            eventEndMs: epochMs(now),
+                            status: .cancelled
+                        ),
+                        model: config.llmModel.rawValue,
+                        mode: config.context.visionMode.rawValue,
+                        contextPresent: false,
+                        imageBytes: 0,
+                        imageWidth: 0,
+                        imageHeight: 0,
+                        error: "vision_disabled"
+                    ))
+                }
 
                 let stt = try await sttService.transcribe(
                     config: config,
@@ -377,11 +538,60 @@ final class AppCoordinator {
 
                 sttText = stt.transcript
                 sttUsage = stt.usage
+                sttChars = sttText.count
+                if let captureID {
+                    sttLog = .stt(DebugSTTLog(
+                        base: makeLogBase(
+                            runID: run.id,
+                            captureID: captureID,
+                            logType: .stt,
+                            eventStartMs: stt.trace.mainSpan.eventStartMs,
+                            eventEndMs: stt.trace.mainSpan.eventEndMs,
+                            status: stt.trace.mainSpan.status
+                        ),
+                        provider: stt.trace.provider,
+                        route: stt.trace.route,
+                        source: stt.trace.mainSpan.source,
+                        textChars: stt.trace.mainSpan.textChars,
+                        sampleRate: stt.trace.mainSpan.sampleRate,
+                        audioBytes: stt.trace.mainSpan.audioBytes,
+                        attempts: stt.trace.attempts
+                    ))
+                }
+                if let summaryTask, shouldApplyAccessibilitySummary, contextSummaryLog == nil {
+                    let summaryResolution = await resolveAccessibilitySummaryIfReady(task: summaryTask.task)
+                    if summaryResolution.ready {
+                        accessibilitySummary = summaryResolution.summary
+                        if let captureID {
+                            let status: DebugLogStatus = accessibilitySummary == nil ? .error : .ok
+                            contextSummaryLog = makeContextSummaryLog(
+                                run: run,
+                                captureID: captureID,
+                                task: summaryTask,
+                                endedAt: Date(),
+                                status: status,
+                                summary: accessibilitySummary,
+                                error: accessibilitySummary == nil ? "summary_unavailable" : nil
+                            )
+                        }
+                    } else {
+                        summaryTask.task.cancel()
+                        if let captureID {
+                            contextSummaryLog = makeContextSummaryLog(
+                                run: run,
+                                captureID: captureID,
+                                task: summaryTask,
+                                endedAt: Date(),
+                                status: .cancelled,
+                                summary: nil,
+                                error: "cancelled_stt_done"
+                            )
+                        }
+                    }
+                }
 
                 if isEmptySTT(sttText) {
                     visionTask?.cancel()
-                    contextSummaryTask?.cancel()
-                    clearRunCaptureState(runID: run.id)
                     usageStore.recordUsage(stt: sttUsage, llm: nil)
                     debugSTTText = sttText
                     debugCaptureService.updateResult(
@@ -390,34 +600,88 @@ final class AppCoordinator {
                         outputText: nil,
                         status: "skipped_empty_stt"
                     )
-                    devLog("pipeline_skip_empty_stt", runID: run.id, captureID: captureID, fields: [
-                        "stt_ms": msString(elapsedMs(since: pipelineStartedAt)),
-                    ])
+                    devLog("pipeline_skip_empty_stt", runID: run.id, captureID: captureID)
+                    if let captureID {
+                        if visionTask != nil, visionLog == nil {
+                            let cancelledAt = Date()
+                            visionLog = .vision(DebugVisionLog(
+                                base: makeLogBase(
+                                    runID: run.id,
+                                    captureID: captureID,
+                                    logType: .vision,
+                                    eventStartMs: epochMs(visionStartedAtDate),
+                                    eventEndMs: epochMs(cancelledAt),
+                                    status: .cancelled
+                                ),
+                                model: config.llmModel.rawValue,
+                                mode: config.context.visionMode.rawValue,
+                                contextPresent: false,
+                                imageBytes: 0,
+                                imageWidth: 0,
+                                imageHeight: 0,
+                                error: "cancelled_empty_stt"
+                            ))
+                        }
+                        appendStructuredLogs(captureID: captureID, logs: [contextSummaryLog, sttLog, visionLog])
+                        let cancelledPipeline = DebugRunLog.pipeline(DebugPipelineLog(
+                            base: makeLogBase(
+                                runID: run.id,
+                                captureID: captureID,
+                                logType: .pipeline,
+                                eventStartMs: pipelineStartedAtMs,
+                                eventEndMs: epochMs(),
+                                status: .cancelled
+                            ),
+                            sttChars: sttChars,
+                            outputChars: 0,
+                            error: nil
+                        ))
+                        debugCaptureService.appendLog(captureID: captureID, log: cancelledPipeline)
+                    }
                     transition(.reset)
                     return
                 }
 
                 transition(.startPostProcessing)
                 let appName = run.appNameAtStart ?? NSWorkspace.shared.frontmostApplication?.localizedName
-                let summaryContext = await resolveContextSummaryIfReady(task: contextSummaryTask)
-                if contextSummaryTask != nil, summaryContext == nil {
-                    devLog(.contextSummaryNotReadyContinue, runID: run.id, captureID: captureID, fields: [
-                        "reason": "not_ready",
-                        "prompt_context": "excluded",
-                    ])
-                }
                 let visionResult = await contextService.resolveVisionIfReady(task: visionTask, logger: logger)
                 debugCaptureService.persistVisionArtifacts(captureID: captureID, result: visionResult)
                 if visionResult == nil, let visionTask {
                     persistDeferredVisionArtifacts(task: visionTask, runID: run.id, captureID: captureID)
                 }
-                let context = contextService.compose(accessibility: accessibilityContext, vision: summaryContext)
+                if let captureID, visionLog == nil, let visionResult {
+                    let visionCompletedAt = Date()
+                    visionLog = .vision(DebugVisionLog(
+                        base: makeLogBase(
+                            runID: run.id,
+                            captureID: captureID,
+                            logType: .vision,
+                            eventStartMs: epochMs(visionStartedAtDate),
+                            eventEndMs: epochMs(visionCompletedAt),
+                            status: visionResult.error == nil ? .ok : .error
+                        ),
+                        model: config.llmModel.rawValue,
+                        mode: visionResult.mode,
+                        contextPresent: visionResult.context != nil,
+                        imageBytes: visionResult.imageBytes,
+                        imageWidth: visionResult.imageWidth,
+                        imageHeight: visionResult.imageHeight,
+                        error: visionResult.error
+                    ))
+                }
+                let composedContext = contextService.compose(accessibility: accessibilityContext, vision: visionResult?.context)
+                let context = applyAccessibilitySummary(
+                    base: composedContext,
+                    summary: accessibilitySummary
+                )
 
-                let llmStartedAt = DispatchTime.now()
-                devLog(.postprocessStart, runID: run.id, captureID: captureID, fields: [
-                    DebugRunEventField.model.rawValue: config.llmModel.rawValue,
-                    DebugRunEventField.contextPresent.rawValue: String(context != nil),
+                let llmStartedAtDate = Date()
+                let llmStartedAtMs = epochMs(llmStartedAtDate)
+                devLog("postprocess_start", runID: run.id, captureID: captureID, fields: [
+                    "model": config.llmModel.rawValue,
+                    "context_present": String(context != nil),
                     "stt_chars": String(sttText.count),
+                    "request_sent_at_ms": epochMsString(llmStartedAtDate),
                 ])
                 let postProcessed = try await postProcessor.postProcess(
                     model: config.llmModel,
@@ -430,13 +694,33 @@ final class AppCoordinator {
                     debugRunID: run.id,
                     debugRunDirectory: debugRunDirectory
                 )
-                devLog(.postprocessDone, runID: run.id, captureID: captureID, fields: [
-                    DebugRunEventField.durationMs.rawValue: msString(elapsedMs(since: llmStartedAt)),
-                    DebugRunEventField.outputChars.rawValue: String(postProcessed.text.count),
+                let llmResponseAt = Date()
+                let llmResponseAtMs = epochMs(llmResponseAt)
+                devLog("postprocess_done", runID: run.id, captureID: captureID, fields: [
+                    "output_chars": String(postProcessed.text.count),
+                    "response_received_at_ms": epochMsString(llmResponseAt),
                 ])
 
                 processedText = postProcessed.text
                 llmUsage = postProcessed.usage
+                outputChars = processedText.count
+                if let captureID {
+                    postProcessLog = .postprocess(DebugPostProcessLog(
+                        base: makeLogBase(
+                            runID: run.id,
+                            captureID: captureID,
+                            logType: .postprocess,
+                            eventStartMs: llmStartedAtMs,
+                            eventEndMs: llmResponseAtMs,
+                            status: .ok
+                        ),
+                        model: config.llmModel.rawValue,
+                        contextPresent: context != nil,
+                        sttChars: sttText.count,
+                        outputChars: postProcessed.text.count,
+                        kind: .textPostprocess
+                    ))
+                }
             }
 
             debugSTTText = sttText
@@ -444,7 +728,6 @@ final class AppCoordinator {
             usageStore.recordUsage(stt: sttUsage, llm: llmUsage)
 
             if isEmptySTT(processedText) {
-                clearRunCaptureState(runID: run.id)
                 debugCaptureService.updateResult(
                     captureID: captureID,
                     sttText: debugSTTText,
@@ -452,18 +735,55 @@ final class AppCoordinator {
                     status: "skipped_empty_output"
                 )
                 devLog("pipeline_skip_empty_output", runID: run.id, captureID: captureID)
+                if let captureID {
+                    appendStructuredLogs(captureID: captureID, logs: [contextSummaryLog, sttLog, visionLog, postProcessLog])
+                    let cancelledPipeline = DebugRunLog.pipeline(DebugPipelineLog(
+                        base: makeLogBase(
+                            runID: run.id,
+                            captureID: captureID,
+                            logType: .pipeline,
+                            eventStartMs: pipelineStartedAtMs,
+                            eventEndMs: epochMs(),
+                            status: .cancelled
+                        ),
+                        sttChars: sttChars,
+                        outputChars: outputChars,
+                        error: nil
+                    ))
+                    debugCaptureService.appendLog(captureID: captureID, log: cancelledPipeline)
+                }
                 transition(.reset)
                 return
             }
 
             transition(.startDirectInput)
-            let inputStartedAt = DispatchTime.now()
-            let directInputOK = outputService.sendText(processedText)
-            devLog(.directInputDone, runID: run.id, captureID: captureID, fields: [
-                DebugRunEventField.durationMs.rawValue: msString(elapsedMs(since: inputStartedAt)),
-                "success": String(directInputOK),
-                DebugRunEventField.outputChars.rawValue: String(processedText.count),
+            let inputStartedAtDate = Date()
+            let inputStartedAtMs = epochMs(inputStartedAtDate)
+            devLog("direct_input_start", runID: run.id, captureID: captureID, fields: [
+                "request_sent_at_ms": epochMsString(inputStartedAtDate),
             ])
+            let directInputOK = outputService.sendText(processedText)
+            let inputDoneAtDate = Date()
+            let inputDoneAtMs = epochMs(inputDoneAtDate)
+            devLog("direct_input_done", runID: run.id, captureID: captureID, fields: [
+                "success": String(directInputOK),
+                "output_chars": String(processedText.count),
+                "response_received_at_ms": epochMsString(inputDoneAtDate),
+            ])
+            if let captureID {
+                directInputLog = .directInput(DebugDirectInputLog(
+                    base: makeLogBase(
+                        runID: run.id,
+                        captureID: captureID,
+                        logType: .directInput,
+                        eventStartMs: inputStartedAtMs,
+                        eventEndMs: inputDoneAtMs,
+                        status: directInputOK ? .ok : .error
+                    ),
+                    success: directInputOK,
+                    outputChars: processedText.count
+                ))
+            }
             debugCaptureService.updateResult(
                 captureID: captureID,
                 sttText: debugSTTText,
@@ -480,19 +800,46 @@ final class AppCoordinator {
             try? await Task.sleep(nanoseconds: 100_000_000)
             transition(.reset)
 
-            let pipelineMs = elapsedMs(since: pipelineStartedAt)
-            let endToEndMs = elapsedMs(since: run.startedAt)
-            devLog(.pipelineDone, runID: run.id, captureID: captureID, fields: [
-                DebugRunEventField.pipelineMs.rawValue: msString(pipelineMs),
-                DebugRunEventField.endToEndMs.rawValue: msString(endToEndMs),
+            let pipelineDoneAtDate = Date()
+            let pipelineDoneAtMs = epochMs(pipelineDoneAtDate)
+            devLog("pipeline_done", runID: run.id, captureID: captureID, fields: [
                 "stt_chars": String(sttText.count),
-                DebugRunEventField.outputChars.rawValue: String(processedText.count),
+                "output_chars": String(processedText.count),
+                "response_received_at_ms": epochMsString(pipelineDoneAtDate),
             ])
-            clearRunCaptureState(runID: run.id)
+            if let captureID {
+                appendStructuredLogs(captureID: captureID, logs: [contextSummaryLog, sttLog, visionLog, postProcessLog, directInputLog])
+                let pipelineLog = DebugRunLog.pipeline(DebugPipelineLog(
+                    base: makeLogBase(
+                        runID: run.id,
+                        captureID: captureID,
+                        logType: .pipeline,
+                        eventStartMs: pipelineStartedAtMs,
+                        eventEndMs: pipelineDoneAtMs,
+                        status: directInputOK ? .ok : .error
+                    ),
+                    sttChars: sttChars,
+                    outputChars: outputChars,
+                    error: directInputOK ? nil : "direct_input_failed"
+                ))
+                debugCaptureService.appendLog(captureID: captureID, log: pipelineLog)
+            }
             print("[pipeline] stt chars=\(sttText.count), output chars=\(processedText.count)")
         } catch {
-            contextSummaryTask?.cancel()
-            clearRunCaptureState(runID: run.id)
+            if let summaryTask, shouldApplyAccessibilitySummary, contextSummaryLog == nil {
+                summaryTask.task.cancel()
+                if let captureID {
+                    contextSummaryLog = makeContextSummaryLog(
+                        run: run,
+                        captureID: captureID,
+                        task: summaryTask,
+                        endedAt: Date(),
+                        status: .cancelled,
+                        summary: nil,
+                        error: "cancelled_pipeline_error"
+                    )
+                }
+            }
             debugCaptureService.updateResult(
                 captureID: captureID,
                 sttText: debugSTTText,
@@ -500,10 +847,28 @@ final class AppCoordinator {
                 status: "error",
                 errorMessage: error.localizedDescription
             )
-            devLog(.pipelineError, runID: run.id, captureID: captureID, fields: [
-                DebugRunEventField.error.rawValue: error.localizedDescription,
-                DebugRunEventField.elapsedMs.rawValue: msString(elapsedMs(since: pipelineStartedAt)),
+            let pipelineErrorAt = Date()
+            devLog("pipeline_error", runID: run.id, captureID: captureID, fields: [
+                "error": error.localizedDescription,
+                "response_received_at_ms": epochMsString(pipelineErrorAt),
             ])
+            if let captureID {
+                appendStructuredLogs(captureID: captureID, logs: [contextSummaryLog, sttLog, visionLog, postProcessLog, directInputLog])
+                let pipelineLog = DebugRunLog.pipeline(DebugPipelineLog(
+                    base: makeLogBase(
+                        runID: run.id,
+                        captureID: captureID,
+                        logType: .pipeline,
+                        eventStartMs: pipelineStartedAtMs,
+                        eventEndMs: epochMs(pipelineErrorAt),
+                        status: .error
+                    ),
+                    sttChars: sttChars,
+                    outputChars: outputChars,
+                    error: error.localizedDescription
+                ))
+                debugCaptureService.appendLog(captureID: captureID, log: pipelineLog)
+            }
             reportError("処理に失敗: \(error.localizedDescription)")
             transition(.reset)
         }
@@ -575,169 +940,12 @@ final class AppCoordinator {
         onError?(message)
     }
 
-    private func elapsedMs(since start: DispatchTime, to end: DispatchTime = .now()) -> Double {
-        let nanos = end.uptimeNanoseconds - start.uptimeNanoseconds
-        return Double(nanos) / 1_000_000
-    }
-
-    private func msString(_ value: Double) -> String {
-        String(format: "%.1f", value)
-    }
-
     private func epochMsString(_ date: Date) -> String {
         String(format: "%.3f", date.timeIntervalSince1970 * 1000)
     }
 
-    private func startAccessibilitySummaryTask(run: RecordingRun, config: Config, context: ContextInfo?) {
-        pendingAccessibilitySummaryTask?.cancel()
-        pendingAccessibilitySummaryTask = nil
-        pendingAccessibilitySummaryRunID = nil
-
-        guard config.context.visionEnabled else {
-            devLog(.contextSummaryDisabled, runID: run.id)
-            return
-        }
-
-        guard let sourceText = accessibilitySummarySourceText(context: context) else {
-            devLog(.contextSummarySkippedNoSource, runID: run.id)
-            return
-        }
-
-        let llmKey: String
-        let summaryModel: LLMModel = .gemini25FlashLite
-        llmKey = config.apiKeys.gemini.trimmingCharacters(in: .whitespacesAndNewlines)
-        if llmKey.isEmpty {
-            devLog(.contextSummarySkippedMissingKey, runID: run.id, fields: [
-                DebugRunEventField.error.rawValue: "Gemini APIキーが未設定です",
-            ])
-            return
-        }
-
-        let requestSentAt = Date()
-        logSummaryEvent(.contextSummaryStart, runID: run.id, fields: [
-            DebugRunEventField.model.rawValue: summaryModel.rawValue,
-            "source_chars": String(sourceText.count),
-            DebugRunEventField.requestSentAtMs.rawValue: epochMsString(requestSentAt),
-        ])
-
-        let postProcessor = self.postProcessor
-        let appName = run.appNameAtStart
-        let runID = run.id
-        pendingAccessibilitySummaryRunID = runID
-        pendingAccessibilitySummaryTask = Task {
-            let startedAt = DispatchTime.now()
-            do {
-                let summaryContext = try await postProcessor.summarizeAccessibilityContext(
-                    model: summaryModel,
-                    apiKey: llmKey,
-                    appName: appName,
-                    sourceText: sourceText,
-                    debugRunID: runID,
-                    debugRunDirectory: nil
-                )
-                let responseReceivedAt = Date()
-                await MainActor.run {
-                    self.logSummaryEvent(.contextSummaryDone, runID: runID, fields: [
-                        DebugRunEventField.durationMs.rawValue: self.msString(self.elapsedMs(since: startedAt)),
-                        DebugRunEventField.requestSentAtMs.rawValue: self.epochMsString(requestSentAt),
-                        DebugRunEventField.responseReceivedAtMs.rawValue: self.epochMsString(responseReceivedAt),
-                        "summary_chars": String(summaryContext?.visionSummary?.count ?? 0),
-                        "terms_count": String(summaryContext?.visionTerms.count ?? 0),
-                    ])
-                }
-                return summaryContext
-            } catch {
-                let responseReceivedAt = Date()
-                await MainActor.run {
-                    self.logSummaryEvent(.contextSummaryFailed, runID: runID, fields: [
-                        DebugRunEventField.durationMs.rawValue: self.msString(self.elapsedMs(since: startedAt)),
-                        DebugRunEventField.requestSentAtMs.rawValue: self.epochMsString(requestSentAt),
-                        DebugRunEventField.responseReceivedAtMs.rawValue: self.epochMsString(responseReceivedAt),
-                        DebugRunEventField.error.rawValue: error.localizedDescription,
-                    ])
-                }
-                return nil
-            }
-        }
-    }
-
-    private func takePendingAccessibilitySummaryTask(for runID: String) -> Task<ContextInfo?, Never>? {
-        guard pendingAccessibilitySummaryRunID == runID else {
-            return nil
-        }
-        let task = pendingAccessibilitySummaryTask
-        pendingAccessibilitySummaryTask = nil
-        pendingAccessibilitySummaryRunID = nil
-        return task
-    }
-
-    private func resolveContextSummaryIfReady(task: Task<ContextInfo?, Never>?) async -> ContextInfo? {
-        guard let task else {
-            return nil
-        }
-        return await withTaskGroup(of: ContextInfo?.self, returning: ContextInfo?.self) { group in
-            group.addTask {
-                await task.value
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 1_000_000)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first
-        }
-    }
-
-    private func accessibilitySummarySourceText(context: ContextInfo?) -> String? {
-        guard let context else { return nil }
-        var blocks: [String] = []
-
-        if let windowText = context.windowText?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !windowText.isEmpty
-        {
-            blocks.append("本文:\n\(windowText)")
-        }
-        if let focusedText = context.accessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !focusedText.isEmpty
-        {
-            blocks.append("選択またはカーソル周辺:\n\(focusedText)")
-        }
-
-        guard !blocks.isEmpty else {
-            return nil
-        }
-        return String(blocks.joined(separator: "\n\n").prefix(4000))
-    }
-
-    private func logSummaryEvent(_ event: DebugRunEventName, runID: String, fields: [String: String]) {
-        devLog(event, runID: runID, fields: fields)
-        var payload = fields
-        payload["run"] = runID
-        if let captureID = captureIDByRunID[runID] {
-            debugCaptureService.appendEvent(captureID: captureID, event: event, fields: payload)
-            return
-        }
-        guard pendingAccessibilitySummaryRunID == runID else {
-            return
-        }
-        pendingCaptureEventsByRunID[runID, default: []].append(
-            PendingCaptureRunEvent(event: event, fields: payload)
-        )
-    }
-
-    private func flushPendingCaptureEvents(runID: String, captureID: String) {
-        guard let events = pendingCaptureEventsByRunID.removeValue(forKey: runID) else {
-            return
-        }
-        for item in events {
-            debugCaptureService.appendEvent(captureID: captureID, event: item.event, fields: item.fields)
-        }
-    }
-
-    private func clearRunCaptureState(runID: String) {
-        captureIDByRunID.removeValue(forKey: runID)
-        pendingCaptureEventsByRunID.removeValue(forKey: runID)
+    private func epochMs(_ date: Date = Date()) -> Int64 {
+        Int64((date.timeIntervalSince1970 * 1000).rounded())
     }
 
     private func pipelineLogger(runID: String, captureID: String?) -> PipelineEventLogger {
@@ -745,6 +953,162 @@ final class AppCoordinator {
             Task { @MainActor in
                 self?.devLog(event, runID: runID, captureID: captureID, fields: fields)
             }
+        }
+    }
+
+    private func startAccessibilitySummaryTask(
+        sourceText: String?,
+        model: LLMModel,
+        apiKey: String,
+        appName: String?,
+        runID: String
+    ) -> AccessibilitySummaryTask? {
+        guard let sourceText = sourceText?.trimmingCharacters(in: .whitespacesAndNewlines), !sourceText.isEmpty else {
+            return nil
+        }
+
+        let startedAtDate = Date()
+        let postProcessor = postProcessor
+        let task = Task {
+            do {
+                return try await postProcessor.summarizeAccessibilityContext(
+                    model: model,
+                    apiKey: apiKey,
+                    appName: appName,
+                    sourceText: sourceText,
+                    debugRunID: runID,
+                    debugRunDirectory: nil
+                )
+            } catch {
+                return nil
+            }
+        }
+        return AccessibilitySummaryTask(
+            sourceText: sourceText,
+            startedAtDate: startedAtDate,
+            task: task
+        )
+    }
+
+    private func accessibilitySummarySourceText(from capture: AccessibilityContextCapture?) -> String? {
+        if let text = capture?.snapshot.windowText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            return String(text.suffix(1000))
+        }
+        if let text = capture?.context?.windowText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            return String(text.suffix(1000))
+        }
+        return nil
+    }
+
+    private func normalizeSummarySource(_ source: String?) -> String? {
+        guard let source else { return nil }
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.replacingOccurrences(
+            of: #"\s+"#,
+            with: " ",
+            options: .regularExpression
+        )
+    }
+
+    private func shouldApplyAccessibilitySummary(startSource: String?, stopSource: String?) -> Bool {
+        guard let startSource, let stopSource else { return false }
+        return startSource == stopSource
+    }
+
+    private func applyAccessibilitySummary(base: ContextInfo?, summary: ContextInfo?) -> ContextInfo? {
+        guard let summary else { return base }
+        let summaryText = summary.visionSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summaryTerms = summary.visionTerms
+
+        if var merged = base {
+            if let summaryText, !summaryText.isEmpty {
+                let existing = merged.visionSummary?.trimmingCharacters(in: .whitespacesAndNewlines)
+                merged.visionSummary = mergeSummaryTexts(existing, summaryText)
+            }
+            if !summaryTerms.isEmpty {
+                merged.visionTerms = mergeTerms(merged.visionTerms, summaryTerms)
+            }
+            return merged
+        }
+
+        guard (summaryText?.isEmpty == false) || !summaryTerms.isEmpty else {
+            return nil
+        }
+        return ContextInfo(
+            visionSummary: summaryText,
+            visionTerms: summaryTerms
+        )
+    }
+
+    private func mergeSummaryTexts(_ base: String?, _ addition: String) -> String {
+        guard let base = base, !base.isEmpty else { return addition }
+        if base == addition {
+            return base
+        }
+        return "\(base) / \(addition)"
+    }
+
+    private func mergeTerms(_ base: [String], _ addition: [String]) -> [String] {
+        var seen = Set(base)
+        var merged = base
+        for term in addition where !term.isEmpty {
+            if seen.insert(term).inserted {
+                merged.append(term)
+            }
+        }
+        return merged
+    }
+
+    private func devLog(_ event: String, runID: String, captureID: String? = nil, fields: [String: String] = [:]) {
+        var payload = fields
+        payload["run"] = runID
+        if let captureID, !captureID.isEmpty {
+            payload["capture_id"] = captureID
+        }
+        DevLog.info(event, fields: payload)
+        SystemLog.app(event, fields: payload)
+    }
+
+    private func makeContextSummaryLog(
+        run: RecordingRun,
+        captureID: String,
+        task: AccessibilitySummaryTask,
+        endedAt: Date,
+        status: DebugLogStatus,
+        summary: ContextInfo?,
+        error: String?
+    ) -> DebugRunLog {
+        .contextSummary(DebugContextSummaryLog(
+            base: makeLogBase(
+                runID: run.id,
+                captureID: captureID,
+                logType: .contextSummary,
+                eventStartMs: epochMs(task.startedAtDate),
+                eventEndMs: epochMs(endedAt),
+                status: status
+            ),
+            source: "accessibility",
+            appName: run.appNameAtStart,
+            sourceChars: task.sourceText.count,
+            summaryChars: summary?.visionSummary?.count ?? 0,
+            termsCount: summary?.visionTerms.count ?? 0,
+            error: error
+        ))
+    }
+
+    private func resolveAccessibilitySummaryIfReady(task: Task<ContextInfo?, Never>) async -> (ready: Bool, summary: ContextInfo?) {
+        await withTaskGroup(of: (Bool, ContextInfo?).self, returning: (Bool, ContextInfo?).self) { group in
+            group.addTask {
+                (true, await task.value)
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 1_000_000)
+                return (false, nil)
+            }
+            let first = await group.next() ?? (false, nil)
+            group.cancelAll()
+            return first
         }
     }
 
@@ -758,25 +1122,36 @@ final class AppCoordinator {
             let result = await task.value
             self.debugCaptureService.persistVisionArtifacts(captureID: captureID, result: result)
             self.devLog("vision_artifacts_saved_deferred", runID: runID, captureID: captureID, fields: [
-                "mode": result.mode,
-                "image_saved": String(result.imageData?.isEmpty == false),
-                "image_bytes": String(result.imageBytes),
                 "context_present": String(result.context != nil),
+                "mode": result.mode,
                 "error": result.error ?? "none",
             ])
         }
     }
 
-    private func devLog(_ event: DebugRunEventName, runID: String, captureID: String? = nil, fields: [String: String] = [:]) {
-        devLog(event.rawValue, runID: runID, captureID: captureID, fields: fields)
+    private func makeLogBase(
+        runID: String,
+        captureID: String?,
+        logType: DebugLogType,
+        eventStartMs: Int64,
+        eventEndMs: Int64,
+        status: DebugLogStatus
+    ) -> DebugRunLogBase {
+        DebugRunLogBase(
+            runID: runID,
+            captureID: captureID,
+            logType: logType,
+            eventStartMs: eventStartMs,
+            eventEndMs: eventEndMs,
+            recordedAtMs: epochMs(),
+            status: status
+        )
     }
 
-    private func devLog(_ event: String, runID: String, captureID: String? = nil, fields: [String: String] = [:]) {
-        var payload = fields
-        payload["run"] = runID
-        DevLog.info(event, fields: payload)
-        SystemLog.app(event, fields: payload)
-        debugCaptureService.appendEvent(captureID: captureID, event: event, fields: payload)
+    private func appendStructuredLogs(captureID: String, logs: [DebugRunLog?]) {
+        for log in logs.compactMap({ $0 }) {
+            debugCaptureService.appendLog(captureID: captureID, log: log)
+        }
     }
 
     private static func makeRunID() -> String {

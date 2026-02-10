@@ -46,6 +46,43 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: details.record.runDirectoryPath))
     }
 
+    func testAppendLogWritesStructuredJSONL() throws {
+        let home = tempHome()
+        let store = makeStore(home: home)
+        let captureID = try store.saveRecording(
+            runID: "run-log",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 0, count: 640),
+            llmModel: "gpt-5-nano",
+            appName: "Xcode"
+        )
+
+        let log = DebugRunLog.pipeline(DebugPipelineLog(
+            base: DebugRunLogBase(
+                runID: "run-log",
+                captureID: captureID,
+                logType: .pipeline,
+                eventStartMs: 1_000,
+                eventEndMs: 1_280,
+                recordedAtMs: 1_300,
+                status: .ok
+            ),
+            sttChars: 20,
+            outputChars: 18,
+            error: nil
+        ))
+        try store.appendLog(captureID: captureID, log: log)
+
+        let details = try XCTUnwrap(store.loadDetails(captureID: captureID))
+        let text = try String(contentsOfFile: details.record.eventsFilePath, encoding: .utf8)
+        let lines = text.split(whereSeparator: \.isNewline)
+        XCTAssertEqual(lines.count, 1)
+
+        let data = try XCTUnwrap(lines.first?.data(using: .utf8))
+        let decoded = try JSONDecoder().decode(DebugRunLog.self, from: data)
+        XCTAssertEqual(decoded, log)
+    }
+
     func testLoadDetailsIncludesPromptTraceForSameRunID() throws {
         let home = tempHome()
         let store = makeStore(home: home)
