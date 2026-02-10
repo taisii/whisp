@@ -106,7 +106,7 @@ struct SettingsView: View {
 
     private func visionModeLabel(_ mode: VisionContextMode) -> String {
         switch mode {
-        case .llm:
+        case .saveOnly:
             return "保存のみ（解析なし）"
         case .ocr:
             return "OCR抽出"

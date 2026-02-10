@@ -4,16 +4,6 @@ import WhispCore
 final class PostProcessorService: @unchecked Sendable {
     private let providers: [any LLMAPIProvider]
 
-    private let visionContextPrompt = """
-    スクリーンショットを解析し、音声整形用のコンテキストをJSONのみで返してください。
-    形式: {"summary":"...","terms":["..."]}
-    ルール:
-    - summary は1文で簡潔
-    - terms は専門用語・固有名詞を最大10個
-    - 情報がなければ summary は空文字、terms は空配列
-    - JSON以外は出力しない
-    """
-
     private let accessibilitySummaryPromptHeader = """
     次のアプリ本文を、音声整形に使うコンテキストとして要約してください。出力はJSONのみ。
     形式: {"summary":"...","terms":["..."]}
@@ -116,46 +106,6 @@ final class PostProcessorService: @unchecked Sendable {
             wavData: wavData,
             mimeType: mimeType
         )
-    }
-
-    func analyzeVisionContext(
-        model: LLMModel,
-        apiKey: String,
-        imageData: Data,
-        mimeType: String = "image/png",
-        debugRunID: String? = nil,
-        debugRunDirectory: String? = nil
-    ) async throws -> ContextInfo? {
-        var extra: [String: String] = [
-            "mime_type": mimeType,
-            "image_bytes": String(imageData.count),
-        ]
-        if let debugRunID, !debugRunID.isEmpty {
-            extra["run_id"] = debugRunID
-        }
-        if let debugRunDirectory, !debugRunDirectory.isEmpty {
-            extra["run_dir"] = debugRunDirectory
-        }
-
-        PromptTrace.dump(
-            stage: "vision_context",
-            model: model.rawValue,
-            appName: nil,
-            context: nil,
-            prompt: visionContextPrompt,
-            extra: extra
-        )
-
-        let vision = try await resolveProvider(model: model).analyzeVisionContext(
-            apiKey: apiKey,
-            model: model,
-            prompt: visionContextPrompt,
-            imageData: imageData,
-            mimeType: mimeType
-        )
-
-        guard let vision else { return nil }
-        return ContextInfo(visionSummary: vision.summary, visionTerms: vision.terms)
     }
 
     func summarizeAccessibilityContext(

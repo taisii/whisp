@@ -36,7 +36,13 @@ final class AppleSpeechClient: @unchecked Sendable {
         do {
             let transcript = try await recognizeTranscript(request: request, recognizer: recognizer)
             let duration = audio.isEmpty ? 0 : Double(audio.count) / Double(normalizedSampleRate * MemoryLayout<Int16>.size)
-            let usage = duration > 0 ? STTUsage(durationSeconds: duration, requestID: nil) : nil
+            let usage = duration > 0
+                ? STTUsage(
+                    durationSeconds: duration,
+                    requestID: nil,
+                    provider: STTProvider.appleSpeech.rawValue
+                )
+                : nil
             return (transcript.trimmingCharacters(in: .whitespacesAndNewlines), usage)
         } catch let error as AppError {
             throw error

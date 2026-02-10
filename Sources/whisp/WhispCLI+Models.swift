@@ -497,43 +497,6 @@ struct GeminiTextRequest: Encodable {
     let contents: [GeminiTextContent]
 }
 
-struct GeminiVisionInlineData: Encodable {
-    let mimeType: String
-    let data: String
-
-    enum CodingKeys: String, CodingKey {
-        case mimeType = "mime_type"
-        case data
-    }
-}
-
-struct GeminiVisionPart: Encodable {
-    let text: String?
-    let inlineData: GeminiVisionInlineData?
-
-    enum CodingKeys: String, CodingKey {
-        case text
-        case inlineData = "inline_data"
-    }
-
-    static func text(_ value: String) -> GeminiVisionPart {
-        GeminiVisionPart(text: value, inlineData: nil)
-    }
-
-    static func inline(mimeType: String, data: String) -> GeminiVisionPart {
-        GeminiVisionPart(text: nil, inlineData: GeminiVisionInlineData(mimeType: mimeType, data: data))
-    }
-}
-
-struct GeminiVisionContent: Encodable {
-    let role: String
-    let parts: [GeminiVisionPart]
-}
-
-struct GeminiVisionRequest: Encodable {
-    let contents: [GeminiVisionContent]
-}
-
 struct OpenAITextMessage: Encodable {
     let role: String
     let content: String

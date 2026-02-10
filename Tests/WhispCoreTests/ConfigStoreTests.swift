@@ -29,16 +29,17 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(loaded, config)
     }
 
-    func testLoadOrCreateCreatesDefault() throws {
+    func testEnsureExistsCreatesDefaultWhenMissing() throws {
         let path = tempFile("config.json")
         let store = try ConfigStore(path: path)
-        let config = try store.loadOrCreate()
+        try store.ensureExists(default: Config())
+        let loaded = try store.load()
 
-        XCTAssertEqual(config, Config())
+        XCTAssertEqual(loaded, Config())
         XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
     }
 
-    func testLoadLegacyConfigDefaultsSTTProvider() throws {
+    func testStrictDecodeRejectsMissingSTTProvider() throws {
         let path = tempFile("config.json")
         let json = """
         {
@@ -61,13 +62,10 @@ final class ConfigStoreTests: XCTestCase {
         try data.write(to: path)
 
         let store = try ConfigStore(path: path)
-        let loaded = try store.load()
-
-        XCTAssertEqual(loaded.sttProvider, .deepgram)
-        XCTAssertEqual(loaded.context.visionMode, .llm)
+        XCTAssertThrowsError(try store.load())
     }
 
-    func testLoadContextWithoutVisionModeDefaultsLLM() throws {
+    func testStrictDecodeRejectsMissingVisionMode() throws {
         let path = tempFile("config.json")
         let json = """
         {
@@ -94,9 +92,6 @@ final class ConfigStoreTests: XCTestCase {
         try data.write(to: path)
 
         let store = try ConfigStore(path: path)
-        let loaded = try store.load()
-
-        XCTAssertEqual(loaded.context.visionEnabled, true)
-        XCTAssertEqual(loaded.context.visionMode, .llm)
+        XCTAssertThrowsError(try store.load())
     }
 }

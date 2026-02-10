@@ -42,17 +42,9 @@ public enum PromptTrace {
         if let raw, !raw.isEmpty {
             return raw
         }
-
-        let home = (environment["HOME"] ?? NSTemporaryDirectory())
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = home.isEmpty ? NSTemporaryDirectory() : home
-        return URL(fileURLWithPath: base, isDirectory: true)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("whisp", isDirectory: true)
-            .appendingPathComponent("debug", isDirectory: true)
-            .appendingPathComponent("runs", isDirectory: true)
-            .appendingPathComponent("_default", isDirectory: true)
-            .appendingPathComponent("prompts", isDirectory: true)
+        return (try? WhispPaths(environment: environment, allowTemporaryFallback: true).promptDefaultDirectory.path)
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("whisp-prompts", isDirectory: true)
             .path
     }
 

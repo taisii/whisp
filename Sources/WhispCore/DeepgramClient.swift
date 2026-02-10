@@ -79,7 +79,11 @@ public actor DeepgramClient {
 
         let usage: STTUsage?
         if let duration = decoded.metadata?.duration, duration > 0 {
-            usage = STTUsage(durationSeconds: duration, requestID: decoded.metadata?.requestID)
+            usage = STTUsage(
+                durationSeconds: duration,
+                requestID: decoded.metadata?.requestID,
+                provider: STTProvider.deepgram.rawValue
+            )
         } else {
             usage = nil
         }

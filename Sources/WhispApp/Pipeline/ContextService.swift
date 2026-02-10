@@ -16,7 +16,6 @@ protocol AccessibilityContextProvider: Sendable {
 protocol VisionContextProvider: Sendable {
     func collect(
         mode: VisionContextMode,
-        model: LLMModel,
         runID: String,
         preferredWindowOwnerPID: Int32?,
         runDirectory: String?,
@@ -28,8 +27,6 @@ protocol VisionContextAnalyzer: Sendable {
     var mode: VisionContextMode { get }
     func analyze(
         image: CapturedImage,
-        model: LLMModel,
-        apiKey: String?,
         runID: String,
         runDirectory: String?,
         logger: @escaping PipelineEventLogger
@@ -61,7 +58,6 @@ final class ScreenVisionContextProvider: VisionContextProvider, @unchecked Senda
 
     func collect(
         mode: VisionContextMode,
-        model: LLMModel,
         runID: String,
         preferredWindowOwnerPID: Int32?,
         runDirectory: String?,
@@ -90,7 +86,7 @@ final class ScreenVisionContextProvider: VisionContextProvider, @unchecked Senda
         }
 
         let captureMs = elapsedMs(since: captureStartedAt)
-        if mode == .llm {
+        if mode == .saveOnly {
             return VisionContextCollectionResult(
                 context: nil,
                 captureMs: captureMs,
@@ -125,8 +121,6 @@ final class ScreenVisionContextProvider: VisionContextProvider, @unchecked Senda
         let analyzeStartedAt = DispatchTime.now()
         let context = await analyzer.analyze(
             image: image,
-            model: model,
-            apiKey: nil,
             runID: runID,
             runDirectory: runDirectory,
             logger: logger
@@ -159,10 +153,8 @@ struct OCRVisionContextAnalyzer: VisionContextAnalyzer {
 
     func analyze(
         image: CapturedImage,
-        model: LLMModel,
-        apiKey: String?,
-        runID: String,
-        runDirectory: String?,
+        runID _: String,
+        runDirectory _: String?,
         logger: @escaping PipelineEventLogger
     ) async -> ContextInfo? {
         guard let source = CGImageSourceCreateWithData(image.data as CFData, nil),
@@ -327,18 +319,15 @@ final class ContextService: @unchecked Sendable {
         }
 
         let mode = config.context.visionMode
-        let model = config.llmModel
         let visionProvider = self.visionProvider
         let requestSentAt = Date()
         logger("vision_start", [
-            "model": model.rawValue,
             "mode": mode.rawValue,
             "request_sent_at_ms": epochMsString(requestSentAt),
         ])
         return Task {
             await visionProvider.collect(
                 mode: mode,
-                model: model,
                 runID: runID,
                 preferredWindowOwnerPID: preferredWindowOwnerPID,
                 runDirectory: runDirectory,
@@ -382,20 +371,7 @@ final class ContextService: @unchecked Sendable {
     private func resolveVisionTaskIfReady(
         task: Task<VisionContextCollectionResult, Never>
     ) async -> (ready: Bool, result: VisionContextCollectionResult?) {
-        await withTaskGroup(
-            of: (Bool, VisionContextCollectionResult?).self,
-            returning: (Bool, VisionContextCollectionResult?).self
-        ) { group in
-            group.addTask {
-                (true, await task.value)
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 1_000_000)
-                return (false, nil)
-            }
-            let first = await group.next() ?? (false, nil)
-            group.cancelAll()
-            return first
-        }
+        let resolution = await TaskReadiness.awaitIfReady(task: task)
+        return (resolution.ready, resolution.value)
     }
 }

@@ -80,6 +80,9 @@ final class DebugCaptureService: @unchecked Sendable {
         sttText: String?,
         outputText: String?,
         status: String,
+        skipReason: String? = nil,
+        failureStage: String? = nil,
+        metrics: DebugRunMetrics? = nil,
         errorMessage: String? = nil
     ) {
         guard let captureID else { return }
@@ -89,6 +92,9 @@ final class DebugCaptureService: @unchecked Sendable {
                 sttText: sttText,
                 outputText: outputText,
                 status: status,
+                skipReason: skipReason,
+                failureStage: failureStage,
+                metrics: metrics,
                 errorMessage: errorMessage
             )
         } catch {

@@ -23,13 +23,7 @@ public final class UsageStore {
         if let path {
             self.path = path
         } else {
-            guard let home = environment["HOME"] else {
-                throw AppError.configDirMissing
-            }
-            self.path = URL(fileURLWithPath: home)
-                .appendingPathComponent(".config", isDirectory: true)
-                .appendingPathComponent("whisp", isDirectory: true)
-                .appendingPathComponent("usage.json", isDirectory: false)
+            self.path = try WhispPaths(environment: environment).usageFile
         }
 
         self.calendar = calendar
@@ -81,31 +75,41 @@ public final class UsageStore {
 
     private func applyUsage(day: inout DailyUsage, stt: STTUsage?, llm: LLMUsage?) {
         if let stt {
-            day.deepgramSeconds += stt.durationSeconds
-            day.deepgramRequests += 1
+            let provider = normalizedProvider(stt.provider)
+            var current = day.stt[provider] ?? STTProviderUsage()
+            current.durationSeconds += stt.durationSeconds
+            current.requests += 1
+            day.stt[provider] = current
         }
         if let llm {
-            if llm.model.contains("gemini") {
-                day.geminiPromptTokens += llm.promptTokens
-                day.geminiCompletionTokens += llm.completionTokens
-                day.geminiRequests += 1
-            } else {
-                day.openaiPromptTokens += llm.promptTokens
-                day.openaiCompletionTokens += llm.completionTokens
-                day.openaiRequests += 1
-            }
+            let provider = normalizedProvider(llm.provider)
+            var current = day.llm[provider] ?? LLMProviderUsage()
+            current.promptTokens += llm.promptTokens
+            current.completionTokens += llm.completionTokens
+            current.requests += 1
+            day.llm[provider] = current
         }
     }
 
     private func merge(into total: inout DailyUsage, from day: DailyUsage) {
-        total.deepgramSeconds += day.deepgramSeconds
-        total.deepgramRequests += day.deepgramRequests
-        total.geminiPromptTokens += day.geminiPromptTokens
-        total.geminiCompletionTokens += day.geminiCompletionTokens
-        total.geminiRequests += day.geminiRequests
-        total.openaiPromptTokens += day.openaiPromptTokens
-        total.openaiCompletionTokens += day.openaiCompletionTokens
-        total.openaiRequests += day.openaiRequests
+        for (provider, usage) in day.stt {
+            var current = total.stt[provider] ?? STTProviderUsage()
+            current.durationSeconds += usage.durationSeconds
+            current.requests += usage.requests
+            total.stt[provider] = current
+        }
+        for (provider, usage) in day.llm {
+            var current = total.llm[provider] ?? LLMProviderUsage()
+            current.promptTokens += usage.promptTokens
+            current.completionTokens += usage.completionTokens
+            current.requests += usage.requests
+            total.llm[provider] = current
+        }
+    }
+
+    private func normalizedProvider(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "unknown" : trimmed
     }
 
     private func save() throws {

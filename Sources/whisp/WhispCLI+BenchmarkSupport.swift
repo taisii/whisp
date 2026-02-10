@@ -121,11 +121,9 @@ extension WhispCLI {
     }
 
     static func benchmarkCacheRootURL() -> URL {
-        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("whisp", isDirectory: true)
-            .appendingPathComponent("benchmark_cache", isDirectory: true)
+        (try? WhispPaths().benchmarkCacheDirectory)
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("whisp-benchmark-cache", isDirectory: true)
     }
 
     static func cacheFileURL(component: String, key: String) -> URL {

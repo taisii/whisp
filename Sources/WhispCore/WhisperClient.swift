@@ -55,7 +55,13 @@ public actor WhisperClient {
         let decoded = try JSONDecoder().decode(WhisperTranscriptionResponse.self, from: data)
         let duration = audio.isEmpty ? 0 : Double(audio.count) / Double(normalizedSampleRate * MemoryLayout<Int16>.size)
         let requestID = http.value(forHTTPHeaderField: "x-request-id")
-        let usage = duration > 0 ? STTUsage(durationSeconds: duration, requestID: requestID) : nil
+        let usage = duration > 0
+            ? STTUsage(
+                durationSeconds: duration,
+                requestID: requestID,
+                provider: STTProvider.whisper.rawValue
+            )
+            : nil
 
         return (decoded.text.trimmingCharacters(in: .whitespacesAndNewlines), usage)
     }

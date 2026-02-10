@@ -172,6 +172,7 @@ public struct AccessibilitySnapshot: Codable, Equatable, Sendable {
 }
 
 public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
+    public let schemaVersion: Int
     public let id: String
     public let runID: String
     public let createdAt: String
@@ -180,6 +181,11 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
     public let eventsFilePath: String
     public let audioFilePath: String
     public let sampleRate: Int
+    public var skipReason: String?
+    public var failure: DebugRunFailure?
+    public var texts: DebugRunTexts
+    public var metrics: DebugRunMetrics
+    public var artifacts: DebugRunArtifactsSummary
 
     public var sttText: String?
     public var outputText: String?
@@ -194,6 +200,7 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
     public var visionImageMimeType: String?
 
     public init(
+        schemaVersion: Int = 2,
         id: String,
         runID: String,
         createdAt: String,
@@ -202,6 +209,11 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
         eventsFilePath: String,
         audioFilePath: String,
         sampleRate: Int,
+        skipReason: String? = nil,
+        failure: DebugRunFailure? = nil,
+        texts: DebugRunTexts = DebugRunTexts(),
+        metrics: DebugRunMetrics = DebugRunMetrics(),
+        artifacts: DebugRunArtifactsSummary = DebugRunArtifactsSummary(),
         sttText: String? = nil,
         outputText: String? = nil,
         llmModel: String,
@@ -214,6 +226,7 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
         visionImageFilePath: String? = nil,
         visionImageMimeType: String? = nil
     ) {
+        self.schemaVersion = schemaVersion
         self.id = id
         self.runID = runID
         self.createdAt = createdAt
@@ -222,6 +235,11 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
         self.eventsFilePath = eventsFilePath
         self.audioFilePath = audioFilePath
         self.sampleRate = sampleRate
+        self.skipReason = skipReason
+        self.failure = failure
+        self.texts = texts
+        self.metrics = metrics
+        self.artifacts = artifacts
         self.sttText = sttText
         self.outputText = outputText
         self.llmModel = llmModel
@@ -232,6 +250,76 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
         self.context = context
         self.accessibilitySnapshot = accessibilitySnapshot
         self.visionImageFilePath = visionImageFilePath
+        self.visionImageMimeType = visionImageMimeType
+    }
+}
+
+public struct DebugRunFailure: Codable, Equatable, Sendable {
+    public var stage: String
+    public var message: String
+
+    public init(stage: String = "", message: String = "") {
+        self.stage = stage
+        self.message = message
+    }
+}
+
+public struct DebugRunTexts: Codable, Equatable, Sendable {
+    public var stt: String?
+    public var output: String?
+
+    public init(stt: String? = nil, output: String? = nil) {
+        self.stt = stt
+        self.output = output
+    }
+}
+
+public struct DebugRunMetrics: Codable, Equatable, Sendable {
+    public var recordingMs: Double?
+    public var sttMs: Double?
+    public var postProcessMs: Double?
+    public var directInputMs: Double?
+    public var pipelineMs: Double?
+    public var sttChars: Int
+    public var outputChars: Int
+
+    public init(
+        recordingMs: Double? = nil,
+        sttMs: Double? = nil,
+        postProcessMs: Double? = nil,
+        directInputMs: Double? = nil,
+        pipelineMs: Double? = nil,
+        sttChars: Int = 0,
+        outputChars: Int = 0
+    ) {
+        self.recordingMs = recordingMs
+        self.sttMs = sttMs
+        self.postProcessMs = postProcessMs
+        self.directInputMs = directInputMs
+        self.pipelineMs = pipelineMs
+        self.sttChars = sttChars
+        self.outputChars = outputChars
+    }
+}
+
+public struct DebugRunArtifactsSummary: Codable, Equatable, Sendable {
+    public var audioFile: String?
+    public var eventsFile: String?
+    public var promptsDirectory: String?
+    public var visionImageFile: String?
+    public var visionImageMimeType: String?
+
+    public init(
+        audioFile: String? = nil,
+        eventsFile: String? = nil,
+        promptsDirectory: String? = nil,
+        visionImageFile: String? = nil,
+        visionImageMimeType: String? = nil
+    ) {
+        self.audioFile = audioFile
+        self.eventsFile = eventsFile
+        self.promptsDirectory = promptsDirectory
+        self.visionImageFile = visionImageFile
         self.visionImageMimeType = visionImageMimeType
     }
 }

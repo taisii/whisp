@@ -21,7 +21,7 @@ final class ContextServiceTests: XCTestCase {
                 imageBytes: 3,
                 imageWidth: 100,
                 imageHeight: 80,
-                mode: VisionContextMode.llm.rawValue,
+                mode: VisionContextMode.saveOnly.rawValue,
                 error: nil
             )
         }
@@ -47,7 +47,7 @@ final class ContextServiceTests: XCTestCase {
                 imageBytes: 3,
                 imageWidth: 100,
                 imageHeight: 80,
-                mode: VisionContextMode.llm.rawValue,
+                mode: VisionContextMode.saveOnly.rawValue,
                 error: nil
             )
         }
@@ -66,7 +66,7 @@ final class ContextServiceTests: XCTestCase {
 
         var llmConfig = Config()
         llmConfig.context.visionEnabled = true
-        llmConfig.context.visionMode = .llm
+        llmConfig.context.visionMode = .saveOnly
         let llmTask = service.startVisionCollection(
             config: llmConfig,
             runID: "run-llm",
@@ -109,11 +109,10 @@ private struct StubAccessibilityProvider: AccessibilityContextProvider {
 private struct StubVisionProvider: VisionContextProvider {
     func collect(
         mode _: VisionContextMode,
-        model: LLMModel,
-        runID: String,
-        preferredWindowOwnerPID: Int32?,
-        runDirectory: String?,
-        logger: @escaping PipelineEventLogger
+        runID _: String,
+        preferredWindowOwnerPID _: Int32?,
+        runDirectory _: String?,
+        logger _: @escaping PipelineEventLogger
     ) async -> VisionContextCollectionResult {
         VisionContextCollectionResult(
             context: nil,
@@ -125,7 +124,7 @@ private struct StubVisionProvider: VisionContextProvider {
             imageBytes: 0,
             imageWidth: 0,
             imageHeight: 0,
-            mode: VisionContextMode.llm.rawValue,
+            mode: VisionContextMode.saveOnly.rawValue,
             error: nil
         )
     }

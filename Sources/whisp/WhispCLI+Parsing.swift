@@ -8,6 +8,45 @@ extension WhispCLI {
         let realtime: Bool
     }
 
+    private struct ArgParser {
+        private let args: [String]
+        private(set) var index: Int
+
+        init(args: [String], startIndex: Int) {
+            self.args = args
+            index = startIndex
+        }
+
+        mutating func next() -> String? {
+            guard index < args.count else {
+                return nil
+            }
+            defer { index += 1 }
+            return args[index]
+        }
+
+        mutating func value(for option: String) throws -> String {
+            guard let raw = next() else {
+                throw AppError.invalidArgument("\(option) の値が不足しています")
+            }
+            return raw
+        }
+    }
+
+    private static func parsePositiveInt(_ raw: String, option: String) throws -> Int {
+        guard let value = Int(raw), value > 0 else {
+            throw AppError.invalidArgument("\(option) は正の整数で指定してください")
+        }
+        return value
+    }
+
+    private static func parseNonNegativeDouble(_ raw: String, option: String) throws -> Double {
+        guard let value = Double(raw), value >= 0 else {
+            throw AppError.invalidArgument("\(option) は0以上の数値で指定してください")
+        }
+        return value
+    }
+
     static func parseStreamOptions(args: [String]) throws -> StreamOptions {
         guard args.count >= 2 else {
             throw AppError.invalidArgument("入力ファイルパスが必要です")
@@ -16,34 +55,20 @@ extension WhispCLI {
         let path = args[1]
         var chunkMs = 120
         var realtime = false
-        var index = 2
+        var parser = ArgParser(args: args, startIndex: 2)
 
-        while index < args.count {
-            let item = args[index]
+        while let item = parser.next() {
             if item == "--realtime" {
                 realtime = true
-                index += 1
                 continue
             }
             if item == "--chunk-ms" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--chunk-ms の値が不足しています")
-                }
-                guard let parsed = Int(args[valueIndex]), parsed > 0 else {
-                    throw AppError.invalidArgument("--chunk-ms は正の整数で指定してください")
-                }
-                chunkMs = parsed
-                index += 2
+                chunkMs = try parsePositiveInt(try parser.value(for: "--chunk-ms"), option: "--chunk-ms")
                 continue
             }
             if item.hasPrefix("--chunk-ms=") {
-                let value = String(item.dropFirst("--chunk-ms=".count))
-                guard let parsed = Int(value), parsed > 0 else {
-                    throw AppError.invalidArgument("--chunk-ms は正の整数で指定してください")
-                }
-                chunkMs = parsed
-                index += 1
+                let raw = String(item.dropFirst("--chunk-ms=".count))
+                chunkMs = try parsePositiveInt(raw, option: "--chunk-ms")
                 continue
             }
             throw AppError.invalidArgument("不明な引数: \(item)")
@@ -63,63 +88,39 @@ extension WhispCLI {
         var realtime = true
         var emitMode: EmitMode = .discard
         var contextFilePath: String?
-        var index = 2
+        var parser = ArgParser(args: args, startIndex: 2)
 
-        while index < args.count {
-            let item = args[index]
+        while let item = parser.next() {
             if item == "--realtime" {
                 realtime = true
-                index += 1
                 continue
             }
             if item == "--no-realtime" {
                 realtime = false
-                index += 1
                 continue
             }
             if item == "--chunk-ms" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--chunk-ms の値が不足しています")
-                }
-                guard let parsed = Int(args[valueIndex]), parsed > 0 else {
-                    throw AppError.invalidArgument("--chunk-ms は正の整数で指定してください")
-                }
-                chunkMs = parsed
-                index += 2
+                chunkMs = try parsePositiveInt(try parser.value(for: "--chunk-ms"), option: "--chunk-ms")
                 continue
             }
             if item == "--stt" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--stt の値が不足しています")
-                }
-                guard let parsed = STTMode(rawValue: args[valueIndex]) else {
+                let value = try parser.value(for: "--stt")
+                guard let parsed = STTMode(rawValue: value) else {
                     throw AppError.invalidArgument("--stt は rest または stream を指定してください")
                 }
                 sttMode = parsed
-                index += 2
                 continue
             }
             if item == "--emit" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--emit の値が不足しています")
-                }
-                guard let parsed = EmitMode(rawValue: args[valueIndex]) else {
+                let value = try parser.value(for: "--emit")
+                guard let parsed = EmitMode(rawValue: value) else {
                     throw AppError.invalidArgument("--emit は discard/stdout/pbcopy を指定してください")
                 }
                 emitMode = parsed
-                index += 2
                 continue
             }
             if item == "--context-file" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--context-file の値が不足しています")
-                }
-                contextFilePath = args[valueIndex]
-                index += 2
+                contextFilePath = try parser.value(for: "--context-file")
                 continue
             }
             throw AppError.invalidArgument("不明な引数: \(item)")
@@ -148,126 +149,75 @@ extension WhispCLI {
         var intentJudgeEnabled = true
         var intentJudgeModel: LLMModel?
         var minLabelConfidence: Double?
-        var index = 1
+        var parser = ArgParser(args: args, startIndex: 1)
 
-        while index < args.count {
-            let item = args[index]
+        while let item = parser.next() {
             if item == "--realtime" {
                 realtime = true
-                index += 1
                 continue
             }
             if item == "--no-realtime" {
                 realtime = false
-                index += 1
                 continue
             }
             if item == "--chunk-ms" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--chunk-ms の値が不足しています")
-                }
-                guard let parsed = Int(args[valueIndex]), parsed > 0 else {
-                    throw AppError.invalidArgument("--chunk-ms は正の整数で指定してください")
-                }
-                chunkMs = parsed
-                index += 2
+                chunkMs = try parsePositiveInt(try parser.value(for: "--chunk-ms"), option: "--chunk-ms")
                 continue
             }
             if item == "--stt" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--stt の値が不足しています")
-                }
-                guard let parsed = STTMode(rawValue: args[valueIndex]) else {
+                let value = try parser.value(for: "--stt")
+                guard let parsed = STTMode(rawValue: value) else {
                     throw AppError.invalidArgument("--stt は rest または stream を指定してください")
                 }
                 sttMode = parsed
-                index += 2
                 continue
             }
             if item == "--limit" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--limit の値が不足しています")
-                }
-                guard let parsed = Int(args[valueIndex]), parsed > 0 else {
-                    throw AppError.invalidArgument("--limit は正の整数で指定してください")
-                }
-                limit = parsed
-                index += 2
+                limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
                 continue
             }
             if item == "--min-audio-seconds" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--min-audio-seconds の値が不足しています")
-                }
-                guard let parsed = Double(args[valueIndex]), parsed >= 0 else {
-                    throw AppError.invalidArgument("--min-audio-seconds は0以上の数値で指定してください")
-                }
-                minAudioSeconds = parsed
-                index += 2
+                minAudioSeconds = try parseNonNegativeDouble(try parser.value(for: "--min-audio-seconds"), option: "--min-audio-seconds")
                 continue
             }
             if item == "--min-label-confidence" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--min-label-confidence の値が不足しています")
-                }
-                guard let parsed = Double(args[valueIndex]), (0...1).contains(parsed) else {
+                let raw = try parser.value(for: "--min-label-confidence")
+                guard let parsed = Double(raw), (0 ... 1).contains(parsed) else {
                     throw AppError.invalidArgument("--min-label-confidence は0〜1で指定してください")
                 }
                 minLabelConfidence = parsed
-                index += 2
                 continue
             }
             if item == "--require-context" {
                 requireContext = true
-                index += 1
                 continue
             }
             if item == "--benchmark-log-dir" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--benchmark-log-dir の値が不足しています")
-                }
-                benchmarkLogDir = args[valueIndex]
-                index += 2
+                benchmarkLogDir = try parser.value(for: "--benchmark-log-dir")
                 continue
             }
             if item == "--intent-source" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--intent-source の値が不足しています")
-                }
-                guard let parsed = IntentSource(rawValue: args[valueIndex]) else {
+                let value = try parser.value(for: "--intent-source")
+                guard let parsed = IntentSource(rawValue: value) else {
                     throw AppError.invalidArgument("--intent-source は auto|gold|silver を指定してください")
                 }
                 intentSource = parsed
-                index += 2
                 continue
             }
             if item == "--intent-judge" {
                 intentJudgeEnabled = true
-                index += 1
                 continue
             }
             if item == "--no-intent-judge" {
                 intentJudgeEnabled = false
-                index += 1
                 continue
             }
             if item == "--judge-model" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--judge-model の値が不足しています")
-                }
-                guard let parsed = LLMModel(rawValue: args[valueIndex]) else {
+                let value = try parser.value(for: "--judge-model")
+                guard let parsed = LLMModel(rawValue: value) else {
                     throw AppError.invalidArgument("--judge-model は有効なモデルIDを指定してください")
                 }
                 intentJudgeModel = parsed
-                index += 2
                 continue
             }
             if item.hasPrefix("--") {
@@ -275,7 +225,6 @@ extension WhispCLI {
             }
 
             jsonlPath = item
-            index += 1
         }
 
         return ManualBenchmarkOptions(
@@ -299,41 +248,25 @@ extension WhispCLI {
         var limit: Int?
         var benchmarkLogDir: String?
         var useCache = true
-        var index = 1
+        var parser = ArgParser(args: args, startIndex: 1)
 
-        while index < args.count {
-            let item = args[index]
+        while let item = parser.next() {
             if item == "--limit" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--limit の値が不足しています")
-                }
-                guard let parsed = Int(args[valueIndex]), parsed > 0 else {
-                    throw AppError.invalidArgument("--limit は正の整数で指定してください")
-                }
-                limit = parsed
-                index += 2
+                limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
                 continue
             }
             if item == "--benchmark-log-dir" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--benchmark-log-dir の値が不足しています")
-                }
-                benchmarkLogDir = args[valueIndex]
-                index += 2
+                benchmarkLogDir = try parser.value(for: "--benchmark-log-dir")
                 continue
             }
             if item == "--no-cache" {
                 useCache = false
-                index += 1
                 continue
             }
             if item.hasPrefix("--") {
                 throw AppError.invalidArgument("不明な引数: \(item)")
             }
             jsonlPath = item
-            index += 1
         }
 
         return VisionBenchmarkOptions(
@@ -353,87 +286,49 @@ extension WhispCLI {
         var minAudioSeconds = 2.0
         var benchmarkLogDir: String?
         var useCache = true
-        var index = 1
+        var parser = ArgParser(args: args, startIndex: 1)
 
-        while index < args.count {
-            let item = args[index]
+        while let item = parser.next() {
             if item == "--stt" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--stt の値が不足しています")
-                }
-                guard let parsed = STTMode(rawValue: args[valueIndex]) else {
+                let value = try parser.value(for: "--stt")
+                guard let parsed = STTMode(rawValue: value) else {
                     throw AppError.invalidArgument("--stt は rest または stream を指定してください")
                 }
                 sttMode = parsed
-                index += 2
                 continue
             }
             if item == "--chunk-ms" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--chunk-ms の値が不足しています")
-                }
-                guard let parsed = Int(args[valueIndex]), parsed > 0 else {
-                    throw AppError.invalidArgument("--chunk-ms は正の整数で指定してください")
-                }
-                chunkMs = parsed
-                index += 2
+                chunkMs = try parsePositiveInt(try parser.value(for: "--chunk-ms"), option: "--chunk-ms")
                 continue
             }
             if item == "--realtime" {
                 realtime = true
-                index += 1
                 continue
             }
             if item == "--no-realtime" {
                 realtime = false
-                index += 1
                 continue
             }
             if item == "--limit" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--limit の値が不足しています")
-                }
-                guard let parsed = Int(args[valueIndex]), parsed > 0 else {
-                    throw AppError.invalidArgument("--limit は正の整数で指定してください")
-                }
-                limit = parsed
-                index += 2
+                limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
                 continue
             }
             if item == "--min-audio-seconds" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--min-audio-seconds の値が不足しています")
-                }
-                guard let parsed = Double(args[valueIndex]), parsed >= 0 else {
-                    throw AppError.invalidArgument("--min-audio-seconds は0以上の数値で指定してください")
-                }
-                minAudioSeconds = parsed
-                index += 2
+                minAudioSeconds = try parseNonNegativeDouble(try parser.value(for: "--min-audio-seconds"), option: "--min-audio-seconds")
                 continue
             }
             if item == "--benchmark-log-dir" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--benchmark-log-dir の値が不足しています")
-                }
-                benchmarkLogDir = args[valueIndex]
-                index += 2
+                benchmarkLogDir = try parser.value(for: "--benchmark-log-dir")
                 continue
             }
             if item == "--no-cache" {
                 useCache = false
-                index += 1
                 continue
             }
             if item.hasPrefix("--") {
                 throw AppError.invalidArgument("不明な引数: \(item)")
             }
             jsonlPath = item
-            index += 1
         }
 
         return STTBenchmarkOptions(
@@ -454,46 +349,29 @@ extension WhispCLI {
         var requireContext = false
         var benchmarkLogDir: String?
         var useCache = true
-        var index = 1
+        var parser = ArgParser(args: args, startIndex: 1)
 
-        while index < args.count {
-            let item = args[index]
+        while let item = parser.next() {
             if item == "--limit" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--limit の値が不足しています")
-                }
-                guard let parsed = Int(args[valueIndex]), parsed > 0 else {
-                    throw AppError.invalidArgument("--limit は正の整数で指定してください")
-                }
-                limit = parsed
-                index += 2
+                limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
                 continue
             }
             if item == "--require-context" {
                 requireContext = true
-                index += 1
                 continue
             }
             if item == "--benchmark-log-dir" {
-                let valueIndex = index + 1
-                guard valueIndex < args.count else {
-                    throw AppError.invalidArgument("--benchmark-log-dir の値が不足しています")
-                }
-                benchmarkLogDir = args[valueIndex]
-                index += 2
+                benchmarkLogDir = try parser.value(for: "--benchmark-log-dir")
                 continue
             }
             if item == "--no-cache" {
                 useCache = false
-                index += 1
                 continue
             }
             if item.hasPrefix("--") {
                 throw AppError.invalidArgument("不明な引数: \(item)")
             }
             jsonlPath = item
-            index += 1
         }
 
         return GenerationBenchmarkOptions(

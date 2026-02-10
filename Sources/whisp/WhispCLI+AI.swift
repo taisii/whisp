@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import Vision
 import WhispCore
 
 extension WhispCLI {
@@ -11,7 +13,7 @@ extension WhispCLI {
         realtime: Bool
     ) async throws -> (transcript: String, totalMs: Double, afterStopMs: Double) {
         let sampleRate = Int(audio.sampleRate)
-        let language = languageParam(languageHint)
+        let language = LanguageResolver.languageParam(languageHint)
 
         switch mode {
         case .rest:
@@ -53,102 +55,40 @@ extension WhispCLI {
         }
     }
 
-    static func analyzeVisionContextGemini(
-        apiKey: String,
-        imageData: Data,
-        mimeType: String
-    ) async throws -> ContextInfo? {
-        let prompt = """
-        スクリーンショットを解析し、音声整形用のコンテキストをJSONのみで返してください。
-        形式: {"summary":"...","terms":["..."]}
-        ルール:
-        - summary は1文で簡潔
-        - terms は専門用語・固有名詞を最大10個
-        - 情報がなければ summary は空文字、terms は空配列
-        - JSON以外は出力しない
-        """
-
-        let body = GeminiVisionRequest(contents: [
-            GeminiVisionContent(
-                role: "user",
-                parts: [
-                    .text(prompt),
-                    .inline(mimeType: mimeType, data: imageData.base64EncodedString()),
-                ]
-            ),
-        ])
-        let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(LLMModel.gemini25FlashLite.modelName):generateContent?key=\(apiKey)"
-        guard let url = URL(string: endpoint) else {
-            throw AppError.invalidArgument("Gemini URL生成に失敗")
-        }
-        let data = try await sendJSONRequest(url: url, headers: [:], body: body)
-        let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-        let text = decoded.candidates.first?.content.joinedText ?? ""
-        guard let vision = parseVisionContext(text) else {
+    static func analyzeVisionContextOCR(imageData: Data) throws -> ContextInfo? {
+        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+              let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else {
             return nil
         }
-        return ContextInfo(visionSummary: vision.summary, visionTerms: vision.terms)
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["ja-JP", "en-US"]
+
+        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+        try handler.perform([request])
+        let observations = request.results ?? []
+        let lines = normalizeOCRLines(observations)
+        guard !lines.isEmpty else {
+            return nil
+        }
+
+        let windowText = lines.joined(separator: "\n")
+        let summary = String(lines.prefix(2).joined(separator: " / ").prefix(180))
+        let terms = extractCandidateTerms(from: lines, limit: 10)
+        return ContextInfo(
+            windowText: tailExcerpt(from: windowText, maxChars: 1200),
+            visionSummary: summary.isEmpty ? nil : summary,
+            visionTerms: terms
+        )
     }
 
     static func loadConfig() throws -> Config {
         let configStore = try ConfigStore()
-        return try configStore.loadOrCreate()
-    }
-
-    static func deepgramAPIKey(from config: Config) throws -> String {
-        let key = config.apiKeys.deepgram.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !key.isEmpty else {
-            throw AppError.invalidArgument("Deepgram APIキーが未設定です")
-        }
-        return key
-    }
-
-    static func llmAPIKey(config: Config, model: LLMModel) throws -> String {
-        switch model {
-        case .gemini25FlashLite, .gemini25FlashLiteAudio:
-            let key = config.apiKeys.gemini.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else {
-                throw AppError.invalidArgument("Gemini APIキーが未設定です")
-            }
-            return key
-        case .gpt4oMini, .gpt5Nano:
-            let key = config.apiKeys.openai.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else {
-                throw AppError.invalidArgument("OpenAI APIキーが未設定です")
-            }
-            return key
-        }
-    }
-
-    static func effectivePostProcessModel(_ model: LLMModel) -> LLMModel {
-        switch model {
-        case .gemini25FlashLiteAudio:
-            return .gemini25FlashLite
-        default:
-            return model
-        }
-    }
-
-    static func resolveIntentJudgeContext(
-        config: Config,
-        preferredModel: LLMModel?
-    ) throws -> (model: LLMModel, apiKey: String) {
-        if let preferredModel {
-            let model = effectivePostProcessModel(preferredModel)
-            return (model, try llmAPIKey(config: config, model: model))
-        }
-
-        let openAIKey = config.apiKeys.openai.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !openAIKey.isEmpty {
-            return (.gpt5Nano, openAIKey)
-        }
-
-        let geminiKey = config.apiKeys.gemini.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !geminiKey.isEmpty {
-            return (.gemini25FlashLite, geminiKey)
-        }
-
-        throw AppError.invalidArgument("intent judge 用のAPIキーが未設定です（openai または gemini）")
+        try configStore.ensureExists(default: Config())
+        return try configStore.load()
     }
 
     static func runIntentJudge(
@@ -259,7 +199,12 @@ extension WhispCLI {
             let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
             let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let usage = decoded.usageMetadata.map {
-                LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount)
+                LLMUsage(
+                    model: LLMModel.gemini25FlashLite.modelName,
+                    promptTokens: $0.promptTokenCount,
+                    completionTokens: $0.candidatesTokenCount,
+                    provider: "gemini"
+                )
             }
             return PostProcessResult(text: text, usage: usage)
         case .gpt4oMini, .gpt5Nano:
@@ -272,7 +217,7 @@ extension WhispCLI {
             let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
             let text = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let usage = decoded.usage.map {
-                LLMUsage(model: model.modelName, promptTokens: $0.promptTokens, completionTokens: $0.completionTokens)
+                LLMUsage(model: model.modelName, promptTokens: $0.promptTokens, completionTokens: $0.completionTokens, provider: "openai")
             }
             return PostProcessResult(text: text, usage: usage)
         }
@@ -282,22 +227,59 @@ extension WhispCLI {
         headers: [String: String],
         body: T
     ) async throws -> Data {
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        for (key, value) in headers {
-            request.addValue(value, forHTTPHeaderField: key)
-        }
-        request.httpBody = try JSONEncoder().encode(body)
+        try await HTTPJSONClient().sendJSONRequest(
+            url: url,
+            method: "POST",
+            headers: headers,
+            body: body
+        )
+    }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw AppError.io("HTTPレスポンスが不正")
+    private static func normalizeOCRLines(_ observations: [VNRecognizedTextObservation]) -> [String] {
+        var seen: Set<String> = []
+        var lines: [String] = []
+        for observation in observations {
+            guard let candidate = observation.topCandidates(1).first else { continue }
+            let trimmed = candidate.string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let normalized = trimmed.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            guard !normalized.isEmpty else { continue }
+            if seen.insert(normalized).inserted {
+                lines.append(String(normalized.prefix(180)))
+            }
+            if lines.count >= 80 {
+                break
+            }
         }
-        guard (200..<300).contains(http.statusCode) else {
-            let bodyText = String(data: data, encoding: .utf8) ?? ""
-            throw AppError.io("API request failed (\(http.statusCode)): \(bodyText)")
+        return lines
+    }
+
+    private static func extractCandidateTerms(from lines: [String], limit: Int) -> [String] {
+        let separators = CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters)
+        var seen: Set<String> = []
+        var terms: [String] = []
+        for line in lines {
+            for token in line.components(separatedBy: separators) {
+                let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.count >= 2, trimmed.count <= 40 else { continue }
+                guard trimmed.rangeOfCharacter(from: .letters) != nil else { continue }
+                if seen.insert(trimmed).inserted {
+                    terms.append(trimmed)
+                }
+                if terms.count >= limit {
+                    return terms
+                }
+            }
         }
-        return data
+        return terms
+    }
+
+    private static func tailExcerpt(from text: String, maxChars: Int) -> String {
+        guard maxChars > 0 else { return "" }
+        let ns = text as NSString
+        guard ns.length > 0 else { return "" }
+        let length = min(ns.length, maxChars)
+        let location = ns.length - length
+        return ns.substring(with: NSRange(location: location, length: length))
     }
 }

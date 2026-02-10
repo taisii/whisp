@@ -11,11 +11,8 @@ extension WhispCLI {
     }
 
     static func defaultManualCasesPath() -> String {
-        let home = ProcessInfo.processInfo.environment["HOME"] ?? ""
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("whisp", isDirectory: true)
-            .appendingPathComponent("debug", isDirectory: true)
+        (try? WhispPaths().manualCasesFile.path)
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("manual_test_cases.jsonl", isDirectory: false)
             .path
     }
@@ -86,19 +83,6 @@ extension WhispCLI {
             return compact
         }
         return String(compact.prefix(limit)) + "..."
-    }
-
-    static func languageParam(_ value: String) -> String? {
-        switch value {
-        case "auto":
-            return nil
-        case "ja":
-            return "ja"
-        case "en":
-            return "en"
-        default:
-            return nil
-        }
     }
 
     static func audioDurationSeconds(audio: AudioData) -> Double {

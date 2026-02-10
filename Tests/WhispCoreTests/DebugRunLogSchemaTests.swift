@@ -12,6 +12,32 @@ final class DebugRunLogSchemaTests: XCTestCase {
         XCTAssertEqual(DebugLogType.contextSummary.rawValue, "context_summary")
     }
 
+    func testEncodingUsesV2EventKeys() throws {
+        let log = DebugRunLog.pipeline(DebugPipelineLog(
+            base: DebugRunLogBase(
+                runID: "run-1",
+                captureID: "cap-1",
+                logType: .pipeline,
+                eventStartMs: 100,
+                eventEndMs: 200,
+                recordedAtMs: 201,
+                status: .ok
+            ),
+            sttChars: 10,
+            outputChars: 20,
+            error: nil
+        ))
+
+        let data = try JSONEncoder().encode(log)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        XCTAssertEqual(json["stage"] as? String, "pipeline")
+        XCTAssertEqual(json["status"] as? String, "ok")
+        XCTAssertEqual((json["started_at_ms"] as? NSNumber)?.int64Value, 100)
+        XCTAssertEqual((json["ended_at_ms"] as? NSNumber)?.int64Value, 200)
+        XCTAssertNotNil(json["attrs"] as? [String: Any])
+    }
+
     func testDebugRunLogRoundTrip() throws {
         let base = DebugRunLogBase(
             runID: "run-1",

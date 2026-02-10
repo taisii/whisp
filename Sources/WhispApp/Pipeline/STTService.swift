@@ -119,8 +119,7 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
         guard !config.llmModel.usesDirectAudio else {
             return nil
         }
-        let deepgramKey = config.apiKeys.deepgram.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !deepgramKey.isEmpty else {
+        guard let deepgramKey = try? APIKeyResolver.sttKey(config: config, provider: .deepgram) else {
             return nil
         }
 
@@ -154,10 +153,7 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
         streamingSession: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
-        let deepgramKey = config.apiKeys.deepgram.trimmingCharacters(in: .whitespacesAndNewlines)
-        if deepgramKey.isEmpty {
-            throw AppError.invalidArgument("Deepgram APIキーが未設定です")
-        }
+        let deepgramKey = try APIKeyResolver.sttKey(config: config, provider: .deepgram)
 
         if let streamingSession {
             let finalizeRequestedAt = Date()
@@ -176,7 +172,7 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
                     "text_chars": String(result.transcript.count),
                 ])
 
-                let attempt = DebugSTTAttempt(
+                let attempt = STTTraceFactory.attempt(
                     kind: .streamFinalize,
                     status: .ok,
                     eventStartMs: finalizeRequestedAtMs,
@@ -190,19 +186,16 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
                     droppedChunks: result.drainStats.droppedChunks
                 )
 
-                let trace = STTTrace(
+                let trace = STTTraceFactory.trace(
                     provider: config.sttProvider.rawValue,
                     route: .streaming,
-                    mainSpan: STTMainSpanTrace(
-                        eventStartMs: finalizeRequestedAtMs,
-                        eventEndMs: finalizeResponseAtMs,
-                        status: .ok,
-                        source: "stream_finalize",
-                        textChars: result.transcript.count,
-                        sampleRate: recording.sampleRate,
-                        audioBytes: recording.pcmData.count,
-                        error: nil
-                    ),
+                    eventStartMs: finalizeRequestedAtMs,
+                    eventEndMs: finalizeResponseAtMs,
+                    status: .ok,
+                    source: "stream_finalize",
+                    textChars: result.transcript.count,
+                    sampleRate: recording.sampleRate,
+                    audioBytes: recording.pcmData.count,
                     attempts: [attempt]
                 )
                 return STTTranscriptionResult(transcript: result.transcript, usage: result.usage, trace: trace)
@@ -211,15 +204,15 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
                     "error": error.localizedDescription,
                 ])
 
-                let failedFinalizeAttempt = DebugSTTAttempt(
+                let failedFinalizeAttempt = STTTraceFactory.attempt(
                     kind: .streamFinalize,
                     status: .error,
                     eventStartMs: finalizeRequestedAtMs,
                     eventEndMs: epochMs(),
                     source: "stream_finalize",
-                    error: error.localizedDescription,
                     sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count
+                    audioBytes: recording.pcmData.count,
+                    error: error.localizedDescription
                 )
 
                 let restRequestedAt = Date()
@@ -246,7 +239,7 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
                     "text_chars": String(stt.transcript.count),
                 ])
 
-                let restAttempt = DebugSTTAttempt(
+                let restAttempt = STTTraceFactory.attempt(
                     kind: .restFallback,
                     status: .ok,
                     eventStartMs: restRequestedAtMs,
@@ -257,19 +250,16 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
                     audioBytes: recording.pcmData.count
                 )
 
-                let trace = STTTrace(
+                let trace = STTTraceFactory.trace(
                     provider: config.sttProvider.rawValue,
                     route: .streamingFallbackREST,
-                    mainSpan: STTMainSpanTrace(
-                        eventStartMs: finalizeRequestedAtMs,
-                        eventEndMs: restResponseAtMs,
-                        status: .ok,
-                        source: "rest_fallback",
-                        textChars: stt.transcript.count,
-                        sampleRate: recording.sampleRate,
-                        audioBytes: recording.pcmData.count,
-                        error: nil
-                    ),
+                    eventStartMs: finalizeRequestedAtMs,
+                    eventEndMs: restResponseAtMs,
+                    status: .ok,
+                    source: "rest_fallback",
+                    textChars: stt.transcript.count,
+                    sampleRate: recording.sampleRate,
+                    audioBytes: recording.pcmData.count,
                     attempts: [failedFinalizeAttempt, restAttempt]
                 )
                 return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
@@ -299,30 +289,16 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
             "text_chars": String(stt.transcript.count),
         ])
 
-        let attempt = DebugSTTAttempt(
+        let trace = STTTraceFactory.singleAttemptTrace(
+            provider: config.sttProvider.rawValue,
+            route: .rest,
             kind: .rest,
-            status: .ok,
             eventStartMs: restRequestedAtMs,
             eventEndMs: restResponseAtMs,
             source: "rest",
             textChars: stt.transcript.count,
             sampleRate: recording.sampleRate,
             audioBytes: recording.pcmData.count
-        )
-        let trace = STTTrace(
-            provider: config.sttProvider.rawValue,
-            route: .rest,
-            mainSpan: STTMainSpanTrace(
-                eventStartMs: restRequestedAtMs,
-                eventEndMs: restResponseAtMs,
-                status: .ok,
-                source: "rest",
-                textChars: stt.transcript.count,
-                sampleRate: recording.sampleRate,
-                audioBytes: recording.pcmData.count,
-                error: nil
-            ),
-            attempts: [attempt]
         )
         return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
     }
@@ -352,10 +328,7 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
         streamingSession _: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
-        let openAIKey = config.apiKeys.openai.trimmingCharacters(in: .whitespacesAndNewlines)
-        if openAIKey.isEmpty {
-            throw AppError.invalidArgument("OpenAI APIキーが未設定です（Whisper STT）")
-        }
+        let openAIKey = try APIKeyResolver.sttKey(config: config, provider: .whisper)
 
         let requestSentAt = Date()
         let requestSentAtMs = epochMs(requestSentAt)
@@ -380,30 +353,16 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
             "text_chars": String(stt.transcript.count),
         ])
 
-        let attempt = DebugSTTAttempt(
+        let trace = STTTraceFactory.singleAttemptTrace(
+            provider: config.sttProvider.rawValue,
+            route: .rest,
             kind: .whisperREST,
-            status: .ok,
             eventStartMs: requestSentAtMs,
             eventEndMs: responseReceivedAtMs,
             source: "whisper_rest",
             textChars: stt.transcript.count,
             sampleRate: recording.sampleRate,
             audioBytes: recording.pcmData.count
-        )
-        let trace = STTTrace(
-            provider: config.sttProvider.rawValue,
-            route: .rest,
-            mainSpan: STTMainSpanTrace(
-                eventStartMs: requestSentAtMs,
-                eventEndMs: responseReceivedAtMs,
-                status: .ok,
-                source: "whisper_rest",
-                textChars: stt.transcript.count,
-                sampleRate: recording.sampleRate,
-                audioBytes: recording.pcmData.count,
-                error: nil
-            ),
-            attempts: [attempt]
         )
         return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
     }
@@ -455,30 +414,16 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
             "text_chars": String(stt.transcript.count),
         ])
 
-        let attempt = DebugSTTAttempt(
+        let trace = STTTraceFactory.singleAttemptTrace(
+            provider: STTProvider.appleSpeech.rawValue,
+            route: .onDevice,
             kind: .appleSpeech,
-            status: .ok,
             eventStartMs: requestSentAtMs,
             eventEndMs: responseReceivedAtMs,
             source: "apple_speech",
             textChars: stt.transcript.count,
             sampleRate: recording.sampleRate,
             audioBytes: recording.pcmData.count
-        )
-        let trace = STTTrace(
-            provider: STTProvider.appleSpeech.rawValue,
-            route: .onDevice,
-            mainSpan: STTMainSpanTrace(
-                eventStartMs: requestSentAtMs,
-                eventEndMs: responseReceivedAtMs,
-                status: .ok,
-                source: "apple_speech",
-                textChars: stt.transcript.count,
-                sampleRate: recording.sampleRate,
-                audioBytes: recording.pcmData.count,
-                error: nil
-            ),
-            attempts: [attempt]
         )
         return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
     }

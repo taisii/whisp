@@ -4,14 +4,7 @@ private actor DevLogWriter {
     private let path: URL?
 
     init(environment: [String: String] = ProcessInfo.processInfo.environment) {
-        guard let home = environment["HOME"] else {
-            path = nil
-            return
-        }
-        path = URL(fileURLWithPath: home)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("whisp", isDirectory: true)
-            .appendingPathComponent("dev.log", isDirectory: false)
+        path = try? WhispPaths(environment: environment).devLogFile
     }
 
     func append(_ line: String) {
@@ -46,14 +39,7 @@ public enum DevLog {
     }
 
     public static var filePath: String? {
-        guard let home = ProcessInfo.processInfo.environment["HOME"] else {
-            return nil
-        }
-        return URL(fileURLWithPath: home)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("whisp", isDirectory: true)
-            .appendingPathComponent("dev.log", isDirectory: false)
-            .path
+        (try? WhispPaths().devLogFile.path)
     }
 
     public static func info(_ event: String, fields: [String: String] = [:]) {

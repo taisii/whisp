@@ -172,7 +172,13 @@ public actor DeepgramStreamingClient {
 
         let estimatedDuration = estimateDurationSeconds()
         let usageDuration = estimatedDuration > 0 ? estimatedDuration : duration
-        let usage: STTUsage? = usageDuration > 0 ? STTUsage(durationSeconds: usageDuration, requestID: requestID) : nil
+        let usage: STTUsage? = usageDuration > 0
+            ? STTUsage(
+                durationSeconds: usageDuration,
+                requestID: requestID,
+                provider: STTProvider.deepgram.rawValue
+            )
+            : nil
 
         return (transcript, usage)
     }

@@ -29,7 +29,7 @@ final class DebugCaptureStoreTests: XCTestCase {
             captureID: captureID,
             sttText: "これはsttです",
             outputText: "これは整形結果です",
-            status: "done"
+            status: "completed"
         )
         try store.setGroundTruth(captureID: captureID, text: "  これは正解です  ")
 
@@ -39,6 +39,8 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: records.first?.audioFilePath ?? ""))
 
         let details = try XCTUnwrap(store.loadDetails(captureID: captureID))
+        XCTAssertEqual(details.record.schemaVersion, 2)
+        XCTAssertEqual(details.record.status, "completed")
         XCTAssertEqual(details.record.sttText, "これはsttです")
         XCTAssertEqual(details.record.outputText, "これは整形結果です")
         XCTAssertEqual(details.record.groundTruthText, "これは正解です")
@@ -136,7 +138,7 @@ final class DebugCaptureStoreTests: XCTestCase {
             llmModel: "gemini-2.5-flash-lite",
             appName: "Cursor"
         )
-        try store.updateResult(captureID: captureID, sttText: "stt", outputText: "out", status: "done")
+        try store.updateResult(captureID: captureID, sttText: "stt", outputText: "out", status: "completed")
         try store.setGroundTruth(captureID: captureID, text: "正解")
         try store.saveVisionArtifacts(
             captureID: captureID,

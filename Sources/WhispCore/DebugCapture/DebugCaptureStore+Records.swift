@@ -38,9 +38,18 @@ extension DebugCaptureStore {
             eventsFilePath: eventsPath.path,
             audioFilePath: audioPath.path,
             sampleRate: sampleRate,
+            texts: DebugRunTexts(),
+            metrics: DebugRunMetrics(),
+            artifacts: DebugRunArtifactsSummary(
+                audioFile: "audio.wav",
+                eventsFile: "events.jsonl",
+                promptsDirectory: "prompts",
+                visionImageFile: nil,
+                visionImageMimeType: nil
+            ),
             llmModel: llmModel,
             appName: appName,
-            status: "recorded",
+            status: "skipped",
             accessibilitySnapshot: accessibilitySnapshot
         )
         try writeRecord(record, to: manifestPath)
@@ -62,6 +71,9 @@ extension DebugCaptureStore {
         sttText: String?,
         outputText: String?,
         status: String,
+        skipReason: String? = nil,
+        failureStage: String? = nil,
+        metrics: DebugRunMetrics? = nil,
         errorMessage: String? = nil
     ) throws {
         lock.lock()
@@ -73,6 +85,17 @@ extension DebugCaptureStore {
         record.outputText = outputText
         record.status = status
         record.errorMessage = errorMessage
+        record.skipReason = skipReason
+        record.failure = errorMessage.map { DebugRunFailure(stage: failureStage ?? "pipeline", message: $0) }
+        record.texts = DebugRunTexts(stt: sttText, output: outputText)
+        if let metrics {
+            record.metrics = metrics
+        } else {
+            var updated = record.metrics
+            updated.sttChars = sttText?.count ?? 0
+            updated.outputChars = outputText?.count ?? 0
+            record.metrics = updated
+        }
         try writeRecord(record, to: path)
     }
 
@@ -106,6 +129,8 @@ extension DebugCaptureStore {
             try imageData.write(to: imagePath, options: [.atomic])
             record.visionImageFilePath = imagePath.path
             record.visionImageMimeType = imageMimeType ?? (ext == "png" ? "image/png" : "image/jpeg")
+            record.artifacts.visionImageFile = imagePath.lastPathComponent
+            record.artifacts.visionImageMimeType = record.visionImageMimeType
         }
         try writeRecord(record, to: path)
     }

@@ -2,105 +2,123 @@ import Foundation
 import WhispCore
 
 extension WhispCLI {
+    enum CLICommand {
+        case selfCheck
+        case sttFile(path: String)
+        case sttStream(options: StreamOptions)
+        case pipeline(options: PipelineOptions)
+        case benchmarkManual(options: ManualBenchmarkOptions)
+        case benchmarkVision(options: VisionBenchmarkOptions)
+        case benchmarkSTT(options: STTBenchmarkOptions)
+        case benchmarkGeneration(options: GenerationBenchmarkOptions)
+        case benchmarkE2E(options: ManualBenchmarkOptions)
+
+        var errorLabel: String {
+            switch self {
+            case .selfCheck:
+                return "self-check"
+            case .sttFile:
+                return "stt-check"
+            case .sttStream:
+                return "stt-stream-check"
+            case .pipeline:
+                return "pipeline-check"
+            case .benchmarkManual:
+                return "manual-benchmark"
+            case .benchmarkVision:
+                return "vision-benchmark"
+            case .benchmarkSTT:
+                return "stt-benchmark"
+            case .benchmarkGeneration:
+                return "generation-benchmark"
+            case .benchmarkE2E:
+                return "e2e-benchmark"
+            }
+        }
+
+        static func parse(arguments args: [String]) throws -> CLICommand? {
+            guard let first = args.first else {
+                return nil
+            }
+
+            switch first {
+            case "--self-check":
+                return .selfCheck
+            case "--stt-file":
+                guard args.count == 2 else {
+                    throw AppError.invalidArgument("入力ファイルパスが必要です")
+                }
+                return .sttFile(path: args[1])
+            case "--stt-stream-file":
+                guard args.count >= 2 else {
+                    throw AppError.invalidArgument("入力ファイルパスが必要です")
+                }
+                return .sttStream(options: try parseStreamOptions(args: args))
+            case "--pipeline-file":
+                guard args.count >= 2 else {
+                    throw AppError.invalidArgument("入力ファイルパスが必要です")
+                }
+                return .pipeline(options: try parsePipelineOptions(args: args))
+            case "--benchmark-manual-cases":
+                return .benchmarkManual(options: try parseManualBenchmarkOptions(args: args))
+            case "--benchmark-vision-cases":
+                return .benchmarkVision(options: try parseVisionBenchmarkOptions(args: args))
+            case "--benchmark-stt-cases":
+                return .benchmarkSTT(options: try parseSTTBenchmarkOptions(args: args))
+            case "--benchmark-generation-cases":
+                return .benchmarkGeneration(options: try parseGenerationBenchmarkOptions(args: args))
+            case "--benchmark-e2e-cases":
+                let e2eArgs = ["--benchmark-manual-cases"] + Array(args.dropFirst())
+                return .benchmarkE2E(options: try parseManualBenchmarkOptions(args: e2eArgs))
+            default:
+                return nil
+            }
+        }
+    }
+
     static func run(arguments args: [String]) async {
-        if args.first == "--self-check" {
+        do {
+            guard let command = try CLICommand.parse(arguments: args) else {
+                printUsage()
+                return
+            }
+            try await execute(command)
+            exit(0)
+        } catch {
+            if let command = try? CLICommand.parse(arguments: args) {
+                fputs("\(command.errorLabel) failed: \(error.localizedDescription)\n", stderr)
+            } else {
+                fputs("command failed: \(error.localizedDescription)\n", stderr)
+            }
+            exit(1)
+        }
+    }
+
+    static func execute(_ command: CLICommand) async throws {
+        switch command {
+        case .selfCheck:
             let ok = formatShortcutDisplay("Cmd+J") == "⌘ J" && !isEmptySTT("テスト")
             print(ok ? "ok" : "ng")
-            exit(ok ? 0 : 1)
-        }
-
-        if args.count == 2 && args[0] == "--stt-file" {
-            do {
-                try await runSTTFile(path: args[1])
-                exit(0)
-            } catch {
-                fputs("stt-check failed: \(error.localizedDescription)\n", stderr)
-                exit(1)
+            if !ok {
+                throw AppError.invalidArgument("self-check failed")
             }
+        case let .sttFile(path):
+            try await runSTTFile(path: path)
+        case let .sttStream(options):
+            try await runSTTStreamFile(path: options.path, chunkMs: options.chunkMs, realtime: options.realtime)
+        case let .pipeline(options):
+            try await runPipelineFile(options: options)
+        case let .benchmarkManual(options):
+            try await runManualCaseBenchmark(options: options)
+        case let .benchmarkVision(options):
+            try await runVisionCaseBenchmark(options: options)
+        case let .benchmarkSTT(options):
+            try await runSTTCaseBenchmark(options: options)
+        case let .benchmarkGeneration(options):
+            try await runGenerationCaseBenchmark(options: options)
+        case let .benchmarkE2E(options):
+            try await runManualCaseBenchmark(options: options)
         }
-
-        if args.count >= 2 && args[0] == "--stt-stream-file" {
-            do {
-                let options = try parseStreamOptions(args: args)
-                try await runSTTStreamFile(
-                    path: options.path,
-                    chunkMs: options.chunkMs,
-                    realtime: options.realtime
-                )
-                exit(0)
-            } catch {
-                fputs("stt-stream-check failed: \(error.localizedDescription)\n", stderr)
-                exit(1)
-            }
-        }
-
-        if args.count >= 2 && args[0] == "--pipeline-file" {
-            do {
-                let options = try parsePipelineOptions(args: args)
-                try await runPipelineFile(options: options)
-                exit(0)
-            } catch {
-                fputs("pipeline-check failed: \(error.localizedDescription)\n", stderr)
-                exit(1)
-            }
-        }
-
-        if args.first == "--benchmark-manual-cases" {
-            do {
-                let options = try parseManualBenchmarkOptions(args: args)
-                try await runManualCaseBenchmark(options: options)
-                exit(0)
-            } catch {
-                fputs("manual-benchmark failed: \(error.localizedDescription)\n", stderr)
-                exit(1)
-            }
-        }
-
-        if args.first == "--benchmark-vision-cases" {
-            do {
-                let options = try parseVisionBenchmarkOptions(args: args)
-                try await runVisionCaseBenchmark(options: options)
-                exit(0)
-            } catch {
-                fputs("vision-benchmark failed: \(error.localizedDescription)\n", stderr)
-                exit(1)
-            }
-        }
-
-        if args.first == "--benchmark-stt-cases" {
-            do {
-                let options = try parseSTTBenchmarkOptions(args: args)
-                try await runSTTCaseBenchmark(options: options)
-                exit(0)
-            } catch {
-                fputs("stt-benchmark failed: \(error.localizedDescription)\n", stderr)
-                exit(1)
-            }
-        }
-
-        if args.first == "--benchmark-generation-cases" {
-            do {
-                let options = try parseGenerationBenchmarkOptions(args: args)
-                try await runGenerationCaseBenchmark(options: options)
-                exit(0)
-            } catch {
-                fputs("generation-benchmark failed: \(error.localizedDescription)\n", stderr)
-                exit(1)
-            }
-        }
-
-        if args.first == "--benchmark-e2e-cases" {
-            do {
-                let options = try parseManualBenchmarkOptions(args: [ "--benchmark-manual-cases" ] + Array(args.dropFirst()))
-                try await runManualCaseBenchmark(options: options)
-                exit(0)
-            } catch {
-                fputs("e2e-benchmark failed: \(error.localizedDescription)\n", stderr)
-                exit(1)
-            }
-        }
-
-        printUsage()
     }
 
     static func printUsage() {

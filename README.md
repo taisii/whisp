@@ -11,7 +11,7 @@ Whisp is now implemented as a native macOS app in Swift.
 - STT provider: Deepgram / Whisper (OpenAI) / Apple Speech (OS built-in)
 - LLM post processing (Gemini / OpenAI)
 - Direct text input via Accessibility (CGEvent)
-- Optional screenshot context analysis at recording start
+- Optional screenshot context collection at recording start (`save_only` / `ocr`)
 - Settings window (SwiftUI)
 - Local config and usage storage
 
@@ -28,6 +28,7 @@ Whisp is now implemented as a native macOS app in Swift.
 - `docs/ARCHITECTURE.md`: current architecture and debug data model
 - `scripts/build_macos_app.sh`: local `.app` bundle builder
 - `scripts/reset_permissions.sh`: TCC reset / privacy settings helper
+- `scripts/benchmark_cases.sh`: benchmark entrypoint (`manual|stt|generation|vision|e2e`)
 
 ## Prerequisites
 
@@ -155,17 +156,17 @@ scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl 
 同じ `manual_test_cases.jsonl` を使って、4つの能力を分離して評価できます。
 
 ```bash
-# 1) 画像 -> コンテキスト抽出
-scripts/benchmark_vision_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl
+# 1) 画像 -> OCRコンテキスト抽出
+scripts/benchmark_cases.sh vision ~/.config/whisp/debug/manual_test_cases.jsonl
 
 # 2) 音声 -> transcript（STT）
-scripts/benchmark_stt_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --stt stream --min-audio-seconds 2.0
+scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --stt stream --min-audio-seconds 2.0
 
 # 3) stt_text + context -> 最終テキスト（生成）
-scripts/benchmark_generation_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl
+scripts/benchmark_cases.sh generation ~/.config/whisp/debug/manual_test_cases.jsonl
 
 # 4) 音声 + context -> 最終テキスト（E2E）
-scripts/benchmark_e2e_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --min-audio-seconds 2.0
+scripts/benchmark_cases.sh e2e ~/.config/whisp/debug/manual_test_cases.jsonl --min-audio-seconds 2.0
 ```
 
 各ベンチは `--result-root` で保存先を指定できます。保存物:

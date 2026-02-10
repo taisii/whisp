@@ -9,13 +9,13 @@ public final class DebugCaptureStore: @unchecked Sendable {
     let manualCasesURL: URL
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
-        let home = environment["HOME"] ?? NSTemporaryDirectory()
-        let baseURL = URL(fileURLWithPath: home)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("whisp", isDirectory: true)
-            .appendingPathComponent("debug", isDirectory: true)
-        runsURL = baseURL.appendingPathComponent("runs", isDirectory: true)
-        manualCasesURL = baseURL.appendingPathComponent("manual_test_cases.jsonl", isDirectory: false)
+        let paths = try? WhispPaths(environment: environment, allowTemporaryFallback: true)
+        runsURL = paths?.runsDirectory
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("whisp-debug-runs", isDirectory: true)
+        manualCasesURL = paths?.manualCasesFile
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("manual_test_cases.jsonl", isDirectory: false)
     }
 
     public var capturesDirectoryPath: String { runsURL.path }

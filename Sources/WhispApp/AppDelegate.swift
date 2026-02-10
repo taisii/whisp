@@ -5,6 +5,8 @@ import WhispCore
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var coordinator: AppCoordinator?
+    private var dependencies: AppDependencies?
+    private let recoverySettingsWindowController = SettingsWindowController()
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
@@ -29,24 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         statusItem.menu = menu
 
-        do {
-            let coordinator = try AppCoordinator()
-            self.coordinator = coordinator
-
-            coordinator.onStateChanged = { [weak self] state in
-                self?.apply(state: state)
-            }
-            coordinator.onError = { [weak self] message in
-                self?.showError(message)
-            }
-
-            apply(state: .idle)
-            refreshAccessibilityPermissionState()
-            coordinator.requestAccessibilityPermissionOnLaunch()
-            refreshAccessibilityPermissionState()
-        } catch {
-            showError("アプリ初期化に失敗: \(error.localizedDescription)")
-        }
+        bootstrapApp()
     }
 
     @objc private func toggleRecording() {
@@ -188,5 +173,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         alert.messageText = "Whisp"
         alert.informativeText = message
         alert.runModal()
+    }
+
+    private func bootstrapApp() {
+        do {
+            let dependencies = try AppDependencies.live()
+            self.dependencies = dependencies
+            try dependencies.configStore.ensureExists(default: Config())
+
+            do {
+                let config = try dependencies.configStore.load()
+                try startCoordinator(config: config, dependencies: dependencies)
+            } catch {
+                presentConfigRecovery(error: error, dependencies: dependencies)
+            }
+        } catch {
+            showError("アプリ初期化に失敗: \(error.localizedDescription)")
+        }
+    }
+
+    private func startCoordinator(config: Config, dependencies: AppDependencies) throws {
+        let coordinator = try AppCoordinator(config: config, dependencies: dependencies)
+        self.coordinator = coordinator
+
+        coordinator.onStateChanged = { [weak self] state in
+            self?.apply(state: state)
+        }
+        coordinator.onError = { [weak self] message in
+            self?.showError(message)
+        }
+
+        apply(state: .idle)
+        refreshAccessibilityPermissionState()
+        coordinator.requestAccessibilityPermissionOnLaunch()
+        refreshAccessibilityPermissionState()
+    }
+
+    private func presentConfigRecovery(error: Error, dependencies: AppDependencies) {
+        apply(state: .idle)
+        showError("設定ファイルの読み込みに失敗しました。設定を修正してください: \(error.localizedDescription)")
+        recoverySettingsWindowController.show(config: Config()) { [weak self] updated in
+            guard let self else { return false }
+            do {
+                try dependencies.configStore.save(updated)
+                try self.startCoordinator(config: updated, dependencies: dependencies)
+                return true
+            } catch {
+                self.showError("設定保存に失敗: \(error.localizedDescription)")
+                return false
+            }
+        }
     }
 }

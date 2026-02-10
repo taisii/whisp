@@ -61,31 +61,14 @@ public struct ContextConfig: Codable, Equatable, Sendable {
     public var visionEnabled: Bool
     public var visionMode: VisionContextMode
 
-    public init(visionEnabled: Bool = true, visionMode: VisionContextMode = .llm) {
+    public init(visionEnabled: Bool = true, visionMode: VisionContextMode = .saveOnly) {
         self.visionEnabled = visionEnabled
         self.visionMode = visionMode
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case visionEnabled
-        case visionMode
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        visionEnabled = try container.decodeIfPresent(Bool.self, forKey: .visionEnabled) ?? true
-        visionMode = try container.decodeIfPresent(VisionContextMode.self, forKey: .visionMode) ?? .llm
-    }
-
-    public func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(visionEnabled, forKey: .visionEnabled)
-        try container.encode(visionMode, forKey: .visionMode)
     }
 }
 
 public enum VisionContextMode: String, Codable, Equatable, Sendable, CaseIterable {
-    case llm
+    case saveOnly = "save_only"
     case ocr
 }
 
@@ -118,38 +101,17 @@ public struct Config: Codable, Equatable, Sendable {
         self.llmModel = llmModel
         self.context = context
     }
-
-    enum CodingKeys: String, CodingKey {
-        case apiKeys
-        case shortcut
-        case inputLanguage
-        case recordingMode
-        case sttProvider
-        case appPromptRules
-        case llmModel
-        case context
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        apiKeys = try container.decode(APIKeys.self, forKey: .apiKeys)
-        shortcut = try container.decode(String.self, forKey: .shortcut)
-        inputLanguage = try container.decode(String.self, forKey: .inputLanguage)
-        recordingMode = try container.decode(RecordingMode.self, forKey: .recordingMode)
-        sttProvider = try container.decodeIfPresent(STTProvider.self, forKey: .sttProvider) ?? .deepgram
-        appPromptRules = try container.decode([AppPromptRule].self, forKey: .appPromptRules)
-        llmModel = try container.decode(LLMModel.self, forKey: .llmModel)
-        context = try container.decodeIfPresent(ContextConfig.self, forKey: .context) ?? ContextConfig()
-    }
 }
 
 public struct STTUsage: Equatable, Sendable {
     public var durationSeconds: Double
     public var requestID: String?
+    public var provider: String
 
-    public init(durationSeconds: Double, requestID: String?) {
+    public init(durationSeconds: Double, requestID: String?, provider: String) {
         self.durationSeconds = durationSeconds
         self.requestID = requestID
+        self.provider = provider
     }
 }
 
@@ -157,44 +119,61 @@ public struct LLMUsage: Equatable, Sendable {
     public var model: String
     public var promptTokens: Int
     public var completionTokens: Int
+    public var provider: String
 
-    public init(model: String, promptTokens: Int, completionTokens: Int) {
+    public init(model: String, promptTokens: Int, completionTokens: Int, provider: String? = nil) {
         self.model = model
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
+        self.provider = provider ?? Self.inferProvider(from: model)
+    }
+
+    private static func inferProvider(from model: String) -> String {
+        let normalized = model.lowercased()
+        if normalized.contains("gemini") {
+            return "gemini"
+        }
+        if normalized.contains("gpt") || normalized.contains("openai") {
+            return "openai"
+        }
+        return "unknown"
+    }
+}
+
+public struct STTProviderUsage: Codable, Equatable, Sendable {
+    public var durationSeconds: Double
+    public var requests: Int
+
+    public init(durationSeconds: Double = 0, requests: Int = 0) {
+        self.durationSeconds = durationSeconds
+        self.requests = requests
+    }
+}
+
+public struct LLMProviderUsage: Codable, Equatable, Sendable {
+    public var promptTokens: Int
+    public var completionTokens: Int
+    public var requests: Int
+
+    public init(promptTokens: Int = 0, completionTokens: Int = 0, requests: Int = 0) {
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
+        self.requests = requests
     }
 }
 
 public struct DailyUsage: Codable, Equatable, Sendable {
     public var date: String
-    public var deepgramSeconds: Double
-    public var deepgramRequests: Int
-    public var geminiPromptTokens: Int
-    public var geminiCompletionTokens: Int
-    public var geminiRequests: Int
-    public var openaiPromptTokens: Int
-    public var openaiCompletionTokens: Int
-    public var openaiRequests: Int
+    public var stt: [String: STTProviderUsage]
+    public var llm: [String: LLMProviderUsage]
 
     public init(
         date: String,
-        deepgramSeconds: Double = 0,
-        deepgramRequests: Int = 0,
-        geminiPromptTokens: Int = 0,
-        geminiCompletionTokens: Int = 0,
-        geminiRequests: Int = 0,
-        openaiPromptTokens: Int = 0,
-        openaiCompletionTokens: Int = 0,
-        openaiRequests: Int = 0
+        stt: [String: STTProviderUsage] = [:],
+        llm: [String: LLMProviderUsage] = [:]
     ) {
         self.date = date
-        self.deepgramSeconds = deepgramSeconds
-        self.deepgramRequests = deepgramRequests
-        self.geminiPromptTokens = geminiPromptTokens
-        self.geminiCompletionTokens = geminiCompletionTokens
-        self.geminiRequests = geminiRequests
-        self.openaiPromptTokens = openaiPromptTokens
-        self.openaiCompletionTokens = openaiCompletionTokens
-        self.openaiRequests = openaiRequests
+        self.stt = stt
+        self.llm = llm
     }
 }

@@ -74,7 +74,7 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
 
         let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let usage = decoded.usageMetadata.map {
-            LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount)
+            LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount, provider: "gemini")
         }
 
         return PostProcessResult(text: text, usage: usage)
@@ -108,39 +108,10 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
 
         let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let usage = decoded.usageMetadata.map {
-            LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount)
+            LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount, provider: "gemini")
         }
 
         return PostProcessResult(text: text, usage: usage)
-    }
-
-    func analyzeVisionContext(
-        apiKey: String,
-        model _: LLMModel,
-        prompt: String,
-        imageData: Data,
-        mimeType: String
-    ) async throws -> VisionContext? {
-        let requestBody = GeminiRequest(
-            contents: [
-                GeminiContent(
-                    role: "user",
-                    parts: [
-                        .text(prompt),
-                        .inline(mimeType: mimeType, data: imageData.base64EncodedString()),
-                    ]
-                ),
-            ]
-        )
-
-        guard let url = URL(string: endpoint(apiKey: apiKey)) else {
-            throw AppError.invalidArgument("Gemini URL生成に失敗")
-        }
-
-        let data = try await client.sendJSONRequest(url: url, method: "POST", headers: [:], body: requestBody)
-        let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-        let text = decoded.candidates.first?.content.joinedText ?? ""
-        return parseVisionContext(text)
     }
 
     private func endpoint(apiKey: String) -> String {

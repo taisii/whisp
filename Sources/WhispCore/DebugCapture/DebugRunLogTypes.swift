@@ -14,6 +14,7 @@ public enum DebugLogStatus: String, Codable, CaseIterable, Sendable {
     case ok
     case error
     case cancelled
+    case skipped
 }
 
 public struct DebugRunLogBase: Equatable, Sendable {
@@ -332,12 +333,15 @@ extension DebugRunLog: Codable {
     private enum CodingKeys: String, CodingKey {
         case runID = "run_id"
         case captureID = "capture_id"
-        case logType = "log_type"
-        case eventStartMs = "event_start_ms"
-        case eventEndMs = "event_end_ms"
-        case recordedAtMs = "recorded_at_ms"
+        case stage
         case status
+        case startedAtMs = "started_at_ms"
+        case endedAtMs = "ended_at_ms"
+        case recordedAtMs = "recorded_at_ms"
+        case attrs
+    }
 
+    private enum AttrKeys: String, CodingKey {
         case mode
         case model
         case sttProvider = "stt_provider"
@@ -374,159 +378,146 @@ extension DebugRunLog: Codable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let logType = try container.decode(DebugLogType.self, forKey: .logType)
+        let logType = try container.decode(DebugLogType.self, forKey: .stage)
         let base = try DebugRunLogBase(
             runID: container.decode(String.self, forKey: .runID),
             captureID: container.decodeIfPresent(String.self, forKey: .captureID),
             logType: logType,
-            eventStartMs: container.decode(Int64.self, forKey: .eventStartMs),
-            eventEndMs: container.decode(Int64.self, forKey: .eventEndMs),
+            eventStartMs: container.decode(Int64.self, forKey: .startedAtMs),
+            eventEndMs: container.decode(Int64.self, forKey: .endedAtMs),
             recordedAtMs: container.decode(Int64.self, forKey: .recordedAtMs),
             status: container.decode(DebugLogStatus.self, forKey: .status)
         )
+        let attrs = try container.nestedContainer(keyedBy: AttrKeys.self, forKey: .attrs)
 
         switch logType {
         case .recording:
             self = .recording(DebugRecordingLog(
                 base: base,
-                mode: try container.decode(String.self, forKey: .mode),
-                model: try container.decode(String.self, forKey: .model),
-                sttProvider: try container.decode(String.self, forKey: .sttProvider),
-                sttStreaming: try container.decode(Bool.self, forKey: .sttStreaming),
-                visionEnabled: try container.decode(Bool.self, forKey: .visionEnabled),
-                accessibilitySummaryStarted: try container.decode(Bool.self, forKey: .accessibilitySummaryStarted),
-                sampleRate: try container.decode(Int.self, forKey: .sampleRate),
-                pcmBytes: try container.decode(Int.self, forKey: .pcmBytes)
+                mode: try attrs.decode(String.self, forKey: .mode),
+                model: try attrs.decode(String.self, forKey: .model),
+                sttProvider: try attrs.decode(String.self, forKey: .sttProvider),
+                sttStreaming: try attrs.decode(Bool.self, forKey: .sttStreaming),
+                visionEnabled: try attrs.decode(Bool.self, forKey: .visionEnabled),
+                accessibilitySummaryStarted: try attrs.decode(Bool.self, forKey: .accessibilitySummaryStarted),
+                sampleRate: try attrs.decode(Int.self, forKey: .sampleRate),
+                pcmBytes: try attrs.decode(Int.self, forKey: .pcmBytes)
             ))
         case .stt:
             self = .stt(DebugSTTLog(
                 base: base,
-                provider: try container.decode(String.self, forKey: .provider),
-                route: try container.decode(DebugSTTRoute.self, forKey: .route),
-                source: try container.decode(String.self, forKey: .source),
-                textChars: try container.decode(Int.self, forKey: .textChars),
-                sampleRate: try container.decode(Int.self, forKey: .sampleRate),
-                audioBytes: try container.decode(Int.self, forKey: .audioBytes),
-                attempts: try container.decode([DebugSTTAttempt].self, forKey: .attempts)
+                provider: try attrs.decode(String.self, forKey: .provider),
+                route: try attrs.decode(DebugSTTRoute.self, forKey: .route),
+                source: try attrs.decode(String.self, forKey: .source),
+                textChars: try attrs.decode(Int.self, forKey: .textChars),
+                sampleRate: try attrs.decode(Int.self, forKey: .sampleRate),
+                audioBytes: try attrs.decode(Int.self, forKey: .audioBytes),
+                attempts: try attrs.decode([DebugSTTAttempt].self, forKey: .attempts)
             ))
         case .vision:
             self = .vision(DebugVisionLog(
                 base: base,
-                model: try container.decode(String.self, forKey: .model),
-                mode: try container.decode(String.self, forKey: .mode),
-                contextPresent: try container.decode(Bool.self, forKey: .contextPresent),
-                imageBytes: try container.decode(Int.self, forKey: .imageBytes),
-                imageWidth: try container.decode(Int.self, forKey: .imageWidth),
-                imageHeight: try container.decode(Int.self, forKey: .imageHeight),
-                error: try container.decodeIfPresent(String.self, forKey: .error)
+                model: try attrs.decode(String.self, forKey: .model),
+                mode: try attrs.decode(String.self, forKey: .mode),
+                contextPresent: try attrs.decode(Bool.self, forKey: .contextPresent),
+                imageBytes: try attrs.decode(Int.self, forKey: .imageBytes),
+                imageWidth: try attrs.decode(Int.self, forKey: .imageWidth),
+                imageHeight: try attrs.decode(Int.self, forKey: .imageHeight),
+                error: try attrs.decodeIfPresent(String.self, forKey: .error)
             ))
         case .postprocess:
             self = .postprocess(DebugPostProcessLog(
                 base: base,
-                model: try container.decode(String.self, forKey: .model),
-                contextPresent: try container.decode(Bool.self, forKey: .contextPresent),
-                sttChars: try container.decode(Int.self, forKey: .sttChars),
-                outputChars: try container.decode(Int.self, forKey: .outputChars),
-                kind: try container.decode(DebugPostProcessKind.self, forKey: .kind)
+                model: try attrs.decode(String.self, forKey: .model),
+                contextPresent: try attrs.decode(Bool.self, forKey: .contextPresent),
+                sttChars: try attrs.decode(Int.self, forKey: .sttChars),
+                outputChars: try attrs.decode(Int.self, forKey: .outputChars),
+                kind: try attrs.decode(DebugPostProcessKind.self, forKey: .kind)
             ))
         case .directInput:
             self = .directInput(DebugDirectInputLog(
                 base: base,
-                success: try container.decode(Bool.self, forKey: .success),
-                outputChars: try container.decode(Int.self, forKey: .outputChars)
+                success: try attrs.decode(Bool.self, forKey: .success),
+                outputChars: try attrs.decode(Int.self, forKey: .outputChars)
             ))
         case .pipeline:
             self = .pipeline(DebugPipelineLog(
                 base: base,
-                sttChars: try container.decode(Int.self, forKey: .sttChars),
-                outputChars: try container.decode(Int.self, forKey: .outputChars),
-                error: try container.decodeIfPresent(String.self, forKey: .error)
+                sttChars: try attrs.decode(Int.self, forKey: .sttChars),
+                outputChars: try attrs.decode(Int.self, forKey: .outputChars),
+                error: try attrs.decodeIfPresent(String.self, forKey: .error)
             ))
         case .contextSummary:
             self = .contextSummary(DebugContextSummaryLog(
                 base: base,
-                source: try container.decode(String.self, forKey: .source),
-                appName: try container.decodeIfPresent(String.self, forKey: .appName),
-                sourceChars: try container.decode(Int.self, forKey: .sourceChars),
-                summaryChars: try container.decode(Int.self, forKey: .summaryChars),
-                termsCount: try container.decode(Int.self, forKey: .termsCount),
-                error: try container.decodeIfPresent(String.self, forKey: .error)
+                source: try attrs.decode(String.self, forKey: .source),
+                appName: try attrs.decodeIfPresent(String.self, forKey: .appName),
+                sourceChars: try attrs.decode(Int.self, forKey: .sourceChars),
+                summaryChars: try attrs.decode(Int.self, forKey: .summaryChars),
+                termsCount: try attrs.decode(Int.self, forKey: .termsCount),
+                error: try attrs.decodeIfPresent(String.self, forKey: .error)
             ))
         }
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
+        let base = self.base
+        try container.encode(base.runID, forKey: .runID)
+        try container.encodeIfPresent(base.captureID, forKey: .captureID)
+        try container.encode(base.logType, forKey: .stage)
+        try container.encode(base.status, forKey: .status)
+        try container.encode(base.eventStartMs, forKey: .startedAtMs)
+        try container.encode(base.eventEndMs, forKey: .endedAtMs)
+        try container.encode(base.recordedAtMs, forKey: .recordedAtMs)
 
-        func encodeBase(_ base: DebugRunLogBase) throws {
-            try container.encode(base.runID, forKey: .runID)
-            try container.encodeIfPresent(base.captureID, forKey: .captureID)
-            try container.encode(base.logType, forKey: .logType)
-            try container.encode(base.eventStartMs, forKey: .eventStartMs)
-            try container.encode(base.eventEndMs, forKey: .eventEndMs)
-            try container.encode(base.recordedAtMs, forKey: .recordedAtMs)
-            try container.encode(base.status, forKey: .status)
-        }
-
+        var attrs = container.nestedContainer(keyedBy: AttrKeys.self, forKey: .attrs)
         switch self {
         case let .recording(log):
-            try encodeBase(log.base)
-            try container.encode(log.mode, forKey: .mode)
-            try container.encode(log.model, forKey: .model)
-            try container.encode(log.sttProvider, forKey: .sttProvider)
-            try container.encode(log.sttStreaming, forKey: .sttStreaming)
-            try container.encode(log.visionEnabled, forKey: .visionEnabled)
-            try container.encode(log.accessibilitySummaryStarted, forKey: .accessibilitySummaryStarted)
-            try container.encode(log.sampleRate, forKey: .sampleRate)
-            try container.encode(log.pcmBytes, forKey: .pcmBytes)
-
+            try attrs.encode(log.mode, forKey: .mode)
+            try attrs.encode(log.model, forKey: .model)
+            try attrs.encode(log.sttProvider, forKey: .sttProvider)
+            try attrs.encode(log.sttStreaming, forKey: .sttStreaming)
+            try attrs.encode(log.visionEnabled, forKey: .visionEnabled)
+            try attrs.encode(log.accessibilitySummaryStarted, forKey: .accessibilitySummaryStarted)
+            try attrs.encode(log.sampleRate, forKey: .sampleRate)
+            try attrs.encode(log.pcmBytes, forKey: .pcmBytes)
         case let .stt(log):
-            try encodeBase(log.base)
-            try container.encode(log.provider, forKey: .provider)
-            try container.encode(log.route, forKey: .route)
-            try container.encode(log.source, forKey: .source)
-            try container.encode(log.textChars, forKey: .textChars)
-            try container.encode(log.sampleRate, forKey: .sampleRate)
-            try container.encode(log.audioBytes, forKey: .audioBytes)
-            try container.encode(log.attempts, forKey: .attempts)
-
+            try attrs.encode(log.provider, forKey: .provider)
+            try attrs.encode(log.route, forKey: .route)
+            try attrs.encode(log.source, forKey: .source)
+            try attrs.encode(log.textChars, forKey: .textChars)
+            try attrs.encode(log.sampleRate, forKey: .sampleRate)
+            try attrs.encode(log.audioBytes, forKey: .audioBytes)
+            try attrs.encode(log.attempts, forKey: .attempts)
         case let .vision(log):
-            try encodeBase(log.base)
-            try container.encode(log.model, forKey: .model)
-            try container.encode(log.mode, forKey: .mode)
-            try container.encode(log.contextPresent, forKey: .contextPresent)
-            try container.encode(log.imageBytes, forKey: .imageBytes)
-            try container.encode(log.imageWidth, forKey: .imageWidth)
-            try container.encode(log.imageHeight, forKey: .imageHeight)
-            try container.encodeIfPresent(log.error, forKey: .error)
-
+            try attrs.encode(log.model, forKey: .model)
+            try attrs.encode(log.mode, forKey: .mode)
+            try attrs.encode(log.contextPresent, forKey: .contextPresent)
+            try attrs.encode(log.imageBytes, forKey: .imageBytes)
+            try attrs.encode(log.imageWidth, forKey: .imageWidth)
+            try attrs.encode(log.imageHeight, forKey: .imageHeight)
+            try attrs.encodeIfPresent(log.error, forKey: .error)
         case let .postprocess(log):
-            try encodeBase(log.base)
-            try container.encode(log.model, forKey: .model)
-            try container.encode(log.contextPresent, forKey: .contextPresent)
-            try container.encode(log.sttChars, forKey: .sttChars)
-            try container.encode(log.outputChars, forKey: .outputChars)
-            try container.encode(log.kind, forKey: .kind)
-
+            try attrs.encode(log.model, forKey: .model)
+            try attrs.encode(log.contextPresent, forKey: .contextPresent)
+            try attrs.encode(log.sttChars, forKey: .sttChars)
+            try attrs.encode(log.outputChars, forKey: .outputChars)
+            try attrs.encode(log.kind, forKey: .kind)
         case let .directInput(log):
-            try encodeBase(log.base)
-            try container.encode(log.success, forKey: .success)
-            try container.encode(log.outputChars, forKey: .outputChars)
-
+            try attrs.encode(log.success, forKey: .success)
+            try attrs.encode(log.outputChars, forKey: .outputChars)
         case let .pipeline(log):
-            try encodeBase(log.base)
-            try container.encode(log.sttChars, forKey: .sttChars)
-            try container.encode(log.outputChars, forKey: .outputChars)
-            try container.encodeIfPresent(log.error, forKey: .error)
-
+            try attrs.encode(log.sttChars, forKey: .sttChars)
+            try attrs.encode(log.outputChars, forKey: .outputChars)
+            try attrs.encodeIfPresent(log.error, forKey: .error)
         case let .contextSummary(log):
-            try encodeBase(log.base)
-            try container.encode(log.source, forKey: .source)
-            try container.encodeIfPresent(log.appName, forKey: .appName)
-            try container.encode(log.sourceChars, forKey: .sourceChars)
-            try container.encode(log.summaryChars, forKey: .summaryChars)
-            try container.encode(log.termsCount, forKey: .termsCount)
-            try container.encodeIfPresent(log.error, forKey: .error)
+            try attrs.encode(log.source, forKey: .source)
+            try attrs.encodeIfPresent(log.appName, forKey: .appName)
+            try attrs.encode(log.sourceChars, forKey: .sourceChars)
+            try attrs.encode(log.summaryChars, forKey: .summaryChars)
+            try attrs.encode(log.termsCount, forKey: .termsCount)
+            try attrs.encodeIfPresent(log.error, forKey: .error)
         }
     }
 }

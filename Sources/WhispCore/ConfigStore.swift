@@ -8,13 +8,7 @@ public final class ConfigStore {
             self.path = path
             return
         }
-        guard let home = environment["HOME"] else {
-            throw AppError.configDirMissing
-        }
-        self.path = URL(fileURLWithPath: home)
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("whisp", isDirectory: true)
-            .appendingPathComponent("config.json", isDirectory: false)
+        self.path = try WhispPaths(environment: environment).configFile
     }
 
     public func load() throws -> Config {
@@ -40,13 +34,10 @@ public final class ConfigStore {
         }
     }
 
-    public func loadOrCreate() throws -> Config {
-        do {
-            return try load()
-        } catch {
-            let config = Config()
-            try save(config)
-            return config
+    public func ensureExists(default config: Config) throws {
+        if FileManager.default.fileExists(atPath: path.path) {
+            return
         }
+        try save(config)
     }
 }
