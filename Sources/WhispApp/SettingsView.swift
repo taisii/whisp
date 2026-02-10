@@ -3,15 +3,7 @@ import SwiftUI
 import WhispCore
 
 struct SettingsView: View {
-    private enum ActiveAlert: Int, Identifiable {
-        case confirmEnableAccessibility
-        case accessibilityNotGranted
-
-        var id: Int { rawValue }
-    }
-
     @State private var config: Config
-    @State private var activeAlert: ActiveAlert?
 
     private let onSave: @MainActor (Config) -> Void
     private let onCancel: @MainActor () -> Void
@@ -57,11 +49,7 @@ struct SettingsView: View {
                 }
 
                 Section("コンテキスト") {
-                    Toggle("アクセシビリティ情報を使う", isOn: accessibilityToggleBinding)
                     Toggle("スクリーンショット解析を使う", isOn: binding(\.context.visionEnabled))
-                    Button("アクセシビリティ権限を再確認") {
-                        refreshAccessibilitySettingFromSystem()
-                    }
                 }
             }
             .formStyle(.grouped)
@@ -82,28 +70,6 @@ struct SettingsView: View {
             .padding(.bottom, 16)
         }
         .frame(width: 520, height: 520)
-        .alert(item: $activeAlert) { alert in
-            switch alert {
-            case .confirmEnableAccessibility:
-                return Alert(
-                    title: Text("アクセシビリティ権限を要求しますか？"),
-                    message: Text("有効化すると、Whisp が他アプリへテキストを直接入力できるようになります。"),
-                    primaryButton: .default(Text("要求する")) {
-                        requestAccessibilityAndEnable()
-                    },
-                    secondaryButton: .cancel(Text("キャンセル"))
-                )
-            case .accessibilityNotGranted:
-                return Alert(
-                    title: Text("アクセシビリティ権限が未許可です"),
-                    message: Text("システム設定で Whisp を許可した後に、再度オンにしてください。"),
-                    primaryButton: .default(Text("設定を開く")) {
-                        DirectInput.openAccessibilitySettings()
-                    },
-                    secondaryButton: .cancel(Text("閉じる"))
-                )
-            }
-        }
     }
 
     private func recordingModeLabel(_ mode: RecordingMode) -> String {
@@ -120,45 +86,6 @@ struct SettingsView: View {
             get: { config[keyPath: keyPath] },
             set: { config[keyPath: keyPath] = $0 }
         )
-    }
-
-    private var accessibilityToggleBinding: Binding<Bool> {
-        Binding(
-            get: { config.context.accessibilityEnabled },
-            set: { newValue in
-                if !newValue {
-                    config.context.accessibilityEnabled = false
-                    return
-                }
-
-                if DirectInput.isAccessibilityTrusted() {
-                    config.context.accessibilityEnabled = true
-                } else {
-                    config.context.accessibilityEnabled = false
-                    activeAlert = .confirmEnableAccessibility
-                }
-            }
-        )
-    }
-
-    private func requestAccessibilityAndEnable() {
-        let trusted = DirectInput.requestAccessibilityPermission(prompt: true)
-        if trusted || DirectInput.isAccessibilityTrusted() {
-            config.context.accessibilityEnabled = true
-            return
-        }
-
-        config.context.accessibilityEnabled = false
-        activeAlert = .accessibilityNotGranted
-    }
-
-    private func refreshAccessibilitySettingFromSystem() {
-        if DirectInput.isAccessibilityTrusted() {
-            config.context.accessibilityEnabled = true
-        } else {
-            config.context.accessibilityEnabled = false
-            activeAlert = .accessibilityNotGranted
-        }
     }
 }
 

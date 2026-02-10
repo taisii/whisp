@@ -32,27 +32,28 @@ public struct PromptTraceRecord: Codable, Sendable {
 }
 
 public enum PromptTrace {
-    public static var directoryPath: String? {
-        let environment = ProcessInfo.processInfo.environment
+    public static var directoryPath: String {
+        resolvedDirectoryPath(environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func resolvedDirectoryPath(environment: [String: String]) -> String {
         let raw = environment["WHISP_PROMPT_TRACE_DIR"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if let raw, !raw.isEmpty {
             return raw
         }
 
-        guard let home = environment["HOME"], !home.isEmpty else {
-            return nil
-        }
-        return URL(fileURLWithPath: home)
+        let home = (environment["HOME"] ?? NSTemporaryDirectory())
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = home.isEmpty ? NSTemporaryDirectory() : home
+        return URL(fileURLWithPath: base, isDirectory: true)
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("whisp", isDirectory: true)
             .appendingPathComponent("debug", isDirectory: true)
+            .appendingPathComponent("runs", isDirectory: true)
+            .appendingPathComponent("_default", isDirectory: true)
             .appendingPathComponent("prompts", isDirectory: true)
             .path
-    }
-
-    public static var isEnabled: Bool {
-        directoryPath != nil
     }
 
     public static func dump(
@@ -63,14 +64,22 @@ public enum PromptTrace {
         prompt: String,
         extra: [String: String] = [:]
     ) {
-        guard let directoryPath else { return }
+        let runDirOverride = extra["run_dir"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetDirectoryPath: String
+        if let runDirOverride, !runDirOverride.isEmpty {
+            targetDirectoryPath = URL(fileURLWithPath: runDirOverride, isDirectory: true)
+                .appendingPathComponent("prompts", isDirectory: true)
+                .path
+        } else {
+            targetDirectoryPath = directoryPath
+        }
 
         let timestamp = ISO8601DateFormatter().string(from: Date())
         let safeStage = sanitizeFileToken(stage)
         let id = String(UUID().uuidString.prefix(8)).lowercased()
         let baseName = "\(timestamp.replacingOccurrences(of: ":", with: "-"))-\(safeStage)-\(id)"
 
-        let dirURL = URL(fileURLWithPath: directoryPath, isDirectory: true)
+        let dirURL = URL(fileURLWithPath: targetDirectoryPath, isDirectory: true)
         let promptFile = "\(baseName).prompt.txt"
         let promptURL = dirURL.appendingPathComponent(promptFile, isDirectory: false)
         let metaURL = dirURL.appendingPathComponent("\(baseName).meta.json", isDirectory: false)

@@ -52,22 +52,10 @@ public struct AppPromptRule: Codable, Equatable, Sendable {
 }
 
 public struct ContextConfig: Codable, Equatable, Sendable {
-    public var accessibilityEnabled: Bool
     public var visionEnabled: Bool
 
-    public init(accessibilityEnabled: Bool = true, visionEnabled: Bool = true) {
-        self.accessibilityEnabled = accessibilityEnabled
+    public init(visionEnabled: Bool = true) {
         self.visionEnabled = visionEnabled
-    }
-}
-
-public struct BillingSettings: Codable, Equatable, Sendable {
-    public var deepgramEnabled: Bool
-    public var deepgramProjectID: String
-
-    public init(deepgramEnabled: Bool = false, deepgramProjectID: String = "") {
-        self.deepgramEnabled = deepgramEnabled
-        self.deepgramProjectID = deepgramProjectID
     }
 }
 
@@ -76,32 +64,26 @@ public struct Config: Codable, Equatable, Sendable {
     public var shortcut: String
     public var inputLanguage: String
     public var recordingMode: RecordingMode
-    public var knownApps: [String]
     public var appPromptRules: [AppPromptRule]
     public var llmModel: LLMModel
     public var context: ContextConfig
-    public var billing: BillingSettings
 
     public init(
         apiKeys: APIKeys = APIKeys(),
         shortcut: String = "Cmd+J",
         inputLanguage: String = "ja",
         recordingMode: RecordingMode = .toggle,
-        knownApps: [String] = [],
         appPromptRules: [AppPromptRule] = [],
         llmModel: LLMModel = .gemini25FlashLite,
-        context: ContextConfig = ContextConfig(),
-        billing: BillingSettings = BillingSettings()
+        context: ContextConfig = ContextConfig()
     ) {
         self.apiKeys = apiKeys
         self.shortcut = shortcut
         self.inputLanguage = inputLanguage
         self.recordingMode = recordingMode
-        self.knownApps = knownApps
         self.appPromptRules = appPromptRules
         self.llmModel = llmModel
         self.context = context
-        self.billing = billing
     }
 }
 

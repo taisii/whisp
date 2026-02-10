@@ -27,5 +27,9 @@ let package = Package(
             name: "WhispCoreTests",
             dependencies: ["WhispCore"]
         ),
+        .testTarget(
+            name: "WhispAppTests",
+            dependencies: ["WhispApp", "WhispCore"]
+        ),
     ]
 )

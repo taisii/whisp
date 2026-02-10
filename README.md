@@ -20,8 +20,12 @@ Whisp is now implemented as a native macOS app in Swift.
 - `Package.swift`: SwiftPM manifest
 - `Sources/WhispCore`: core logic and utilities
 - `Sources/WhispApp`: native menu bar GUI app
+  - `Pipeline/`: `RecordingService` / `STTService` / `PostProcessorService` / `OutputService` / `DebugCaptureService`
+  - `LLM/`: provider abstraction (`LLMAPIProvider`) and provider implementations
 - `Sources/whisp`: small CLI smoke-check target
 - `Tests/WhispCoreTests`: migrated tests
+- `Tests/WhispAppTests`: app-layer tests (pipeline state transitions)
+- `docs/ARCHITECTURE.md`: current architecture and debug data model
 - `scripts/build_macos_app.sh`: local `.app` bundle builder
 
 ## Prerequisites
@@ -104,9 +108,11 @@ Requirements:
 ```bash
 # one-command benchmark cycle
 scripts/benchmark_stt_latency.sh Tests/Fixtures/benchmark_ja_10s.wav 3
+# ログ保存先を指定する例
+scripts/benchmark_stt_latency.sh Tests/Fixtures/benchmark_ja_10s.wav 3 /tmp/whisp-sttbench
 ```
 
-`benchmark_stt_latency.sh` は次を出力します。
+`benchmark_stt_latency.sh` は次を出力します（各runログは `result_root/logs/` に保存）。
 - `post_stop_latency_rest_ms`: REST方式での「録音停止後→STT完了」
 - `post_stop_latency_stream_ms`: Streaming方式での「録音停止後→最終確定」
 
@@ -122,17 +128,58 @@ scripts/benchmark_manual_cases.sh
 scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --limit 20
 # context保存済みケースのみで比較する例
 scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --require-context
+# 音声長2.5秒未満を除外し、結果を保存する例
+scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --result-root /tmp/whisp-manualbench --min-audio-seconds 2.5
 ```
 
 主指標:
 - `exact_match_rate`: 完全一致率
 - `avg_cer`: ケース平均CER（文字誤り率）
 - `weighted_cer`: 全文字数で重み付けしたCER
+- `intent_match_rate`: 意図一致率（intent judge 有効時）
 - `avg_total_after_stop_ms`: 録音停止後レイテンシ平均
 
 補足:
 - この更新以前に保存されたケースには `context` / `vision_image_file` が無い場合があります。
 - `--require-context` を付けると、同条件比較に必要な `context` 付きケースだけを評価します。
+- `--min-audio-seconds` 未満の短い音声は `skipped_too_short_audio` として自動除外されます。
+- ケース別ログは `manual_case_rows.jsonl`、集計ログは `manual_summary.json` に保存されます。
+- intent評価は `intent_gold` / `intent_silver`（または `labels.intent_gold` / `labels.intent_silver`）を参照します。
+
+### Component benchmarks (1:Vision / 2:STT / 3:Generation / 4:E2E)
+
+同じ `manual_test_cases.jsonl` を使って、4つの能力を分離して評価できます。
+
+```bash
+# 1) 画像 -> コンテキスト抽出
+scripts/benchmark_vision_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl
+
+# 2) 音声 -> transcript（STT）
+scripts/benchmark_stt_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --stt stream --min-audio-seconds 2.0
+
+# 3) stt_text + context -> 最終テキスト（生成）
+scripts/benchmark_generation_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl
+
+# 4) 音声 + context -> 最終テキスト（E2E）
+scripts/benchmark_e2e_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --min-audio-seconds 2.0
+```
+
+各ベンチは `--result-root` で保存先を指定できます。保存物:
+- `*_case_rows.jsonl`: ケース別ログ
+- `*_summary.json`: 集計結果
+- `summary.txt`: 実行時コンソール出力
+
+キャッシュ:
+- 1/2/3 は `~/.config/whisp/benchmark_cache/` を参照し、同一入力・同一設定の結果を再利用します。
+- キャッシュ無効化は `--no-cache`。
+
+一括で回す場合:
+
+```bash
+scripts/run_component_eval_loop.sh ~/.config/whisp/debug/manual_test_cases.jsonl
+```
+
+`run_component_eval_loop.sh` は `1_vision/2_stt/3_generation/4_e2e` を同一 `result_root` に出力し、`overview.txt` を生成します。
 
 ### Full pipeline benchmark (stop -> final output)
 
@@ -150,6 +197,24 @@ scripts/benchmark_full_pipeline.sh Tests/Fixtures/benchmark_ja_10s.wav 3 discard
 
 この結果を基準に、改善優先度を決めます。
 
+### End-to-end eval loop (manual + stt + full)
+
+評価ループをまとめて回す場合:
+
+```bash
+# 1) manualケース評価（短音声除外、intent judge含む）
+# 2) STT latency
+# 3) full pipeline
+# 4) dev.log解析（存在時）
+scripts/run_eval_loop.sh ~/.config/whisp/debug/manual_test_cases.jsonl Tests/Fixtures/benchmark_ja_10s.wav
+```
+
+出力:
+- `overview.txt`: 主要指標の要約
+- `manual/`: ケース別評価ログと集計JSON
+- `stt/`: STT latencyログ
+- `full/`: full pipelineログ
+
 プロンプト比較:
 
 `benchmark_full_pipeline.sh` は `result_root` 配下に `traces/` を保存します。  
@@ -162,10 +227,13 @@ scripts/analyze_prompt_traces.sh /tmp/whisp-fullbench-context
 実アプリでの実プロンプト採取:
 
 ```bash
-WHISP_PROMPT_TRACE_DIR=/tmp/whisp-prompts WHISP_DEV_LOG=1 swift run WhispApp
+WHISP_DEV_LOG=1 swift run WhispApp
 ```
 
-`WHISP_PROMPT_TRACE_DIR` を指定すると、以下が保存されます。
+デフォルト保存先は `~/.config/whisp/debug/runs/_default/prompts` です。  
+`WHISP_PROMPT_TRACE_DIR` を指定すると保存先を上書きできます。
+
+保存されるもの:
 - `*.prompt.txt`: 実際に送信するプロンプト本文
 - `*.meta.json`: モデル、context、文字数など
 
@@ -210,8 +278,8 @@ scripts/analyze_pipeline_log.sh ~/.config/whisp/dev.log 10
 - Visionで解析したスクリーンショット（JPEG/PNG）をキャプチャごとに保存
 
 保存先:
-- 録音/メタ: `~/.config/whisp/debug/captures`
-- プロンプト: `~/.config/whisp/debug/prompts`
+- 録音/メタ/イベント: `~/.config/whisp/debug/runs/<capture-id>/`
+- プロンプト: `~/.config/whisp/debug/runs/<capture-id>/prompts`（`run_dir` 未指定時は `~/.config/whisp/debug/runs/_default/prompts`）
 - 手動テストケース: `~/.config/whisp/debug/manual_test_cases.jsonl`
 
 ## Run as menu bar app (debug)

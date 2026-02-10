@@ -18,11 +18,9 @@ final class ConfigStoreTests: XCTestCase {
             shortcut: "Option+Space",
             inputLanguage: "ja",
             recordingMode: .pushToTalk,
-            knownApps: ["Slack", "VSCode"],
             appPromptRules: [AppPromptRule(appName: "Slack", template: "入力: {STT結果}")],
             llmModel: .gpt5Nano,
-            context: ContextConfig(accessibilityEnabled: false, visionEnabled: true),
-            billing: BillingSettings(deepgramEnabled: true, deepgramProjectID: "project-123")
+            context: ContextConfig(visionEnabled: true)
         )
 
         try store.save(config)

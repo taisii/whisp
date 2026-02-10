@@ -2,7 +2,7 @@
 set -euo pipefail
 
 jsonl_path="$HOME/.config/whisp/debug/manual_test_cases.jsonl"
-result_root="/tmp/whisp-manualbench-$(date +%Y%m%d-%H%M%S)"
+result_root="/tmp/whisp-generationbench-$(date +%Y%m%d-%H%M%S)"
 
 if [[ $# -gt 0 && "$1" != --* ]]; then
   jsonl_path="$1"
@@ -32,8 +32,8 @@ mkdir -p "$result_root"
 echo "building..."
 swift build >/dev/null
 
-echo "running manual-case benchmark..."
-./.build/debug/whisp --benchmark-manual-cases "$jsonl_path" --benchmark-log-dir "$result_root" "${extra_args[@]}" | tee "$result_root/summary.txt"
+echo "running generation-case benchmark..."
+./.build/debug/whisp --benchmark-generation-cases "$jsonl_path" --benchmark-log-dir "$result_root" "${extra_args[@]}" | tee "$result_root/summary.txt"
 echo "result_root: $result_root"
-echo "summary_log: $result_root/manual_summary.json"
-echo "case_rows_log: $result_root/manual_case_rows.jsonl"
+echo "summary_log: $result_root/generation_summary.json"
+echo "case_rows_log: $result_root/generation_case_rows.jsonl"

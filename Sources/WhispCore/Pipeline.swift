@@ -11,11 +11,3 @@ public func collectAudio(_ chunks: [[UInt8]]) -> [UInt8] {
     }
     return output
 }
-
-public func collectAudioData(_ chunks: [Data]) -> Data {
-    var output = Data()
-    for chunk in chunks {
-        output.append(chunk)
-    }
-    return output
-}

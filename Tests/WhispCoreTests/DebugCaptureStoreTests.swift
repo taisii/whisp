@@ -42,6 +42,8 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertEqual(details.record.sttText, "これはsttです")
         XCTAssertEqual(details.record.outputText, "これは整形結果です")
         XCTAssertEqual(details.record.groundTruthText, "これは正解です")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: details.record.eventsFilePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: details.record.runDirectoryPath))
     }
 
     func testLoadDetailsIncludesPromptTraceForSameRunID() throws {
@@ -55,11 +57,13 @@ final class DebugCaptureStoreTests: XCTestCase {
             appName: nil
         )
 
-        let promptsDir = home
+        let runDirectory = home
             .appendingPathComponent(".config", isDirectory: true)
             .appendingPathComponent("whisp", isDirectory: true)
             .appendingPathComponent("debug", isDirectory: true)
-            .appendingPathComponent("prompts", isDirectory: true)
+            .appendingPathComponent("runs", isDirectory: true)
+            .appendingPathComponent(captureID, isDirectory: true)
+        let promptsDir = runDirectory.appendingPathComponent("prompts", isDirectory: true)
         try FileManager.default.createDirectory(at: promptsDir, withIntermediateDirectories: true)
 
         let promptFile = "sample.prompt.txt"
@@ -75,7 +79,7 @@ final class DebugCaptureStoreTests: XCTestCase {
             context: ContextInfo(visionSummary: "summary", visionTerms: ["term1", "term2"]),
             promptChars: 11,
             promptFile: promptFile,
-            extra: ["run_id": "run-xyz"]
+            extra: [:]
         )
         try JSONEncoder().encode(trace).write(to: metaURL)
 
@@ -116,6 +120,7 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertEqual(json["id"] as? String, captureID)
         XCTAssertEqual(json["ground_truth_text"] as? String, "正解")
         XCTAssertEqual(json["llm_model"] as? String, "gemini-2.5-flash-lite")
+        XCTAssertNotNil(json["audio_duration_sec"] as? Double)
         XCTAssertNotNil(json["vision_image_file"] as? String)
         let context = json["context"] as? [String: Any]
         XCTAssertEqual(context?["visionSummary"] as? String, "editor")
@@ -141,12 +146,50 @@ final class DebugCaptureStoreTests: XCTestCase {
         let detailsBeforeDelete = try XCTUnwrap(store.loadDetails(captureID: captureID))
         XCTAssertTrue(FileManager.default.fileExists(atPath: detailsBeforeDelete.record.audioFilePath))
         XCTAssertTrue(FileManager.default.fileExists(atPath: detailsBeforeDelete.record.visionImageFilePath ?? ""))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: detailsBeforeDelete.record.runDirectoryPath))
 
         try store.deleteCapture(captureID: captureID)
 
         XCTAssertNil(try store.loadDetails(captureID: captureID))
         XCTAssertFalse(FileManager.default.fileExists(atPath: detailsBeforeDelete.record.audioFilePath))
         XCTAssertFalse(FileManager.default.fileExists(atPath: detailsBeforeDelete.record.visionImageFilePath ?? ""))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: detailsBeforeDelete.record.runDirectoryPath))
         XCTAssertTrue(try store.listRecords(limit: 10).isEmpty)
+    }
+
+    func testLegacyLayoutFilesAreIgnored() throws {
+        let home = tempHome()
+        let base = home
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("whisp", isDirectory: true)
+            .appendingPathComponent("debug", isDirectory: true)
+        let legacyCaptures = base.appendingPathComponent("captures", isDirectory: true)
+        let legacyPrompts = base.appendingPathComponent("prompts", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyCaptures, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: legacyPrompts, withIntermediateDirectories: true)
+
+        let payload: [String: Any] = [
+            "id": "legacy-1",
+            "runID": "legacy-run",
+            "createdAt": "2026-02-10T00:00:00Z",
+            "audioFilePath": "legacy.wav",
+            "sampleRate": 16000,
+            "llmModel": "gpt-5-nano",
+            "status": "done",
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        try data.write(to: legacyCaptures.appendingPathComponent("legacy-1.json"))
+        try "LEGACY PROMPT".write(
+            to: legacyPrompts.appendingPathComponent("legacy.prompt.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let store = makeStore(home: home)
+        let records = try store.listRecords(limit: 10)
+
+        XCTAssertTrue(records.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyCaptures.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyPrompts.path))
     }
 }

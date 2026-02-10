@@ -20,8 +20,10 @@ User speaks → Recording → Deepgram STT → LLM post-processing → Direct in
 ```
 
 **Responsibilities**:
-- **WhispApp (AppKit/SwiftUI)**: Menu bar UI, settings window, audio capture, input dispatch.
-- **WhispCore**: Core models, prompt building, STT parsing, usage/config storage, API clients.
+- **WhispApp (AppKit/SwiftUI)**: Menu bar UI, settings window, pipeline orchestration, OS integration.
+  - Pipeline services: `RecordingService` / `STTService` / `PostProcessorService` / `OutputService` / `DebugCaptureService`
+  - Provider interface: `LLMAPIProvider` (Gemini/OpenAI は provider として実装)
+- **WhispCore**: Core models, prompt building, STT parsing, usage/config storage, API clients（`AppKit` 非依存）
 
 **Pipeline states**: `Idle` → `Recording` → `SttStreaming` → `PostProcessing` → `DirectInput` → `Done`
 
