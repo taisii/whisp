@@ -171,6 +171,10 @@ final class PipelineRunnerTests: XCTestCase {
 
         XCTAssertEqual(log.base.eventStartMs, Int64((summaryStartedAt.timeIntervalSince1970 * 1000).rounded()))
         XCTAssertEqual(log.base.eventEndMs, Int64((summaryCompletedAt.timeIntervalSince1970 * 1000).rounded()))
+
+        let details = try XCTUnwrap(store.loadDetails(captureID: captureID))
+        XCTAssertEqual(details.record.context?.visionSummary, "summary")
+        XCTAssertEqual(details.record.context?.visionTerms, ["term"])
     }
 
     func testRunFailsWhenSTTThrows() async throws {

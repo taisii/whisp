@@ -9,6 +9,7 @@ public struct DebugPromptSnapshot: Codable, Equatable, Sendable {
     public let contextSummaryChars: Int
     public let contextTermsCount: Int
     public let contextAccessibilityChars: Int
+    public let context: ContextInfo?
     public let promptText: String
 
     public init(
@@ -20,6 +21,7 @@ public struct DebugPromptSnapshot: Codable, Equatable, Sendable {
         contextSummaryChars: Int,
         contextTermsCount: Int,
         contextAccessibilityChars: Int,
+        context: ContextInfo? = nil,
         promptText: String
     ) {
         self.stage = stage
@@ -30,6 +32,7 @@ public struct DebugPromptSnapshot: Codable, Equatable, Sendable {
         self.contextSummaryChars = contextSummaryChars
         self.contextTermsCount = contextTermsCount
         self.contextAccessibilityChars = contextAccessibilityChars
+        self.context = context
         self.promptText = promptText
     }
 }

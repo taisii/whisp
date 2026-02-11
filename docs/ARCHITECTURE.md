@@ -118,7 +118,8 @@
 - 識別情報: `id`, `runID`, `createdAt`
 - パス: `runDirectoryPath`, `promptsDirectoryPath`, `eventsFilePath`, `audioFilePath`
 - 実行結果: `sttText`, `outputText`, `status`, `errorMessage`
-- 文脈: `context`（`visionSummary`, `visionTerms`, `accessibilityText`）
+- 文脈: `context`（`visionSummary`, `visionTerms`, `accessibilityText`, `windowText` など）
+  - `context` は postprocess / audio_transcribe 実行時に実際に組み立てた入力コンテキストを保存する。
 - アクセシビリティ: `accessibilitySnapshot`
 - Vision: `visionImageFilePath`, `visionImageMimeType`
 
@@ -158,6 +159,7 @@
 
 - `*.prompt.txt`: 実際に送信したプロンプト本文
 - `*.meta.json`: `stage`, `model`, `context`, `promptChars`, `extra` など
+  - `context` はその stage のAPIに実際に渡した文脈（postprocess/audio_transcribe では sanitize 後）を保持する。
 
 `extra.run_dir` がある場合は、そのrun配下 `prompts/` に保存される。App本体のパイプライン実行では録音開始時に run を確保するため、`accessibility_summary` を含むプロンプトは run 配下に保存される。
 

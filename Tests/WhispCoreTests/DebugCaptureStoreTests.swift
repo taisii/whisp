@@ -157,6 +157,36 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertEqual(details.prompts.count, 1)
         XCTAssertEqual(details.prompts.first?.promptText, "PROMPT BODY")
         XCTAssertEqual(details.prompts.first?.contextTermsCount, 2)
+        XCTAssertEqual(details.prompts.first?.context?.visionSummary, "summary")
+    }
+
+    func testUpdateContextPersistsAndIsNotClearedByNilVisionContext() throws {
+        let home = tempHome()
+        let store = makeStore(home: home)
+        let captureID = try store.saveRecording(
+            runID: "run-context",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 3, count: 640),
+            llmModel: "gpt-5-nano",
+            appName: "Codex"
+        )
+
+        let expected = ContextInfo(
+            accessibilityText: "selected text",
+            windowText: "window body",
+            visionSummary: "summary",
+            visionTerms: ["termA", "termB"]
+        )
+        try store.updateContext(captureID: captureID, context: expected)
+        try store.saveVisionArtifacts(
+            captureID: captureID,
+            context: nil,
+            imageData: Data([0xFF, 0xD8, 0xFF]),
+            imageMimeType: "image/jpeg"
+        )
+
+        let details = try XCTUnwrap(store.loadDetails(captureID: captureID))
+        XCTAssertEqual(details.record.context, expected)
     }
 
     func testAppendManualTestCaseWritesJSONL() throws {

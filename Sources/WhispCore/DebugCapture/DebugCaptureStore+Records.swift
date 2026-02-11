@@ -187,6 +187,16 @@ extension DebugCaptureStore {
         try writeRecord(record, to: path)
     }
 
+    public func updateContext(captureID: String, context: ContextInfo?) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let path = recordPath(captureID: captureID)
+        guard var record = try loadRecord(path: path) else { return }
+        record.context = context
+        try writeRecord(record, to: path)
+    }
+
     public func setGroundTruth(captureID: String, text: String) throws {
         lock.lock()
         defer { lock.unlock() }
@@ -210,7 +220,9 @@ extension DebugCaptureStore {
         let path = recordPath(captureID: captureID)
         guard var record = try loadRecord(path: path) else { return }
 
-        record.context = context
+        if let context {
+            record.context = context
+        }
         if let imageData, !imageData.isEmpty {
             let ext = imageExtension(for: imageMimeType)
             let imagePath = runDirectory(captureID: captureID).appendingPathComponent("vision.\(ext)", isDirectory: false)

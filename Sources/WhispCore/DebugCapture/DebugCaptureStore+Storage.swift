@@ -75,6 +75,7 @@ extension DebugCaptureStore {
                     contextSummaryChars: summaryChars,
                     contextTermsCount: termsCount,
                     contextAccessibilityChars: accessibilityChars,
+                    context: trace.context,
                     promptText: promptText
                 )
             )

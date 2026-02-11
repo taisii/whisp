@@ -304,7 +304,7 @@ struct DebugView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     DisclosureGroup("入力コンテキスト（Raw）") {
                         VStack(alignment: .leading, spacing: 4) {
-                            let rawRows = rawContextRows(record: record)
+                            let rawRows = rawContextRows(details: details)
                             if rawRows.isEmpty {
                                 Text("表示できるRaw入力がありません。")
                                     .foregroundStyle(.secondary)
@@ -502,20 +502,14 @@ struct DebugView: View {
 
     private func timelineSection(_ timeline: DebugTimelineSummary) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                if let bottleneck = timeline.phases.first(where: { $0.id == timeline.bottleneckPhaseID }) {
-                    timingBadge(
-                        title: "ボトルネック候補",
-                        body: "\(bottleneck.title) \(msText(bottleneck.durationMs))ms"
-                    )
-                }
-                if let overlap = timeline.maxOverlap {
+            if let overlap = timeline.maxOverlap {
+                HStack(spacing: 8) {
                     timingBadge(
                         title: "重なり",
                         body: "\(overlap.leftTitle) × \(overlap.rightTitle) \(msText(overlap.durationMs))ms"
                     )
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
             }
 
             if timeline.phases.isEmpty || timeline.totalMs <= 0 {
@@ -665,22 +659,25 @@ struct DebugView: View {
         }
     }
 
-    private func rawContextRows(record: DebugCaptureRecord) -> [(name: String, value: String, isError: Bool)] {
+    private func rawContextRows(details: DebugCaptureDetails) -> [(name: String, value: String, isError: Bool)] {
+        let record = details.record
         let context = record.context
+        let promptContext = details.prompts.first(where: { ["postprocess", "audio_transcribe"].contains($0.stage) })?.context
+        let effectiveContext = promptContext ?? context
         let accessibility = record.accessibilitySnapshot
         let focusedElement = accessibility?.focusedElement
         var rows: [(name: String, value: String, isError: Bool)] = []
 
-        if let value = normalizedText(context?.visionSummary) {
+        if let value = normalizedText(effectiveContext?.visionSummary) {
             rows.append(("context.summary", value, false))
         }
-        if let value = normalizedTerms(context?.visionTerms ?? []) {
+        if let value = normalizedTerms(effectiveContext?.visionTerms ?? []) {
             rows.append(("context.terms", value, false))
         }
-        if let value = normalizedText(context?.accessibilityText) {
+        if let value = normalizedText(effectiveContext?.accessibilityText) {
             rows.append(("context.accessibility", value, false))
         }
-        if let value = summarizedText(context?.windowText, maxChars: 320) {
+        if let value = summarizedText(context?.windowText ?? accessibility?.windowText, maxChars: 320) {
             rows.append(("context.window_text", value, false))
         }
         if let value = normalizedText(focusedElement?.selectedText) {

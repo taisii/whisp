@@ -140,6 +140,18 @@ final class DebugCaptureService: @unchecked Sendable {
         }
     }
 
+    func updateContext(captureID: String?, context: ContextInfo?) {
+        guard let captureID else { return }
+        do {
+            try store.updateContext(captureID: captureID, context: context)
+        } catch {
+            DevLog.info("debug_capture_context_update_failed", fields: [
+                "capture_id": captureID,
+                "error": error.localizedDescription,
+            ])
+        }
+    }
+
     func persistVisionArtifacts(captureID: String?, result: VisionContextCollectionResult?) {
         guard let captureID, let result else { return }
         do {

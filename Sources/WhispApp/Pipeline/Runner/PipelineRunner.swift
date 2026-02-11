@@ -170,6 +170,7 @@ final class PipelineRunner {
                     base: accessibilityContext,
                     summary: accessibilitySummary
                 )
+                debugCaptureService.updateContext(captureID: captureID, context: context)
                 let llmStartedAtDate = Date()
                 let llmStartedAtMs = epochMs(llmStartedAtDate)
                 devLog("audio_llm_start", runID: input.run.id, captureID: captureID, fields: [
@@ -397,6 +398,7 @@ final class PipelineRunner {
                     base: composedContext,
                     summary: accessibilitySummary
                 )
+                debugCaptureService.updateContext(captureID: captureID, context: context)
 
                 let llmStartedAtDate = Date()
                 let llmStartedAtMs = epochMs(llmStartedAtDate)
