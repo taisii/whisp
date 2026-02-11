@@ -10,6 +10,7 @@ struct AppDependencies {
     let postProcessor: PostProcessorService
     let outputService: OutputService
     let debugCaptureService: DebugCaptureService
+    let runtimeStatsStore: RuntimeStatsStore
     let hotKeyMonitor: GlobalHotKeyMonitor
 
     static func live() throws -> AppDependencies {
@@ -25,6 +26,7 @@ struct AppDependencies {
             postProcessor: PostProcessorService(),
             outputService: DirectInputOutputService(),
             debugCaptureService: DebugCaptureService(),
+            runtimeStatsStore: try RuntimeStatsStore(),
             hotKeyMonitor: try GlobalHotKeyMonitor()
         )
     }

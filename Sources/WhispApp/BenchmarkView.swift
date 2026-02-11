@@ -71,9 +71,6 @@ struct BenchmarkView: View {
                         Text("kind: \(run.kind.rawValue)")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
-                        Text("executed: \(run.metrics.executedCases) / \(run.metrics.casesSelected)")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
                         Text(run.createdAt)
                             .font(.system(size: 10, design: .monospaced))
                             .foregroundStyle(.secondary)
@@ -131,6 +128,11 @@ struct BenchmarkView: View {
                 .font(.system(size: 13, weight: .semibold))
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
+
+            if let run = viewModel.selectedRun {
+                runMetricsPanel(run: run)
+                    .padding(.horizontal, 12)
+            }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 6) {
@@ -201,6 +203,95 @@ struct BenchmarkView: View {
             Spacer(minLength: 0)
         }
         .frame(minWidth: 560)
+    }
+
+    private func runMetricsPanel(run: BenchmarkRunRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Run Metrics")
+                .font(.system(size: 12, weight: .semibold))
+
+            HStack(spacing: 14) {
+                metricText("exact_match_rate", value: percent(run.metrics.exactMatchRate))
+                metricText("avg_cer", value: decimal(run.metrics.avgCER))
+                metricText("weighted_cer", value: decimal(run.metrics.weightedCER))
+                metricText("avg_terms_f1", value: decimal(run.metrics.avgTermsF1))
+                metricText("intent_match_rate", value: percent(run.metrics.intentMatchRate))
+            }
+            HStack(spacing: 14) {
+                metricText("intent_preservation", value: decimal(run.metrics.intentPreservationScore))
+                metricText("hallucination_score", value: decimal(run.metrics.hallucinationScore))
+                metricText("hallucination_rate", value: decimal(run.metrics.hallucinationRate))
+            }
+
+            let rows = latencyRows(for: run)
+            if rows.isEmpty {
+                Text("latency: n/a")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(rows, id: \.0) { label, distribution in
+                    Text("\(label): avg=\(decimal(distribution.avg)) p50=\(decimal(distribution.p50)) p95=\(decimal(distribution.p95)) p99=\(decimal(distribution.p99))")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(10)
+        .background(Color(NSColor.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+        }
+    }
+
+    private func latencyRows(for run: BenchmarkRunRecord) -> [(String, BenchmarkLatencyDistribution)] {
+        var rows: [(String, BenchmarkLatencyDistribution)] = []
+        if let distribution = run.metrics.latencyMs {
+            let label: String
+            switch run.kind {
+            case .stt:
+                label = "stt_total_ms"
+            case .vision:
+                label = "vision_latency_ms"
+            case .generation:
+                label = "generation_latency_ms"
+            case .e2e:
+                label = "e2e_latency_ms"
+            }
+            rows.append((label, distribution))
+        }
+        if let distribution = run.metrics.afterStopLatencyMs {
+            rows.append(("stt_after_stop_ms", distribution))
+        }
+        if let distribution = run.metrics.postLatencyMs {
+            rows.append(("post_ms", distribution))
+        }
+        if let distribution = run.metrics.totalAfterStopLatencyMs {
+            rows.append(("total_after_stop_ms", distribution))
+        }
+        return rows
+    }
+
+    private func metricText(_ label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.primary)
+        }
+    }
+
+    private func decimal(_ value: Double?) -> String {
+        guard let value else { return "n/a" }
+        return String(format: "%.3f", value)
+    }
+
+    private func percent(_ value: Double?) -> String {
+        guard let value else { return "n/a" }
+        return String(format: "%.1f%%", value * 100)
     }
 
     private var statusBar: some View {

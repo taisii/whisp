@@ -28,9 +28,11 @@ extension WhispCLI {
         print("intent_source: \(options.intentSource.rawValue)")
         print("intent_judge: \(options.intentJudgeEnabled)")
         print("intent_judge_model: \(options.intentJudgeModel?.rawValue ?? "auto")")
+        print("llm_eval: \(options.llmEvalEnabled)")
+        print("llm_eval_model: \(options.llmEvalModel?.rawValue ?? "auto")")
         print("benchmark_log_dir: \(logPaths.baseDir)")
         print("")
-        print("id\tstatus\tcontext\tvision_image\texact_match\tcer\tintent_match\tintent_score\taudio_seconds\tstt_after_stop_ms\tpost_ms\ttotal_after_stop_ms")
+        print("id\tstatus\tcontext\tvision_image\texact_match\tcer\tintent_match\tintent_score\tintent_preservation\thallucination_rate\taudio_seconds\tstt_total_ms\tstt_after_stop_ms\tpost_ms\ttotal_after_stop_ms")
 
         var evaluations: [ManualCaseEvaluation] = []
         var skippedMissingAudio = 0
@@ -42,6 +44,9 @@ extension WhispCLI {
         var failedRuns = 0
         var judgeContext: (model: LLMModel, apiKey: String)?
         var judgeUnavailableReason: String?
+        var llmEvalContext: (model: LLMModel, apiKey: String)?
+        var llmEvalUnavailableReason: String?
+        var llmEvalErrorCases = 0
 
         for item in selectedCases {
             let contextUsed = item.context != nil
@@ -268,6 +273,43 @@ extension WhispCLI {
                     }
                 }
 
+                var intentPreservationScore: Double?
+                var hallucinationScore: Double?
+                var hallucinationRate: Double?
+                var llmEvalError: String?
+                if options.llmEvalEnabled {
+                    if llmEvalContext == nil, llmEvalUnavailableReason == nil {
+                        do {
+                            llmEvalContext = try APIKeyResolver.resolveIntentJudgeContext(
+                                config: config,
+                                preferredModel: options.llmEvalModel
+                            )
+                        } catch {
+                            llmEvalUnavailableReason = error.localizedDescription
+                        }
+                    }
+                    if let llmEvalContext {
+                        do {
+                            let evaluation = try await runLLMEvaluation(
+                                model: llmEvalContext.model,
+                                apiKey: llmEvalContext.apiKey,
+                                referenceText: transcriptRef.text,
+                                hypothesisText: output,
+                                context: item.context
+                            )
+                            intentPreservationScore = evaluation.intentPreservationScore
+                            hallucinationScore = evaluation.hallucinationScore
+                            hallucinationRate = evaluation.hallucinationRate
+                        } catch {
+                            llmEvalError = error.localizedDescription
+                            llmEvalErrorCases += 1
+                        }
+                    } else if let reason = llmEvalUnavailableReason {
+                        llmEvalError = reason
+                        llmEvalErrorCases += 1
+                    }
+                }
+
                 let row = ManualCaseEvaluation(
                     id: item.id,
                     contextUsed: contextUsed,
@@ -276,6 +318,7 @@ extension WhispCLI {
                     cer: cer,
                     gtChars: gtChars.count,
                     editDistance: editDistance,
+                    sttTotalMs: run.sttTotalMs,
                     sttAfterStopMs: run.sttAfterStopMs,
                     postMs: run.postMs,
                     totalAfterStopMs: run.totalAfterStopMs,
@@ -283,10 +326,14 @@ extension WhispCLI {
                     transcriptSource: transcriptRef.source,
                     intentReferenceSource: intentReference?.source,
                     intentMatch: intentMatch,
-                    intentScore: intentScore
+                    intentScore: intentScore,
+                    intentPreservationScore: intentPreservationScore,
+                    hallucinationScore: hallucinationScore,
+                    hallucinationRate: hallucinationRate,
+                    llmEvalError: llmEvalError
                 )
                 evaluations.append(row)
-                print("\(item.id)\tok\t\(row.contextUsed)\t\(row.visionImageAttached)\t\(row.exactMatch)\t\(String(format: "%.3f", row.cer))\t\(row.intentMatch.map { String($0) } ?? "-")\t\(row.intentScore.map(String.init) ?? "-")\t\(String(format: "%.2f", row.audioSeconds))\t\(msString(row.sttAfterStopMs))\t\(msString(row.postMs))\t\(msString(row.totalAfterStopMs))")
+                print("\(item.id)\tok\t\(row.contextUsed)\t\(row.visionImageAttached)\t\(row.exactMatch)\t\(String(format: "%.3f", row.cer))\t\(row.intentMatch.map { String($0) } ?? "-")\t\(row.intentScore.map(String.init) ?? "-")\t\(row.intentPreservationScore.map { String(format: "%.3f", $0) } ?? "-")\t\(row.hallucinationRate.map { String(format: "%.3f", $0) } ?? "-")\t\(String(format: "%.2f", row.audioSeconds))\t\(msString(row.sttTotalMs))\t\(msString(row.sttAfterStopMs))\t\(msString(row.postMs))\t\(msString(row.totalAfterStopMs))")
                 try appendJSONLine(
                     ManualCaseLogRow(
                         id: item.id,
@@ -302,6 +349,11 @@ extension WhispCLI {
                         intentReferenceSource: row.intentReferenceSource,
                         intentMatch: row.intentMatch,
                         intentScore: row.intentScore,
+                        intentPreservationScore: row.intentPreservationScore,
+                        hallucinationScore: row.hallucinationScore,
+                        hallucinationRate: row.hallucinationRate,
+                        llmEvalError: row.llmEvalError,
+                        sttTotalMs: row.sttTotalMs,
                         sttAfterStopMs: row.sttAfterStopMs,
                         postMs: row.postMs,
                         totalAfterStopMs: row.totalAfterStopMs
@@ -340,9 +392,10 @@ extension WhispCLI {
         let sumCER = evaluations.reduce(0.0) { $0 + $1.cer }
         let totalEdits = evaluations.reduce(0) { $0 + $1.editDistance }
         let totalGTChars = evaluations.reduce(0) { $0 + $1.gtChars }
-        let avgSttAfterStop = evaluations.reduce(0.0) { $0 + $1.sttAfterStopMs } / Double(max(1, executed))
-        let avgPost = evaluations.reduce(0.0) { $0 + $1.postMs } / Double(max(1, executed))
-        let avgTotalAfterStop = evaluations.reduce(0.0) { $0 + $1.totalAfterStopMs } / Double(max(1, executed))
+        let sttTotalDistribution = latencyDistribution(values: evaluations.map(\.sttTotalMs))
+        let sttAfterStopDistribution = latencyDistribution(values: evaluations.map(\.sttAfterStopMs))
+        let postDistribution = latencyDistribution(values: evaluations.map(\.postMs))
+        let totalAfterStopDistribution = latencyDistribution(values: evaluations.map(\.totalAfterStopMs))
         let exactRate = Double(exactCount) / Double(max(1, executed))
         let avgCER = sumCER / Double(max(1, executed))
         let weightedCER = Double(totalEdits) / Double(max(1, totalGTChars))
@@ -357,6 +410,13 @@ extension WhispCLI {
         let intentAvgScore = intentScoreValues.isEmpty
             ? nil
             : Double(intentScoreValues.reduce(0, +)) / Double(intentScoreValues.count)
+        let llmEvalRows = evaluations.filter {
+            $0.intentPreservationScore != nil || $0.hallucinationScore != nil || $0.hallucinationRate != nil
+        }
+        let llmEvalEvaluatedCases = llmEvalRows.count
+        let intentPreservationScore = llmEvalRows.compactMap(\.intentPreservationScore)
+        let hallucinationScore = llmEvalRows.compactMap(\.hallucinationScore)
+        let hallucinationRate = llmEvalRows.compactMap(\.hallucinationRate)
 
         let summaryLog = ManualBenchmarkSummaryLog(
             generatedAt: ISO8601DateFormatter().string(from: Date()),
@@ -370,6 +430,8 @@ extension WhispCLI {
             intentSource: options.intentSource.rawValue,
             intentJudgeEnabled: options.intentJudgeEnabled,
             intentJudgeModel: judgeContext?.model.rawValue ?? options.intentJudgeModel?.rawValue,
+            llmEvalEnabled: options.llmEvalEnabled,
+            llmEvalModel: llmEvalContext?.model.rawValue ?? options.llmEvalModel?.rawValue,
             casesTotal: allCases.count,
             casesSelected: selectedCases.count,
             executedCases: executed,
@@ -388,9 +450,15 @@ extension WhispCLI {
             intentMatchCases: intentMatchCount,
             intentMatchRate: intentMatchRate,
             intentAvgScore: intentAvgScore,
-            avgSttAfterStopMs: avgSttAfterStop,
-            avgPostMs: avgPost,
-            avgTotalAfterStopMs: avgTotalAfterStop
+            llmEvalEvaluatedCases: llmEvalEvaluatedCases,
+            llmEvalErrorCases: llmEvalErrorCases,
+            intentPreservationScore: intentPreservationScore.isEmpty ? nil : intentPreservationScore.reduce(0, +) / Double(intentPreservationScore.count),
+            hallucinationScore: hallucinationScore.isEmpty ? nil : hallucinationScore.reduce(0, +) / Double(hallucinationScore.count),
+            hallucinationRate: hallucinationRate.isEmpty ? nil : hallucinationRate.reduce(0, +) / Double(hallucinationRate.count),
+            sttTotalMs: sttTotalDistribution,
+            sttAfterStopMs: sttAfterStopDistribution,
+            postMs: postDistribution,
+            totalAfterStopMs: totalAfterStopDistribution
         )
         try writeJSONFile(summaryLog, path: logPaths.summaryPath)
 
@@ -420,13 +488,38 @@ extension WhispCLI {
         } else {
             print("intent_avg_score_0_4: n/a")
         }
-        print("avg_stt_after_stop_ms: \(msString(avgSttAfterStop))")
-        print("avg_post_ms: \(msString(avgPost))")
-        print("avg_total_after_stop_ms: \(msString(avgTotalAfterStop))")
+        if let sttTotal = summaryLog.sttTotalMs {
+            print("stt_total_ms: avg=\(sttTotal.avg.map(msString) ?? "n/a") p50=\(sttTotal.p50.map(msString) ?? "n/a") p95=\(sttTotal.p95.map(msString) ?? "n/a") p99=\(sttTotal.p99.map(msString) ?? "n/a")")
+        } else {
+            print("stt_total_ms: n/a")
+        }
+        if let sttAfterStop = summaryLog.sttAfterStopMs {
+            print("stt_after_stop_ms: avg=\(sttAfterStop.avg.map(msString) ?? "n/a") p50=\(sttAfterStop.p50.map(msString) ?? "n/a") p95=\(sttAfterStop.p95.map(msString) ?? "n/a") p99=\(sttAfterStop.p99.map(msString) ?? "n/a")")
+        } else {
+            print("stt_after_stop_ms: n/a")
+        }
+        if let post = summaryLog.postMs {
+            print("post_ms: avg=\(post.avg.map(msString) ?? "n/a") p50=\(post.p50.map(msString) ?? "n/a") p95=\(post.p95.map(msString) ?? "n/a") p99=\(post.p99.map(msString) ?? "n/a")")
+        } else {
+            print("post_ms: n/a")
+        }
+        if let total = summaryLog.totalAfterStopMs {
+            print("total_after_stop_ms: avg=\(total.avg.map(msString) ?? "n/a") p50=\(total.p50.map(msString) ?? "n/a") p95=\(total.p95.map(msString) ?? "n/a") p99=\(total.p99.map(msString) ?? "n/a")")
+        } else {
+            print("total_after_stop_ms: n/a")
+        }
+        print("llm_eval_evaluated_cases: \(summaryLog.llmEvalEvaluatedCases)")
+        print("llm_eval_error_cases: \(summaryLog.llmEvalErrorCases)")
+        print("intent_preservation_score: \(summaryLog.intentPreservationScore.map { String(format: "%.3f", $0) } ?? "n/a")")
+        print("hallucination_score: \(summaryLog.hallucinationScore.map { String(format: "%.3f", $0) } ?? "n/a")")
+        print("hallucination_rate: \(summaryLog.hallucinationRate.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("case_rows_log: \(logPaths.caseRowsPath)")
         print("summary_log: \(logPaths.summaryPath)")
         if let judgeUnavailableReason {
             print("intent_judge_note: \(judgeUnavailableReason)")
+        }
+        if let llmEvalUnavailableReason {
+            print("llm_eval_note: \(llmEvalUnavailableReason)")
         }
 
         _ = importLegacyBenchmarkLogs(
@@ -445,6 +538,8 @@ extension WhispCLI {
                 intentSource: options.intentSource.rawValue,
                 intentJudgeEnabled: options.intentJudgeEnabled,
                 intentJudgeModel: options.intentJudgeModel?.rawValue,
+                llmEvalEnabled: options.llmEvalEnabled,
+                llmEvalModel: llmEvalContext?.model.rawValue ?? options.llmEvalModel?.rawValue,
                 caseLimit: options.limit
             )
         )

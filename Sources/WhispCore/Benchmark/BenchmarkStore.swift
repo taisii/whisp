@@ -62,8 +62,11 @@ public final class BenchmarkStore: @unchecked Sendable {
         for entry in entries {
             let path = entry.appendingPathComponent("manifest.json", isDirectory: false)
             guard fileManager.fileExists(atPath: path.path) else { continue }
-            let data = try Data(contentsOf: path)
-            let run = try JSONDecoder().decode(BenchmarkRunRecord.self, from: data)
+            guard let data = try? Data(contentsOf: path),
+                  let run = try? JSONDecoder().decode(BenchmarkRunRecord.self, from: data)
+            else {
+                continue
+            }
             runs.append(run)
         }
 

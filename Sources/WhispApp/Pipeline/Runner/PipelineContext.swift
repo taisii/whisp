@@ -30,6 +30,7 @@ struct PipelineRun {
 
 struct PipelineRunInput {
     let result: RecordingResult
+    let recordingStoppedAtDate: Date
     let config: Config
     let run: PipelineRun
     let artifacts: DebugRunArtifacts

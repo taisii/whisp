@@ -66,6 +66,9 @@ final class BenchmarkViewModelTests: XCTestCase {
                 cer: 0.1,
                 intentMatch: nil,
                 intentScore: nil,
+                intentPreservationScore: nil,
+                hallucinationScore: nil,
+                hallucinationRate: nil,
                 latencyMs: nil,
                 totalAfterStopMs: 320,
                 outputChars: 100
@@ -120,6 +123,9 @@ final class BenchmarkViewModelTests: XCTestCase {
                 model: "gpt-5-nano",
                 match: true,
                 score: 4,
+                intentPreservationScore: nil,
+                hallucinationScore: nil,
+                hallucinationRate: nil,
                 requestRef: ref,
                 responseRef: nil,
                 error: nil

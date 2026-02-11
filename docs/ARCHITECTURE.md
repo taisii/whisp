@@ -95,6 +95,7 @@
 
 - ベース: `~/.config/whisp/debug`
 - run保存先: `~/.config/whisp/debug/runs/<capture_id>/`
+- 統計保存先: `~/.config/whisp/debug/stats/runtime_stats.json`
 - 手動評価ケース: `~/.config/whisp/debug/manual_test_cases.jsonl`
 
 `capture_id` は `yyyyMMdd-HHmmss-<runID>`。
@@ -183,13 +184,24 @@
 - 取得値は debug保存と、後段の文脈合成（LLM入力）に利用される。
 - `context_summary` イベントの `ended_at_ms` は、要約APIの応答完了時刻（ready時）またはキャンセル時刻（未完了で打ち切り時）を記録する。
 
+## 5.5 Runtime統計（運用観測）
+
+- `RuntimeStatsStore` が `runtime_stats.json` を保持し、録音1件ごとに増分更新する。
+- 記録タイミングは `PipelineRunner` の全終了経路:
+  - `completed`
+  - `skipped`（`empty_audio` / `empty_stt` / `empty_output`）
+  - `failed`
+- 保存形式は「全体集計 + 時間バケット（1時間単位）」。
+- 統計画面は `24h / 7d / 30d / all` を `RuntimeStatsSnapshot` から即時計算し、`runs/*/events.jsonl` の再走査は行わない。
+- 保持期間は約45日（時間バケット）。`all` は累積集計を参照する。
+
 ## 6. 運用メモ
 
 - デバッグUI (`DebugView`) から run単位の詳細、音声再生、画像確認、プロンプト確認、テストケース追加が可能。
 - `PromptTrace` は失敗しても本処理を止めない（ベストエフォート保存）。
 - Vision文脈は設定/タイミング条件によりスキップされる場合がある。
 
-## 7. ベンチマーク保存モデル
+## 7. ベンチマーク保存モデル（性能評価）
 
 ベンチマークは `Run` と `Case` を分離し、さらに `events` と `artifacts` を併用して再現性を確保する。
 
@@ -217,8 +229,9 @@
 
 ### 7.3 CLIログとの関係
 
-- 既存CLIが出力する `rows/summary` は維持する（互換運用）。
-- 実行後に importer (`BenchmarkLegacyImporter`) で `BenchmarkStore` へ正規化保存する。
+- CLIは `rows/summary` を出力し、実行後に importer (`BenchmarkLegacyImporter`) で `BenchmarkStore` へ正規化保存する。
+- importerは現行スキーマを厳密decodeする。旧キーfallbackや互換読み分けは行わない。
+- decodeできない旧形式の `manifest/summary` は一覧表示対象外（スキップ）になる。
 - AppのベンチマークUIは `BenchmarkStore` のデータを参照する。
 
 ---

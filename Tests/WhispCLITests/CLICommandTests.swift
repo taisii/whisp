@@ -108,6 +108,8 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.intentSource, .silver)
         XCTAssertFalse(options.intentJudgeEnabled)
         XCTAssertEqual(options.intentJudgeModel, .gpt5Nano)
+        XCTAssertFalse(options.llmEvalEnabled)
+        XCTAssertNil(options.llmEvalModel)
         XCTAssertEqual(options.minLabelConfidence, 0.7)
     }
 
@@ -161,6 +163,8 @@ final class CLICommandTests: XCTestCase {
             "--intent-source", "gold",
             "--intent-judge",
             "--judge-model", "gemini-2.5-flash-lite",
+            "--llm-eval",
+            "--llm-eval-model", "gpt-5-nano",
             "--min-label-confidence", "0.5",
         ])
 
@@ -175,6 +179,8 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.intentSource, .gold)
         XCTAssertTrue(options.intentJudgeEnabled)
         XCTAssertEqual(options.intentJudgeModel, .gemini25FlashLite)
+        XCTAssertTrue(options.llmEvalEnabled)
+        XCTAssertEqual(options.llmEvalModel, .gpt5Nano)
         XCTAssertEqual(options.minLabelConfidence, 0.5)
     }
 
@@ -260,6 +266,8 @@ final class CLICommandTests: XCTestCase {
             "/tmp/manual.jsonl",
             "--limit", "30",
             "--require-context",
+            "--llm-eval",
+            "--llm-eval-model", "gemini-2.5-flash-lite",
             "--benchmark-log-dir", "/tmp/logs",
             "--no-cache",
         ])
@@ -267,6 +275,8 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
         XCTAssertEqual(options.limit, 30)
         XCTAssertTrue(options.requireContext)
+        XCTAssertTrue(options.llmEvalEnabled)
+        XCTAssertEqual(options.llmEvalModel, .gemini25FlashLite)
         XCTAssertEqual(options.benchmarkLogDir, "/tmp/logs")
         XCTAssertFalse(options.useCache)
 

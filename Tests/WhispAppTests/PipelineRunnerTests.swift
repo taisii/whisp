@@ -136,6 +136,7 @@ final class PipelineRunnerTests: XCTestCase {
         )
         let input = PipelineRunInput(
             result: recording,
+            recordingStoppedAtDate: Date(),
             config: harness.config,
             run: PipelineRun(
                 id: "run-test",
@@ -200,9 +201,54 @@ final class PipelineRunnerTests: XCTestCase {
         XCTAssertTrue(transitions.isEmpty)
     }
 
+    func testRunRecordsRuntimeStatsForEachOutcome() async throws {
+        let completedHarness = try makeHarness(
+            sttTranscript: "hello",
+            postProcessText: "processed",
+            audioTranscribeText: "unused",
+            outputSuccess: true
+        )
+        _ = await run(
+            harness: completedHarness,
+            input: makeInput(config: completedHarness.config, pcmData: Data(repeating: 1, count: 3200))
+        )
+        let completedSnapshot = completedHarness.runtimeStatsStore.snapshot()
+        XCTAssertEqual(completedSnapshot.all.totalRuns, 1)
+        XCTAssertEqual(completedSnapshot.all.completedRuns, 1)
+
+        let skippedHarness = try makeHarness(
+            sttTranscript: "ignored",
+            postProcessText: "ignored",
+            audioTranscribeText: "ignored",
+            outputSuccess: true
+        )
+        _ = await run(
+            harness: skippedHarness,
+            input: makeInput(config: skippedHarness.config, pcmData: Data())
+        )
+        let skippedSnapshot = skippedHarness.runtimeStatsStore.snapshot()
+        XCTAssertEqual(skippedSnapshot.all.totalRuns, 1)
+        XCTAssertEqual(skippedSnapshot.all.skippedRuns, 1)
+
+        let failedHarness = try makeHarness(
+            sttTranscript: nil,
+            postProcessText: "ignored",
+            audioTranscribeText: "ignored",
+            outputSuccess: true
+        )
+        _ = await run(
+            harness: failedHarness,
+            input: makeInput(config: failedHarness.config, pcmData: Data(repeating: 1, count: 3200))
+        )
+        let failedSnapshot = failedHarness.runtimeStatsStore.snapshot()
+        XCTAssertEqual(failedSnapshot.all.totalRuns, 1)
+        XCTAssertEqual(failedSnapshot.all.failedRuns, 1)
+    }
+
     private func makeInput(config: Config, pcmData: Data) -> PipelineRunInput {
         PipelineRunInput(
             result: RecordingResult(sampleRate: 16_000, pcmData: pcmData),
+            recordingStoppedAtDate: Date(),
             config: config,
             run: PipelineRun(
                 id: "run-test",
@@ -226,7 +272,7 @@ final class PipelineRunnerTests: XCTestCase {
     }
 
     private func run(
-        harness: (runner: PipelineRunner, config: Config),
+        harness: (runner: PipelineRunner, config: Config, runtimeStatsStore: RuntimeStatsStore),
         input: PipelineRunInput,
         notifyWarning: @escaping (String) -> Void = { _ in }
     ) async -> (PipelineOutcome, [PipelineStateMachine.Event]) {
@@ -248,7 +294,8 @@ final class PipelineRunnerTests: XCTestCase {
         debugCaptureService: DebugCaptureService = DebugCaptureService()
     ) throws -> (
         runner: PipelineRunner,
-        config: Config
+        config: Config,
+        runtimeStatsStore: RuntimeStatsStore
     ) {
         let postProcessor = PostProcessorService(providers: [
             FakeLLMProvider(postProcessText: postProcessText, audioTranscribeText: audioTranscribeText),
@@ -263,15 +310,21 @@ final class PipelineRunnerTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("usage.json", isDirectory: false)
         let usageStore = try UsageStore(path: usageStorePath)
+        let runtimeStatsStore = try RuntimeStatsStore(
+            path: FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                .appendingPathComponent("runtime_stats.json", isDirectory: false)
+        )
         let runner = PipelineRunner(
             usageStore: usageStore,
             postProcessor: postProcessor,
             sttService: sttService,
             contextService: contextService,
             outputService: outputService,
-            debugCaptureService: debugCaptureService
+            debugCaptureService: debugCaptureService,
+            runtimeStatsStore: runtimeStatsStore
         )
-        return (runner, config)
+        return (runner, config, runtimeStatsStore)
     }
 
     private static func baseConfig() -> Config {

@@ -126,6 +126,7 @@ scripts/benchmark_stt_latency.sh Tests/Fixtures/benchmark_ja_10s.wav 3 /tmp/whis
 ### Manual case benchmark (音声 + 人手正解)
 
 `manual_test_cases.jsonl` を使って、実録音データに対する精度を定量評価できます。
+この評価は **ベンチマーク（モデル/処理性能）** 用で、運用件数統計は別の統計ストアに分離されています。
 
 ```bash
 scripts/benchmark_manual_cases.sh
@@ -142,7 +143,11 @@ scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl 
 - `avg_cer`: ケース平均CER（文字誤り率）
 - `weighted_cer`: 全文字数で重み付けしたCER
 - `intent_match_rate`: 意図一致率（intent judge 有効時）
-- `avg_total_after_stop_ms`: 録音停止後レイテンシ平均
+- `stt_total_ms`: STT全体レイテンシ分布（`avg/p50/p95/p99`）
+- `stt_after_stop_ms`: 録音停止後STTレイテンシ分布（`avg/p50/p95/p99`）
+- `post_ms`: 生成/整形レイテンシ分布（`avg/p50/p95/p99`）
+- `total_after_stop_ms`: 録音停止後E2Eレイテンシ分布（`avg/p50/p95/p99`）
+- `intent_preservation_score` / `hallucination_score` / `hallucination_rate`: LLM評価（`--llm-eval` 有効時）
 
 補足:
 - この更新以前に保存されたケースには `context` / `vision_image_file` が無い場合があります。
@@ -150,6 +155,7 @@ scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl 
 - `--min-audio-seconds` 未満の短い音声は `skipped_too_short_audio` として自動除外されます。
 - ケース別ログは `manual_case_rows.jsonl`、集計ログは `manual_summary.json` に保存されます。
 - intent評価は `intent_gold` / `intent_silver`（または `labels.intent_gold` / `labels.intent_silver`）を参照します。
+- 生成品質のLLM評価は `--llm-eval` / `--no-llm-eval` / `--llm-eval-model` で制御できます（デフォルトOFF）。
 
 ### Component benchmarks (1:Vision / 2:STT / 3:Generation / 4:E2E)
 
@@ -174,6 +180,11 @@ scripts/benchmark_cases.sh e2e ~/.config/whisp/debug/manual_test_cases.jsonl --m
 - `*_summary.json`: 集計結果
 - `summary.txt`: 実行時コンソール出力
 
+集計の基本方針:
+- ベンチマーク画面は性能中心表示（品質 + レイテンシ分布）で、件数系は主表示しません。
+- レイテンシは平均値だけでなく `P50/P95/P99` を必須指標として扱います。
+- `generation` / `e2e` では `--llm-eval` で意図保持と幻覚率を追加評価できます。
+
 キャッシュ:
 - 1/2/3 は `~/.config/whisp/benchmark_cache/` を参照し、同一入力・同一設定の結果を再利用します。
 - キャッシュ無効化は `--no-cache`。
@@ -185,6 +196,17 @@ scripts/run_component_eval_loop.sh ~/.config/whisp/debug/manual_test_cases.jsonl
 ```
 
 `run_component_eval_loop.sh` は `1_vision/2_stt/3_generation/4_e2e` を同一 `result_root` に出力し、`overview.txt` を生成します。
+
+### Runtime statistics (運用統計)
+
+メニューの `統計を開く` では、実録音の運用統計のみを表示します。
+
+- 保存先: `~/.config/whisp/debug/stats/runtime_stats.json`
+- 更新単位: 録音1件ごと（`completed` / `skipped` / `failed` の全終了経路）
+- 期間: `24h / 7d / 30d / all`
+- 主な表示: `Run Counts`、`Phase Averages`、`Dominant Stage`
+
+表示時に `runs/*/events.jsonl` 全走査は行わず、統計ファイルを直接参照します。
 
 ### Full pipeline benchmark (stop -> final output)
 

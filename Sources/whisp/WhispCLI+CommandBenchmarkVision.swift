@@ -191,9 +191,18 @@ extension WhispCLI {
             exactMatchRate: nil,
             avgCER: summaryCERs.isEmpty ? nil : summaryCERs.reduce(0, +) / Double(summaryCERs.count),
             weightedCER: nil,
-            avgLatencyMs: latencies.isEmpty ? nil : latencies.reduce(0, +) / Double(latencies.count),
-            avgAfterStopMs: nil,
-            avgTermsF1: termsF1s.isEmpty ? nil : termsF1s.reduce(0, +) / Double(termsF1s.count)
+            avgTermsF1: termsF1s.isEmpty ? nil : termsF1s.reduce(0, +) / Double(termsF1s.count),
+            intentPreservationScore: nil,
+            hallucinationScore: nil,
+            hallucinationRate: nil,
+            llmEvalEnabled: false,
+            llmEvalModel: nil,
+            llmEvalEvaluatedCases: 0,
+            llmEvalErrorCases: 0,
+            latencyMs: latencyDistribution(values: latencies),
+            afterStopLatencyMs: nil,
+            postLatencyMs: nil,
+            totalAfterStopLatencyMs: nil
         )
         try writeJSONFile(summary, path: logPaths.summaryPath)
 
@@ -205,7 +214,11 @@ extension WhispCLI {
         print("cached_hits: \(cachedHits)")
         print("avg_summary_cer: \(summary.avgCER.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("avg_terms_f1: \(summary.avgTermsF1.map { String(format: "%.3f", $0) } ?? "n/a")")
-        print("avg_latency_ms: \(summary.avgLatencyMs.map(msString) ?? "n/a")")
+        if let latency = summary.latencyMs {
+            print("vision_latency_ms: avg=\(latency.avg.map(msString) ?? "n/a") p50=\(latency.p50.map(msString) ?? "n/a") p95=\(latency.p95.map(msString) ?? "n/a") p99=\(latency.p99.map(msString) ?? "n/a")")
+        } else {
+            print("vision_latency_ms: n/a")
+        }
         print("case_rows_log: \(logPaths.rowsPath)")
         print("summary_log: \(logPaths.summaryPath)")
 

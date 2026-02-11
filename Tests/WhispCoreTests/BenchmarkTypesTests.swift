@@ -18,6 +18,9 @@ final class BenchmarkTypesTests: XCTestCase {
             model: "gpt-5-nano",
             match: true,
             score: 4,
+            intentPreservationScore: nil,
+            hallucinationScore: nil,
+            hallucinationRate: nil,
             requestRef: BenchmarkArtifactRef(
                 relativePath: "artifacts/case-1/request.txt",
                 mimeType: "text/plain",

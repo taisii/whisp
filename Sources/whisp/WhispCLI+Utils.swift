@@ -98,4 +98,32 @@ extension WhispCLI {
     static func msString(_ ms: Double) -> String {
         String(format: "%.1f", ms)
     }
+
+    static func latencyDistribution(values: [Double]) -> LatencyDistributionLog? {
+        let sanitized = values.filter { $0 >= 0 }.sorted()
+        guard !sanitized.isEmpty else { return nil }
+        let avg = sanitized.reduce(0, +) / Double(sanitized.count)
+        return LatencyDistributionLog(
+            avg: avg,
+            p50: percentile(values: sanitized, percentile: 50),
+            p95: percentile(values: sanitized, percentile: 95),
+            p99: percentile(values: sanitized, percentile: 99)
+        )
+    }
+
+    static func percentile(values: [Double], percentile: Double) -> Double? {
+        guard !values.isEmpty else { return nil }
+        let bounded = max(0, min(100, percentile))
+        if values.count == 1 {
+            return values[0]
+        }
+        let rank = (bounded / 100.0) * Double(values.count - 1)
+        let lowerIndex = Int(floor(rank))
+        let upperIndex = Int(ceil(rank))
+        if lowerIndex == upperIndex {
+            return values[lowerIndex]
+        }
+        let weight = rank - Double(lowerIndex)
+        return values[lowerIndex] * (1 - weight) + values[upperIndex] * weight
+    }
 }

@@ -25,6 +25,139 @@ public struct BenchmarkLegacyImportInput: Sendable {
     }
 }
 
+private struct ImportedComponentSummary: Decodable {
+    let generatedAt: String
+    let benchmark: String
+    let jsonlPath: String
+    let casesTotal: Int
+    let casesSelected: Int
+    let executedCases: Int
+    let skippedCases: Int
+    let failedCases: Int
+    let cachedHits: Int
+
+    let exactMatchRate: Double?
+    let avgCER: Double?
+    let weightedCER: Double?
+    let avgTermsF1: Double?
+    let intentMatchRate: Double?
+    let intentAvgScore: Double?
+
+    let intentPreservationScore: Double?
+    let hallucinationScore: Double?
+    let hallucinationRate: Double?
+    let llmEvalEnabled: Bool
+    let llmEvalEvaluatedCases: Int
+    let llmEvalErrorCases: Int
+
+    let latencyMs: BenchmarkLatencyDistribution?
+    let afterStopLatencyMs: BenchmarkLatencyDistribution?
+    let postLatencyMs: BenchmarkLatencyDistribution?
+    let totalAfterStopLatencyMs: BenchmarkLatencyDistribution?
+}
+
+private struct ImportedManualSummary: Decodable {
+    let generatedAt: String
+    let jsonlPath: String
+    let sttMode: String
+    let chunkMs: Int
+    let realtime: Bool
+    let requireContext: Bool
+    let minAudioSeconds: Double
+    let minLabelConfidence: Double?
+    let intentSource: String
+    let intentJudgeEnabled: Bool
+    let llmEvalEnabled: Bool
+    let llmEvalEvaluatedCases: Int
+    let llmEvalErrorCases: Int
+    let casesTotal: Int
+    let casesSelected: Int
+    let executedCases: Int
+    let skippedMissingAudio: Int
+    let skippedInvalidAudio: Int
+    let skippedMissingReferenceTranscript: Int
+    let skippedMissingContext: Int
+    let skippedTooShortAudio: Int
+    let skippedLowLabelConfidence: Int
+    let failedRuns: Int
+    let exactMatchRate: Double
+    let avgCER: Double
+    let weightedCER: Double
+    let intentMatchRate: Double?
+    let intentAvgScore: Double?
+    let intentPreservationScore: Double?
+    let hallucinationScore: Double?
+    let hallucinationRate: Double?
+    let sttTotalMs: BenchmarkLatencyDistribution?
+    let sttAfterStopMs: BenchmarkLatencyDistribution?
+    let postMs: BenchmarkLatencyDistribution?
+    let totalAfterStopMs: BenchmarkLatencyDistribution?
+}
+
+private struct ImportedCaseRow: Decodable {
+    let id: String
+    let status: String
+    let reason: String?
+    let cached: Bool?
+
+    let transcriptReferenceSource: String?
+    let inputSource: String?
+    let referenceSource: String?
+    let intentReferenceSource: String?
+    let contextUsed: Bool?
+    let visionImageAttached: Bool?
+
+    let exactMatch: Bool?
+    let cer: Double?
+    let termsPrecision: Double?
+    let termsRecall: Double?
+    let termsF1: Double?
+    let intentMatch: Bool?
+    let intentScore: Int?
+
+    let intentPreservationScore: Double?
+    let hallucinationScore: Double?
+    let hallucinationRate: Double?
+
+    let sttTotalMs: Double?
+    let sttAfterStopMs: Double?
+    let postMs: Double?
+    let totalAfterStopMs: Double?
+    let latencyMs: Double?
+    let audioSeconds: Double?
+    let outputChars: Int?
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case status
+        case reason
+        case cached
+        case transcriptReferenceSource
+        case inputSource
+        case referenceSource
+        case intentReferenceSource
+        case contextUsed
+        case visionImageAttached
+        case exactMatch
+        case cer
+        case termsPrecision
+        case termsRecall
+        case termsF1
+        case intentMatch
+        case intentScore
+        case intentPreservationScore
+        case hallucinationScore
+        case hallucinationRate
+        case sttTotalMs
+        case sttAfterStopMs
+        case postMs
+        case totalAfterStopMs
+        case latencyMs
+        case audioSeconds
+        case outputChars
+    }
+}
+
 public final class BenchmarkLegacyImporter: Sendable {
     private let store: BenchmarkStore
 
@@ -36,15 +169,10 @@ public final class BenchmarkLegacyImporter: Sendable {
     public func importRun(input: BenchmarkLegacyImportInput) throws -> BenchmarkRunRecord {
         let summaryURL = URL(fileURLWithPath: input.summaryPath)
         let summaryData = try Data(contentsOf: summaryURL)
-        let summaryJSONObject = try JSONSerialization.jsonObject(with: summaryData)
-
-        guard let summary = summaryJSONObject as? [String: Any] else {
-            throw AppError.decode("legacy summary is not object")
-        }
+        let metrics = try decodeRunMetrics(kind: input.kind, summaryData: summaryData)
 
         let runID = input.runID ?? defaultRunID(kind: input.kind)
         let now = isoNow()
-        let metrics = summaryToRunMetrics(summary)
         var paths = store.resolveRunPaths(runID: runID)
         paths.logDirectoryPath = input.logDirectoryPath
         paths.rowsFilePath = input.rowsPath
@@ -64,6 +192,7 @@ public final class BenchmarkLegacyImporter: Sendable {
 
         let rowText = try String(contentsOfFile: input.rowsPath, encoding: .utf8)
         let lines = rowText.components(separatedBy: .newlines)
+        let decoder = JSONDecoder()
 
         for (index, rawLine) in lines.enumerated() {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -71,32 +200,33 @@ public final class BenchmarkLegacyImporter: Sendable {
                 continue
             }
             guard let lineData = line.data(using: .utf8) else {
-                continue
+                throw AppError.decode("invalid benchmark row encoding")
             }
-            let obj = try JSONSerialization.jsonObject(with: lineData)
-            guard let row = obj as? [String: Any] else {
-                continue
-            }
+            let row = try decoder.decode(ImportedCaseRow.self, from: lineData)
 
-            let caseID = readString(row, key: "id") ?? "case-\(index + 1)"
-            let status = decodeCaseStatus(readString(row, key: "status"))
-            let reason = readString(row, key: "reason")
+            let caseID = row.id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "case-\(index + 1)"
+                : row.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            let status = decodeCaseStatus(row.status)
 
-            let metrics = BenchmarkCaseMetrics(
-                exactMatch: readBool(row, keys: ["exact_match", "exactMatch"]),
-                cer: readDouble(row, key: "cer"),
-                termPrecision: readDouble(row, keys: ["terms_precision", "termsPrecision"]),
-                termRecall: readDouble(row, keys: ["terms_recall", "termsRecall"]),
-                termF1: readDouble(row, keys: ["terms_f1", "termsF1"]),
-                intentMatch: readBool(row, keys: ["intent_match", "intentMatch"]),
-                intentScore: readInt(row, keys: ["intent_score", "intentScore"]),
-                sttTotalMs: readDouble(row, keys: ["stt_total_ms", "sttTotalMs"]),
-                sttAfterStopMs: readDouble(row, keys: ["stt_after_stop_ms", "sttAfterStopMs"]),
-                postMs: readDouble(row, keys: ["post_ms", "postMs"]),
-                totalAfterStopMs: readDouble(row, keys: ["total_after_stop_ms", "totalAfterStopMs"]),
-                latencyMs: readDouble(row, keys: ["latency_ms", "latencyMs"]),
-                audioSeconds: readDouble(row, keys: ["audio_seconds", "audioSeconds"]),
-                outputChars: readInt(row, keys: ["output_chars", "outputChars"])
+            let caseMetrics = BenchmarkCaseMetrics(
+                exactMatch: row.exactMatch,
+                cer: row.cer,
+                termPrecision: row.termsPrecision,
+                termRecall: row.termsRecall,
+                termF1: row.termsF1,
+                intentMatch: row.intentMatch,
+                intentScore: row.intentScore,
+                intentPreservationScore: row.intentPreservationScore,
+                hallucinationScore: row.hallucinationScore,
+                hallucinationRate: row.hallucinationRate,
+                sttTotalMs: row.sttTotalMs,
+                sttAfterStopMs: row.sttAfterStopMs,
+                postMs: row.postMs,
+                totalAfterStopMs: row.totalAfterStopMs,
+                latencyMs: row.latencyMs,
+                audioSeconds: row.audioSeconds,
+                outputChars: row.outputChars
             )
 
             let rawRowRef: BenchmarkArtifactRef?
@@ -119,26 +249,25 @@ public final class BenchmarkLegacyImporter: Sendable {
             }
 
             let sources = BenchmarkReferenceSources(
-                transcript: readString(row, keys: ["transcript_reference_source", "transcriptReferenceSource"]),
-                input: readString(row, keys: ["input_source", "inputSource"]),
-                reference: readString(row, keys: ["reference_source", "referenceSource"]),
-                intent: readString(row, keys: ["intent_reference_source", "intentReferenceSource"])
+                transcript: normalizedOptionalText(row.transcriptReferenceSource),
+                input: normalizedOptionalText(row.inputSource),
+                reference: normalizedOptionalText(row.referenceSource),
+                intent: normalizedOptionalText(row.intentReferenceSource)
             )
 
-            let cacheHit = readBool(row, key: "cached")
-            let cacheRecord = cacheHit.map { hit in
+            let cacheRecord = row.cached.map { hit in
                 BenchmarkCacheRecord(hit: hit)
             }
 
             let caseResult = BenchmarkCaseResult(
                 id: caseID,
                 status: status,
-                reason: reason,
+                reason: normalizedOptionalText(row.reason),
                 cache: cacheRecord,
                 sources: sources,
-                contextUsed: readBool(row, keys: ["context_used", "contextUsed"]),
-                visionImageAttached: readBool(row, keys: ["vision_image_attached", "visionImageAttached"]),
-                metrics: metrics
+                contextUsed: row.contextUsed,
+                visionImageAttached: row.visionImageAttached,
+                metrics: caseMetrics
             )
             try store.appendCaseResult(runID: runID, result: caseResult)
 
@@ -152,7 +281,7 @@ public final class BenchmarkLegacyImporter: Sendable {
                 rawRowRef: rawRowRef
             )))
 
-            if let cacheHit {
+            if let cacheHit = row.cached {
                 let cacheBase = eventBase(runID: runID, caseID: caseID, stage: .cache, status: .ok, seed: index * 10 + 1)
                 try store.appendEvent(runID: runID, event: .cache(BenchmarkCacheLog(
                     base: cacheBase,
@@ -164,42 +293,45 @@ public final class BenchmarkLegacyImporter: Sendable {
                 )))
             }
 
-            if metrics.sttTotalMs != nil || metrics.sttAfterStopMs != nil {
+            if caseMetrics.sttTotalMs != nil || caseMetrics.sttAfterStopMs != nil {
                 let sttBase = eventBase(runID: runID, caseID: caseID, stage: .stt, status: .ok, seed: index * 10 + 2)
                 try store.appendEvent(runID: runID, event: .stt(BenchmarkSTTLog(
                     base: sttBase,
                     provider: nil,
                     mode: input.options.sttMode,
                     transcriptChars: nil,
-                    cer: metrics.cer,
-                    sttTotalMs: metrics.sttTotalMs,
-                    sttAfterStopMs: metrics.sttAfterStopMs,
+                    cer: caseMetrics.cer,
+                    sttTotalMs: caseMetrics.sttTotalMs,
+                    sttAfterStopMs: caseMetrics.sttAfterStopMs,
                     rawResponseRef: nil,
                     error: nil
                 )))
             }
 
-            if metrics.postMs != nil || metrics.outputChars != nil {
-                let genBase = eventBase(runID: runID, caseID: caseID, stage: .generation, status: .ok, seed: index * 10 + 3)
+            if caseMetrics.postMs != nil || caseMetrics.outputChars != nil {
+                let generationBase = eventBase(runID: runID, caseID: caseID, stage: .generation, status: .ok, seed: index * 10 + 3)
                 try store.appendEvent(runID: runID, event: .generation(BenchmarkGenerationLog(
-                    base: genBase,
+                    base: generationBase,
                     model: input.options.llmModel,
                     inputChars: nil,
-                    outputChars: metrics.outputChars,
-                    postMs: metrics.postMs,
+                    outputChars: caseMetrics.outputChars,
+                    postMs: caseMetrics.postMs,
                     promptRef: nil,
                     responseRef: nil,
                     error: nil
                 )))
             }
 
-            if metrics.intentMatch != nil || metrics.intentScore != nil {
+            if caseMetrics.intentMatch != nil || caseMetrics.intentScore != nil || caseMetrics.intentPreservationScore != nil || caseMetrics.hallucinationScore != nil || caseMetrics.hallucinationRate != nil {
                 let judgeBase = eventBase(runID: runID, caseID: caseID, stage: .judge, status: .ok, seed: index * 10 + 4)
                 try store.appendEvent(runID: runID, event: .judge(BenchmarkJudgeLog(
                     base: judgeBase,
-                    model: input.options.intentJudgeModel,
-                    match: metrics.intentMatch,
-                    score: metrics.intentScore,
+                    model: input.options.llmEvalModel ?? input.options.intentJudgeModel,
+                    match: caseMetrics.intentMatch,
+                    score: caseMetrics.intentScore,
+                    intentPreservationScore: caseMetrics.intentPreservationScore,
+                    hallucinationScore: caseMetrics.hallucinationScore,
+                    hallucinationRate: caseMetrics.hallucinationRate,
                     requestRef: nil,
                     responseRef: nil,
                     error: nil
@@ -209,13 +341,16 @@ public final class BenchmarkLegacyImporter: Sendable {
             let aggregateBase = eventBase(runID: runID, caseID: caseID, stage: .aggregate, status: .ok, seed: index * 10 + 5)
             try store.appendEvent(runID: runID, event: .aggregate(BenchmarkAggregateLog(
                 base: aggregateBase,
-                exactMatch: metrics.exactMatch,
-                cer: metrics.cer,
-                intentMatch: metrics.intentMatch,
-                intentScore: metrics.intentScore,
-                latencyMs: metrics.latencyMs,
-                totalAfterStopMs: metrics.totalAfterStopMs,
-                outputChars: metrics.outputChars
+                exactMatch: caseMetrics.exactMatch,
+                cer: caseMetrics.cer,
+                intentMatch: caseMetrics.intentMatch,
+                intentScore: caseMetrics.intentScore,
+                intentPreservationScore: caseMetrics.intentPreservationScore,
+                hallucinationScore: caseMetrics.hallucinationScore,
+                hallucinationRate: caseMetrics.hallucinationRate,
+                latencyMs: caseMetrics.latencyMs,
+                totalAfterStopMs: caseMetrics.totalAfterStopMs,
+                outputChars: caseMetrics.outputChars
             )))
 
             if status == .error {
@@ -224,7 +359,7 @@ public final class BenchmarkLegacyImporter: Sendable {
                     base: errorBase,
                     originStage: nil,
                     errorType: "legacy_row_error",
-                    message: reason ?? "unknown"
+                    message: row.reason ?? "unknown"
                 )))
             }
         }
@@ -244,6 +379,9 @@ public final class BenchmarkLegacyImporter: Sendable {
                 cer: metrics.avgCER,
                 intentMatch: nil,
                 intentScore: nil,
+                intentPreservationScore: metrics.intentPreservationScore,
+                hallucinationScore: metrics.hallucinationScore,
+                hallucinationRate: metrics.hallucinationRate,
                 latencyMs: metrics.latencyMs?.avg,
                 totalAfterStopMs: metrics.totalAfterStopLatencyMs?.avg,
                 outputChars: nil
@@ -269,48 +407,79 @@ public final class BenchmarkLegacyImporter: Sendable {
         return run
     }
 
-    private func summaryToRunMetrics(_ summary: [String: Any]) -> BenchmarkRunMetrics {
-        let skippedFromDetails = [
-            readInt(summary, keys: ["skipped_missing_audio", "skippedMissingAudio"]),
-            readInt(summary, keys: ["skipped_invalid_audio", "skippedInvalidAudio"]),
-            readInt(summary, keys: ["skipped_missing_reference_transcript", "skippedMissingReferenceTranscript"]),
-            readInt(summary, keys: ["skipped_missing_context", "skippedMissingContext"]),
-            readInt(summary, keys: ["skipped_too_short_audio", "skippedTooShortAudio"]),
-            readInt(summary, keys: ["skipped_low_label_confidence", "skippedLowLabelConfidence"]),
-        ].compactMap { $0 }.reduce(0, +)
+    private func decodeRunMetrics(kind: BenchmarkKind, summaryData: Data) throws -> BenchmarkRunMetrics {
+        let decoder = JSONDecoder()
+        if kind == .e2e {
+            let summary = try decoder.decode(ImportedManualSummary.self, from: summaryData)
+            return manualSummaryToRunMetrics(summary)
+        }
+        let summary = try decoder.decode(ImportedComponentSummary.self, from: summaryData)
+        return componentSummaryToRunMetrics(summary)
+    }
 
-        let skipped = readInt(summary, keys: ["skipped_cases", "skippedCases"]) ?? skippedFromDetails
-        let failed = readInt(summary, keys: ["failed_cases", "failedCases", "failed_runs", "failedRuns"]) ?? 0
-
-        return BenchmarkRunMetrics(
-            casesTotal: readInt(summary, keys: ["cases_total", "casesTotal"]) ?? 0,
-            casesSelected: readInt(summary, keys: ["cases_selected", "casesSelected"]) ?? 0,
-            executedCases: readInt(summary, keys: ["executed_cases", "executedCases"]) ?? 0,
-            skippedCases: skipped,
-            failedCases: failed,
-            cachedHits: readInt(summary, keys: ["cached_hits", "cachedHits"]) ?? 0,
-            exactMatchRate: readDouble(summary, keys: ["exact_match_rate", "exactMatchRate"]),
-            avgCER: readDouble(summary, keys: ["avg_cer", "avgCER"]),
-            weightedCER: readDouble(summary, keys: ["weighted_cer", "weightedCER"]),
-            avgTermsF1: readDouble(summary, keys: ["avg_terms_f1", "avgTermsF1"]),
-            intentMatchRate: readDouble(summary, keys: ["intent_match_rate", "intentMatchRate"]),
-            intentAvgScore: readDouble(summary, keys: ["intent_avg_score_0_4", "intentAvgScore"]),
-            latencyMs: BenchmarkLatencyDistribution(avg: readDouble(summary, keys: ["avg_latency_ms", "avgLatencyMs", "avg_stt_total_ms", "avgSttTotalMs"])),
-            afterStopLatencyMs: BenchmarkLatencyDistribution(avg: readDouble(summary, keys: ["avg_after_stop_ms", "avgAfterStopMs", "avg_stt_after_stop_ms", "avgSttAfterStopMs"])),
-            postLatencyMs: BenchmarkLatencyDistribution(avg: readDouble(summary, keys: ["avg_post_ms", "avgPostMs"])),
-            totalAfterStopLatencyMs: BenchmarkLatencyDistribution(avg: readDouble(summary, keys: ["avg_total_after_stop_ms", "avgTotalAfterStopMs"]))
+    private func componentSummaryToRunMetrics(_ summary: ImportedComponentSummary) -> BenchmarkRunMetrics {
+        BenchmarkRunMetrics(
+            casesTotal: summary.casesTotal,
+            casesSelected: summary.casesSelected,
+            executedCases: summary.executedCases,
+            skippedCases: summary.skippedCases,
+            failedCases: summary.failedCases,
+            cachedHits: summary.cachedHits,
+            exactMatchRate: summary.exactMatchRate,
+            avgCER: summary.avgCER,
+            weightedCER: summary.weightedCER,
+            avgTermsF1: summary.avgTermsF1,
+            intentMatchRate: summary.intentMatchRate,
+            intentAvgScore: summary.intentAvgScore,
+            intentPreservationScore: summary.intentPreservationScore,
+            hallucinationScore: summary.hallucinationScore,
+            hallucinationRate: summary.hallucinationRate,
+            latencyMs: summary.latencyMs,
+            afterStopLatencyMs: summary.afterStopLatencyMs,
+            postLatencyMs: summary.postLatencyMs,
+            totalAfterStopLatencyMs: summary.totalAfterStopLatencyMs
         )
     }
 
-    private func decodeCaseStatus(_ raw: String?) -> BenchmarkCaseStatus {
-        switch raw {
-        case "ok":
+    private func manualSummaryToRunMetrics(_ summary: ImportedManualSummary) -> BenchmarkRunMetrics {
+        let skippedCases = summary.skippedMissingAudio
+            + summary.skippedInvalidAudio
+            + summary.skippedMissingReferenceTranscript
+            + summary.skippedMissingContext
+            + summary.skippedTooShortAudio
+            + summary.skippedLowLabelConfidence
+
+        return BenchmarkRunMetrics(
+            casesTotal: summary.casesTotal,
+            casesSelected: summary.casesSelected,
+            executedCases: summary.executedCases,
+            skippedCases: skippedCases,
+            failedCases: summary.failedRuns,
+            cachedHits: 0,
+            exactMatchRate: summary.exactMatchRate,
+            avgCER: summary.avgCER,
+            weightedCER: summary.weightedCER,
+            avgTermsF1: nil,
+            intentMatchRate: summary.intentMatchRate,
+            intentAvgScore: summary.intentAvgScore,
+            intentPreservationScore: summary.intentPreservationScore,
+            hallucinationScore: summary.hallucinationScore,
+            hallucinationRate: summary.hallucinationRate,
+            latencyMs: summary.sttTotalMs,
+            afterStopLatencyMs: summary.sttAfterStopMs,
+            postLatencyMs: summary.postMs,
+            totalAfterStopLatencyMs: summary.totalAfterStopMs
+        )
+    }
+
+    private func decodeCaseStatus(_ raw: String) -> BenchmarkCaseStatus {
+        if raw == "ok" {
             return .ok
-        case let value where value?.hasPrefix("skipped_") == true:
-            return .skipped
-        default:
-            return .error
         }
+        if raw.hasPrefix("skipped") {
+            return .skipped
+        }
+        return .error
     }
 
     private func eventBase(
@@ -333,95 +502,10 @@ public final class BenchmarkLegacyImporter: Sendable {
         )
     }
 
-    private func readString(_ json: [String: Any], key: String) -> String? {
-        if let value = json[key] as? String {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        return nil
-    }
-
-    private func readString(_ json: [String: Any], keys: [String]) -> String? {
-        for key in keys {
-            if let value = readString(json, key: key) {
-                return value
-            }
-        }
-        return nil
-    }
-
-    private func readInt(_ json: [String: Any], key: String) -> Int? {
-        if let value = json[key] as? Int {
-            return value
-        }
-        if let value = json[key] as? Double {
-            return Int(value)
-        }
-        if let value = json[key] as? String,
-           let parsed = Int(value)
-        {
-            return parsed
-        }
-        return nil
-    }
-
-    private func readInt(_ json: [String: Any], keys: [String]) -> Int? {
-        for key in keys {
-            if let value = readInt(json, key: key) {
-                return value
-            }
-        }
-        return nil
-    }
-
-    private func readDouble(_ json: [String: Any], key: String) -> Double? {
-        if let value = json[key] as? Double {
-            return value
-        }
-        if let value = json[key] as? Int {
-            return Double(value)
-        }
-        if let value = json[key] as? String,
-           let parsed = Double(value)
-        {
-            return parsed
-        }
-        return nil
-    }
-
-    private func readDouble(_ json: [String: Any], keys: [String]) -> Double? {
-        for key in keys {
-            if let value = readDouble(json, key: key) {
-                return value
-            }
-        }
-        return nil
-    }
-
-    private func readBool(_ json: [String: Any], key: String) -> Bool? {
-        if let value = json[key] as? Bool {
-            return value
-        }
-        if let value = json[key] as? String {
-            switch value.lowercased() {
-            case "true", "1", "yes":
-                return true
-            case "false", "0", "no":
-                return false
-            default:
-                return nil
-            }
-        }
-        return nil
-    }
-
-    private func readBool(_ json: [String: Any], keys: [String]) -> Bool? {
-        for key in keys {
-            if let value = readBool(json, key: key) {
-                return value
-            }
-        }
-        return nil
+    private func normalizedOptionalText(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func defaultRunID(kind: BenchmarkKind) -> String {

@@ -192,6 +192,8 @@ extension WhispCLI {
         }
 
         let exactRate = executed > 0 ? Double(exactCount) / Double(executed) : 0
+        let totalLatencyDistribution = latencyDistribution(values: totalLatencies)
+        let afterStopDistribution = latencyDistribution(values: afterStopLatencies)
         let summary = ComponentSummaryLog(
             generatedAt: ISO8601DateFormatter().string(from: Date()),
             benchmark: "stt",
@@ -205,9 +207,18 @@ extension WhispCLI {
             exactMatchRate: exactRate,
             avgCER: cerValues.isEmpty ? nil : cerValues.reduce(0, +) / Double(cerValues.count),
             weightedCER: totalRefChars > 0 ? Double(totalEdits) / Double(totalRefChars) : nil,
-            avgLatencyMs: totalLatencies.isEmpty ? nil : totalLatencies.reduce(0, +) / Double(totalLatencies.count),
-            avgAfterStopMs: afterStopLatencies.isEmpty ? nil : afterStopLatencies.reduce(0, +) / Double(afterStopLatencies.count),
-            avgTermsF1: nil
+            avgTermsF1: nil,
+            intentPreservationScore: nil,
+            hallucinationScore: nil,
+            hallucinationRate: nil,
+            llmEvalEnabled: false,
+            llmEvalModel: nil,
+            llmEvalEvaluatedCases: 0,
+            llmEvalErrorCases: 0,
+            latencyMs: totalLatencyDistribution,
+            afterStopLatencyMs: afterStopDistribution,
+            postLatencyMs: nil,
+            totalAfterStopLatencyMs: nil
         )
         try writeJSONFile(summary, path: logPaths.summaryPath)
 
@@ -220,8 +231,16 @@ extension WhispCLI {
         print("exact_match_rate: \(String(format: "%.3f", exactRate))")
         print("avg_cer: \(summary.avgCER.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("weighted_cer: \(summary.weightedCER.map { String(format: "%.3f", $0) } ?? "n/a")")
-        print("avg_stt_total_ms: \(summary.avgLatencyMs.map(msString) ?? "n/a")")
-        print("avg_stt_after_stop_ms: \(summary.avgAfterStopMs.map(msString) ?? "n/a")")
+        if let total = summary.latencyMs {
+            print("stt_total_ms: avg=\(total.avg.map(msString) ?? "n/a") p50=\(total.p50.map(msString) ?? "n/a") p95=\(total.p95.map(msString) ?? "n/a") p99=\(total.p99.map(msString) ?? "n/a")")
+        } else {
+            print("stt_total_ms: n/a")
+        }
+        if let afterStop = summary.afterStopLatencyMs {
+            print("stt_after_stop_ms: avg=\(afterStop.avg.map(msString) ?? "n/a") p50=\(afterStop.p50.map(msString) ?? "n/a") p95=\(afterStop.p95.map(msString) ?? "n/a") p99=\(afterStop.p99.map(msString) ?? "n/a")")
+        } else {
+            print("stt_after_stop_ms: n/a")
+        }
         print("case_rows_log: \(logPaths.rowsPath)")
         print("summary_log: \(logPaths.summaryPath)")
 

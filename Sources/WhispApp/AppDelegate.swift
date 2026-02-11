@@ -50,6 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator?.openBenchmarkWindow()
     }
 
+    @objc private func openStatisticsWindow() {
+        coordinator?.openStatisticsWindow()
+    }
+
     @objc private func openMicrophoneSettings() {
         coordinator?.openMicrophoneSettings()
     }
@@ -128,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "設定を開く", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "デバッグを開く", action: #selector(openDebugWindow), keyEquivalent: "d"))
         menu.addItem(NSMenuItem(title: "ベンチマークを開く", action: #selector(openBenchmarkWindow), keyEquivalent: "b"))
+        menu.addItem(NSMenuItem(title: "統計を開く", action: #selector(openStatisticsWindow), keyEquivalent: "s"))
         menu.addItem(requestAccessibilityItem)
         menu.addItem(NSMenuItem(title: "マイク設定を開く", action: #selector(openMicrophoneSettings), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "アクセシビリティ設定を開く", action: #selector(openAccessibilitySettings), keyEquivalent: ""))

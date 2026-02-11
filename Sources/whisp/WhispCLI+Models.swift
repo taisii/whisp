@@ -49,6 +49,8 @@ struct ManualBenchmarkOptions {
     let intentSource: IntentSource
     let intentJudgeEnabled: Bool
     let intentJudgeModel: LLMModel?
+    let llmEvalEnabled: Bool
+    let llmEvalModel: LLMModel?
     let minLabelConfidence: Double?
 }
 
@@ -275,6 +277,7 @@ struct ManualCaseEvaluation {
     let cer: Double
     let gtChars: Int
     let editDistance: Int
+    let sttTotalMs: Double
     let sttAfterStopMs: Double
     let postMs: Double
     let totalAfterStopMs: Double
@@ -283,6 +286,10 @@ struct ManualCaseEvaluation {
     let intentReferenceSource: String?
     let intentMatch: Bool?
     let intentScore: Int?
+    let intentPreservationScore: Double?
+    let hallucinationScore: Double?
+    let hallucinationRate: Double?
+    let llmEvalError: String?
 }
 
 struct IntentJudgeResult {
@@ -304,7 +311,36 @@ struct IntentJudgeResponse: Decodable {
     }
 }
 
-struct ManualCaseLogRow: Encodable {
+struct LLMEvaluationResult {
+    let intentPreservationScore: Double
+    let hallucinationScore: Double
+    let hallucinationRate: Double
+}
+
+struct LLMEvaluationResponse: Decodable {
+    let intentPreservationScore: Double
+    let hallucinationScore: Double
+    let hallucinationRate: Double
+    let reason: String?
+    let errorType: String?
+
+    enum CodingKeys: String, CodingKey {
+        case intentPreservationScore = "intent_preservation_score"
+        case hallucinationScore = "hallucination_score"
+        case hallucinationRate = "hallucination_rate"
+        case reason
+        case errorType = "error_type"
+    }
+}
+
+struct LatencyDistributionLog: Codable {
+    let avg: Double?
+    let p50: Double?
+    let p95: Double?
+    let p99: Double?
+}
+
+struct ManualCaseLogRow: Codable {
     let id: String
     let status: String
     let reason: String?
@@ -318,12 +354,63 @@ struct ManualCaseLogRow: Encodable {
     let intentReferenceSource: String?
     let intentMatch: Bool?
     let intentScore: Int?
+    let intentPreservationScore: Double?
+    let hallucinationScore: Double?
+    let hallucinationRate: Double?
+    let llmEvalError: String?
+    let sttTotalMs: Double?
     let sttAfterStopMs: Double?
     let postMs: Double?
     let totalAfterStopMs: Double?
+
+    init(
+        id: String,
+        status: String,
+        reason: String?,
+        suitable: Bool,
+        audioSeconds: Double?,
+        contextUsed: Bool,
+        visionImageAttached: Bool,
+        transcriptReferenceSource: String?,
+        exactMatch: Bool?,
+        cer: Double?,
+        intentReferenceSource: String?,
+        intentMatch: Bool?,
+        intentScore: Int?,
+        intentPreservationScore: Double? = nil,
+        hallucinationScore: Double? = nil,
+        hallucinationRate: Double? = nil,
+        llmEvalError: String? = nil,
+        sttTotalMs: Double? = nil,
+        sttAfterStopMs: Double?,
+        postMs: Double?,
+        totalAfterStopMs: Double?
+    ) {
+        self.id = id
+        self.status = status
+        self.reason = reason
+        self.suitable = suitable
+        self.audioSeconds = audioSeconds
+        self.contextUsed = contextUsed
+        self.visionImageAttached = visionImageAttached
+        self.transcriptReferenceSource = transcriptReferenceSource
+        self.exactMatch = exactMatch
+        self.cer = cer
+        self.intentReferenceSource = intentReferenceSource
+        self.intentMatch = intentMatch
+        self.intentScore = intentScore
+        self.intentPreservationScore = intentPreservationScore
+        self.hallucinationScore = hallucinationScore
+        self.hallucinationRate = hallucinationRate
+        self.llmEvalError = llmEvalError
+        self.sttTotalMs = sttTotalMs
+        self.sttAfterStopMs = sttAfterStopMs
+        self.postMs = postMs
+        self.totalAfterStopMs = totalAfterStopMs
+    }
 }
 
-struct ManualBenchmarkSummaryLog: Encodable {
+struct ManualBenchmarkSummaryLog: Codable {
     let generatedAt: String
     let jsonlPath: String
     let sttMode: String
@@ -335,6 +422,8 @@ struct ManualBenchmarkSummaryLog: Encodable {
     let intentSource: String
     let intentJudgeEnabled: Bool
     let intentJudgeModel: String?
+    let llmEvalEnabled: Bool
+    let llmEvalModel: String?
     let casesTotal: Int
     let casesSelected: Int
     let executedCases: Int
@@ -353,9 +442,15 @@ struct ManualBenchmarkSummaryLog: Encodable {
     let intentMatchCases: Int
     let intentMatchRate: Double?
     let intentAvgScore: Double?
-    let avgSttAfterStopMs: Double
-    let avgPostMs: Double
-    let avgTotalAfterStopMs: Double
+    let llmEvalEvaluatedCases: Int
+    let llmEvalErrorCases: Int
+    let intentPreservationScore: Double?
+    let hallucinationScore: Double?
+    let hallucinationRate: Double?
+    let sttTotalMs: LatencyDistributionLog?
+    let sttAfterStopMs: LatencyDistributionLog?
+    let postMs: LatencyDistributionLog?
+    let totalAfterStopMs: LatencyDistributionLog?
 }
 
 struct ManualBenchmarkLogPaths {
@@ -388,6 +483,8 @@ struct GenerationBenchmarkOptions {
     let requireContext: Bool
     let benchmarkLogDir: String?
     let useCache: Bool
+    let llmEvalEnabled: Bool
+    let llmEvalModel: LLMModel?
 }
 
 struct VisionCaseLogRow: Encodable {
@@ -415,7 +512,7 @@ struct STTCaseLogRow: Encodable {
     let audioSeconds: Double?
 }
 
-struct GenerationCaseLogRow: Encodable {
+struct GenerationCaseLogRow: Codable {
     let id: String
     let status: String
     let reason: String?
@@ -424,11 +521,47 @@ struct GenerationCaseLogRow: Encodable {
     let referenceSource: String?
     let exactMatch: Bool?
     let cer: Double?
+    let intentPreservationScore: Double?
+    let hallucinationScore: Double?
+    let hallucinationRate: Double?
+    let llmEvalError: String?
     let postMs: Double?
     let outputChars: Int?
+
+    init(
+        id: String,
+        status: String,
+        reason: String?,
+        cached: Bool,
+        inputSource: String?,
+        referenceSource: String?,
+        exactMatch: Bool?,
+        cer: Double?,
+        intentPreservationScore: Double? = nil,
+        hallucinationScore: Double? = nil,
+        hallucinationRate: Double? = nil,
+        llmEvalError: String? = nil,
+        postMs: Double?,
+        outputChars: Int?
+    ) {
+        self.id = id
+        self.status = status
+        self.reason = reason
+        self.cached = cached
+        self.inputSource = inputSource
+        self.referenceSource = referenceSource
+        self.exactMatch = exactMatch
+        self.cer = cer
+        self.intentPreservationScore = intentPreservationScore
+        self.hallucinationScore = hallucinationScore
+        self.hallucinationRate = hallucinationRate
+        self.llmEvalError = llmEvalError
+        self.postMs = postMs
+        self.outputChars = outputChars
+    }
 }
 
-struct ComponentSummaryLog: Encodable {
+struct ComponentSummaryLog: Codable {
     let generatedAt: String
     let benchmark: String
     let jsonlPath: String
@@ -441,9 +574,18 @@ struct ComponentSummaryLog: Encodable {
     let exactMatchRate: Double?
     let avgCER: Double?
     let weightedCER: Double?
-    let avgLatencyMs: Double?
-    let avgAfterStopMs: Double?
     let avgTermsF1: Double?
+    let intentPreservationScore: Double?
+    let hallucinationScore: Double?
+    let hallucinationRate: Double?
+    let llmEvalEnabled: Bool
+    let llmEvalModel: String?
+    let llmEvalEvaluatedCases: Int
+    let llmEvalErrorCases: Int
+    let latencyMs: LatencyDistributionLog?
+    let afterStopLatencyMs: LatencyDistributionLog?
+    let postLatencyMs: LatencyDistributionLog?
+    let totalAfterStopLatencyMs: LatencyDistributionLog?
 }
 
 struct ComponentBenchmarkLogPaths {

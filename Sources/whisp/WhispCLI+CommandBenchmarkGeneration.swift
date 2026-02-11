@@ -24,9 +24,11 @@ extension WhispCLI {
         print("model: \(model.rawValue)")
         print("require_context: \(options.requireContext)")
         print("use_cache: \(options.useCache)")
+        print("llm_eval: \(options.llmEvalEnabled)")
+        print("llm_eval_model: \(options.llmEvalModel?.rawValue ?? "auto")")
         print("benchmark_log_dir: \(logPaths.baseDir)")
         print("")
-        print("id\tstatus\tcached\texact_match\tcer\tpost_ms\toutput_chars")
+        print("id\tstatus\tcached\texact_match\tcer\tpost_ms\toutput_chars\tintent_preservation\thallucination_rate")
 
         var executed = 0
         var skipped = 0
@@ -37,6 +39,13 @@ extension WhispCLI {
         var totalEdits = 0
         var totalRefChars = 0
         var postLatencies: [Double] = []
+        var llmEvalContext: (model: LLMModel, apiKey: String)?
+        var llmEvalUnavailableReason: String?
+        var llmEvalEvaluatedCases = 0
+        var llmEvalErrorCases = 0
+        var intentPreservationValues: [Double] = []
+        var hallucinationScoreValues: [Double] = []
+        var hallucinationRateValues: [Double] = []
 
         for item in selectedCases {
             guard let input = item.resolvedGenerationInputSTT() else {
@@ -139,6 +148,47 @@ extension WhispCLI {
                 let edit = levenshteinDistance(refChars, outChars)
                 let cer = Double(edit) / Double(max(1, refChars.count))
                 let exact = normalizedEvalText(reference.text) == normalizedEvalText(generation.output)
+                var intentPreservationScore: Double?
+                var hallucinationScore: Double?
+                var hallucinationRate: Double?
+                var llmEvalError: String?
+
+                if options.llmEvalEnabled {
+                    if llmEvalContext == nil, llmEvalUnavailableReason == nil {
+                        do {
+                            llmEvalContext = try APIKeyResolver.resolveIntentJudgeContext(
+                                config: config,
+                                preferredModel: options.llmEvalModel
+                            )
+                        } catch {
+                            llmEvalUnavailableReason = error.localizedDescription
+                        }
+                    }
+                    if let llmEvalContext {
+                        do {
+                            let evaluation = try await runLLMEvaluation(
+                                model: llmEvalContext.model,
+                                apiKey: llmEvalContext.apiKey,
+                                referenceText: reference.text,
+                                hypothesisText: generation.output,
+                                context: item.context
+                            )
+                            intentPreservationScore = evaluation.intentPreservationScore
+                            hallucinationScore = evaluation.hallucinationScore
+                            hallucinationRate = evaluation.hallucinationRate
+                            llmEvalEvaluatedCases += 1
+                            intentPreservationValues.append(evaluation.intentPreservationScore)
+                            hallucinationScoreValues.append(evaluation.hallucinationScore)
+                            hallucinationRateValues.append(evaluation.hallucinationRate)
+                        } catch {
+                            llmEvalError = error.localizedDescription
+                            llmEvalErrorCases += 1
+                        }
+                    } else if let reason = llmEvalUnavailableReason {
+                        llmEvalError = reason
+                        llmEvalErrorCases += 1
+                    }
+                }
 
                 executed += 1
                 if exact { exactCount += 1 }
@@ -147,7 +197,7 @@ extension WhispCLI {
                 totalRefChars += refChars.count
                 postLatencies.append(generation.postMs)
 
-                print("\(item.id)\tok\t\(generation.cached)\t\(exact)\t\(String(format: "%.3f", cer))\t\(msString(generation.postMs))\t\(outChars.count)")
+                print("\(item.id)\tok\t\(generation.cached)\t\(exact)\t\(String(format: "%.3f", cer))\t\(msString(generation.postMs))\t\(outChars.count)\t\(intentPreservationScore.map { String(format: "%.3f", $0) } ?? "-")\t\(hallucinationRate.map { String(format: "%.3f", $0) } ?? "-")")
                 try appendJSONLine(
                     GenerationCaseLogRow(
                         id: item.id,
@@ -158,6 +208,10 @@ extension WhispCLI {
                         referenceSource: reference.source,
                         exactMatch: exact,
                         cer: cer,
+                        intentPreservationScore: intentPreservationScore,
+                        hallucinationScore: hallucinationScore,
+                        hallucinationRate: hallucinationRate,
+                        llmEvalError: llmEvalError,
                         postMs: generation.postMs,
                         outputChars: outChars.count
                     ),
@@ -176,6 +230,10 @@ extension WhispCLI {
                         referenceSource: reference.source,
                         exactMatch: nil,
                         cer: nil,
+                        intentPreservationScore: nil,
+                        hallucinationScore: nil,
+                        hallucinationRate: nil,
+                        llmEvalError: nil,
                         postMs: nil,
                         outputChars: nil
                     ),
@@ -185,6 +243,7 @@ extension WhispCLI {
         }
 
         let exactRate = executed > 0 ? Double(exactCount) / Double(executed) : 0
+        let postDistribution = latencyDistribution(values: postLatencies)
         let summary = ComponentSummaryLog(
             generatedAt: ISO8601DateFormatter().string(from: Date()),
             benchmark: "generation",
@@ -198,9 +257,18 @@ extension WhispCLI {
             exactMatchRate: exactRate,
             avgCER: cerValues.isEmpty ? nil : cerValues.reduce(0, +) / Double(cerValues.count),
             weightedCER: totalRefChars > 0 ? Double(totalEdits) / Double(totalRefChars) : nil,
-            avgLatencyMs: postLatencies.isEmpty ? nil : postLatencies.reduce(0, +) / Double(postLatencies.count),
-            avgAfterStopMs: nil,
-            avgTermsF1: nil
+            avgTermsF1: nil,
+            intentPreservationScore: intentPreservationValues.isEmpty ? nil : intentPreservationValues.reduce(0, +) / Double(intentPreservationValues.count),
+            hallucinationScore: hallucinationScoreValues.isEmpty ? nil : hallucinationScoreValues.reduce(0, +) / Double(hallucinationScoreValues.count),
+            hallucinationRate: hallucinationRateValues.isEmpty ? nil : hallucinationRateValues.reduce(0, +) / Double(hallucinationRateValues.count),
+            llmEvalEnabled: options.llmEvalEnabled,
+            llmEvalModel: llmEvalContext?.model.rawValue ?? options.llmEvalModel?.rawValue,
+            llmEvalEvaluatedCases: llmEvalEvaluatedCases,
+            llmEvalErrorCases: llmEvalErrorCases,
+            latencyMs: nil,
+            afterStopLatencyMs: nil,
+            postLatencyMs: postDistribution,
+            totalAfterStopLatencyMs: nil
         )
         try writeJSONFile(summary, path: logPaths.summaryPath)
 
@@ -213,9 +281,21 @@ extension WhispCLI {
         print("exact_match_rate: \(String(format: "%.3f", exactRate))")
         print("avg_cer: \(summary.avgCER.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("weighted_cer: \(summary.weightedCER.map { String(format: "%.3f", $0) } ?? "n/a")")
-        print("avg_post_ms: \(summary.avgLatencyMs.map(msString) ?? "n/a")")
+        if let post = summary.postLatencyMs {
+            print("post_ms: avg=\(post.avg.map(msString) ?? "n/a") p50=\(post.p50.map(msString) ?? "n/a") p95=\(post.p95.map(msString) ?? "n/a") p99=\(post.p99.map(msString) ?? "n/a")")
+        } else {
+            print("post_ms: n/a")
+        }
+        print("llm_eval_evaluated_cases: \(summary.llmEvalEvaluatedCases)")
+        print("llm_eval_error_cases: \(summary.llmEvalErrorCases)")
+        print("intent_preservation_score: \(summary.intentPreservationScore.map { String(format: "%.3f", $0) } ?? "n/a")")
+        print("hallucination_score: \(summary.hallucinationScore.map { String(format: "%.3f", $0) } ?? "n/a")")
+        print("hallucination_rate: \(summary.hallucinationRate.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("case_rows_log: \(logPaths.rowsPath)")
         print("summary_log: \(logPaths.summaryPath)")
+        if let llmEvalUnavailableReason {
+            print("llm_eval_note: \(llmEvalUnavailableReason)")
+        }
 
         _ = importLegacyBenchmarkLogs(
             kind: .generation,
@@ -226,6 +306,8 @@ extension WhispCLI {
                 sourceCasesPath: options.jsonlPath,
                 requireContext: options.requireContext,
                 useCache: options.useCache,
+                llmEvalEnabled: options.llmEvalEnabled,
+                llmEvalModel: llmEvalContext?.model.rawValue ?? options.llmEvalModel?.rawValue,
                 llmModel: model.rawValue,
                 caseLimit: options.limit
             )

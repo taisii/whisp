@@ -106,6 +106,9 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
     public var termF1: Double?
     public var intentMatch: Bool?
     public var intentScore: Int?
+    public var intentPreservationScore: Double?
+    public var hallucinationScore: Double?
+    public var hallucinationRate: Double?
     public var sttTotalMs: Double?
     public var sttAfterStopMs: Double?
     public var postMs: Double?
@@ -122,6 +125,9 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
         termF1: Double? = nil,
         intentMatch: Bool? = nil,
         intentScore: Int? = nil,
+        intentPreservationScore: Double? = nil,
+        hallucinationScore: Double? = nil,
+        hallucinationRate: Double? = nil,
         sttTotalMs: Double? = nil,
         sttAfterStopMs: Double? = nil,
         postMs: Double? = nil,
@@ -137,6 +143,9 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
         self.termF1 = termF1
         self.intentMatch = intentMatch
         self.intentScore = intentScore
+        self.intentPreservationScore = intentPreservationScore
+        self.hallucinationScore = hallucinationScore
+        self.hallucinationRate = hallucinationRate
         self.sttTotalMs = sttTotalMs
         self.sttAfterStopMs = sttAfterStopMs
         self.postMs = postMs
@@ -225,6 +234,8 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
     public var intentSource: String?
     public var intentJudgeEnabled: Bool?
     public var intentJudgeModel: String?
+    public var llmEvalEnabled: Bool?
+    public var llmEvalModel: String?
     public var llmModel: String?
     public var caseLimit: Int?
 
@@ -240,6 +251,8 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
         intentSource: String? = nil,
         intentJudgeEnabled: Bool? = nil,
         intentJudgeModel: String? = nil,
+        llmEvalEnabled: Bool? = nil,
+        llmEvalModel: String? = nil,
         llmModel: String? = nil,
         caseLimit: Int? = nil
     ) {
@@ -254,6 +267,8 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
         self.intentSource = intentSource
         self.intentJudgeEnabled = intentJudgeEnabled
         self.intentJudgeModel = intentJudgeModel
+        self.llmEvalEnabled = llmEvalEnabled
+        self.llmEvalModel = llmEvalModel
         self.llmModel = llmModel
         self.caseLimit = caseLimit
     }
@@ -273,6 +288,9 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
     public var avgTermsF1: Double?
     public var intentMatchRate: Double?
     public var intentAvgScore: Double?
+    public var intentPreservationScore: Double?
+    public var hallucinationScore: Double?
+    public var hallucinationRate: Double?
 
     public var latencyMs: BenchmarkLatencyDistribution?
     public var afterStopLatencyMs: BenchmarkLatencyDistribution?
@@ -293,6 +311,9 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
         avgTermsF1: Double? = nil,
         intentMatchRate: Double? = nil,
         intentAvgScore: Double? = nil,
+        intentPreservationScore: Double? = nil,
+        hallucinationScore: Double? = nil,
+        hallucinationRate: Double? = nil,
         latencyMs: BenchmarkLatencyDistribution? = nil,
         afterStopLatencyMs: BenchmarkLatencyDistribution? = nil,
         postLatencyMs: BenchmarkLatencyDistribution? = nil,
@@ -311,6 +332,9 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
         self.avgTermsF1 = avgTermsF1
         self.intentMatchRate = intentMatchRate
         self.intentAvgScore = intentAvgScore
+        self.intentPreservationScore = intentPreservationScore
+        self.hallucinationScore = hallucinationScore
+        self.hallucinationRate = hallucinationRate
         self.latencyMs = latencyMs
         self.afterStopLatencyMs = afterStopLatencyMs
         self.postLatencyMs = postLatencyMs
@@ -530,6 +554,9 @@ public struct BenchmarkJudgeLog: Equatable, Sendable {
     public let model: String?
     public let match: Bool?
     public let score: Int?
+    public let intentPreservationScore: Double?
+    public let hallucinationScore: Double?
+    public let hallucinationRate: Double?
     public let requestRef: BenchmarkArtifactRef?
     public let responseRef: BenchmarkArtifactRef?
     public let error: String?
@@ -539,6 +566,9 @@ public struct BenchmarkJudgeLog: Equatable, Sendable {
         model: String?,
         match: Bool?,
         score: Int?,
+        intentPreservationScore: Double?,
+        hallucinationScore: Double?,
+        hallucinationRate: Double?,
         requestRef: BenchmarkArtifactRef?,
         responseRef: BenchmarkArtifactRef?,
         error: String?
@@ -547,6 +577,9 @@ public struct BenchmarkJudgeLog: Equatable, Sendable {
         self.model = model
         self.match = match
         self.score = score
+        self.intentPreservationScore = intentPreservationScore
+        self.hallucinationScore = hallucinationScore
+        self.hallucinationRate = hallucinationRate
         self.requestRef = requestRef
         self.responseRef = responseRef
         self.error = error
@@ -559,6 +592,9 @@ public struct BenchmarkAggregateLog: Equatable, Sendable {
     public let cer: Double?
     public let intentMatch: Bool?
     public let intentScore: Int?
+    public let intentPreservationScore: Double?
+    public let hallucinationScore: Double?
+    public let hallucinationRate: Double?
     public let latencyMs: Double?
     public let totalAfterStopMs: Double?
     public let outputChars: Int?
@@ -569,6 +605,9 @@ public struct BenchmarkAggregateLog: Equatable, Sendable {
         cer: Double?,
         intentMatch: Bool?,
         intentScore: Int?,
+        intentPreservationScore: Double?,
+        hallucinationScore: Double?,
+        hallucinationRate: Double?,
         latencyMs: Double?,
         totalAfterStopMs: Double?,
         outputChars: Int?
@@ -578,6 +617,9 @@ public struct BenchmarkAggregateLog: Equatable, Sendable {
         self.cer = cer
         self.intentMatch = intentMatch
         self.intentScore = intentScore
+        self.intentPreservationScore = intentPreservationScore
+        self.hallucinationScore = hallucinationScore
+        self.hallucinationRate = hallucinationRate
         self.latencyMs = latencyMs
         self.totalAfterStopMs = totalAfterStopMs
         self.outputChars = outputChars
@@ -721,6 +763,9 @@ extension BenchmarkCaseEvent: Codable {
 
         case match
         case score
+        case intentPreservationScore = "intent_preservation_score"
+        case hallucinationScore = "hallucination_score"
+        case hallucinationRate = "hallucination_rate"
         case requestRef = "request_ref"
 
         case exactMatch = "exact_match"
@@ -810,6 +855,9 @@ extension BenchmarkCaseEvent: Codable {
                 model: try attrs.decodeIfPresent(String.self, forKey: .model),
                 match: try attrs.decodeIfPresent(Bool.self, forKey: .match),
                 score: try attrs.decodeIfPresent(Int.self, forKey: .score),
+                intentPreservationScore: try attrs.decodeIfPresent(Double.self, forKey: .intentPreservationScore),
+                hallucinationScore: try attrs.decodeIfPresent(Double.self, forKey: .hallucinationScore),
+                hallucinationRate: try attrs.decodeIfPresent(Double.self, forKey: .hallucinationRate),
                 requestRef: try attrs.decodeIfPresent(BenchmarkArtifactRef.self, forKey: .requestRef),
                 responseRef: try attrs.decodeIfPresent(BenchmarkArtifactRef.self, forKey: .responseRef),
                 error: try attrs.decodeIfPresent(String.self, forKey: .error)
@@ -821,6 +869,9 @@ extension BenchmarkCaseEvent: Codable {
                 cer: try attrs.decodeIfPresent(Double.self, forKey: .cer),
                 intentMatch: try attrs.decodeIfPresent(Bool.self, forKey: .intentMatch),
                 intentScore: try attrs.decodeIfPresent(Int.self, forKey: .intentScore),
+                intentPreservationScore: try attrs.decodeIfPresent(Double.self, forKey: .intentPreservationScore),
+                hallucinationScore: try attrs.decodeIfPresent(Double.self, forKey: .hallucinationScore),
+                hallucinationRate: try attrs.decodeIfPresent(Double.self, forKey: .hallucinationRate),
                 latencyMs: try attrs.decodeIfPresent(Double.self, forKey: .latencyMs),
                 totalAfterStopMs: try attrs.decodeIfPresent(Double.self, forKey: .totalAfterStopMs),
                 outputChars: try attrs.decodeIfPresent(Int.self, forKey: .outputChars)
@@ -900,6 +951,9 @@ extension BenchmarkCaseEvent: Codable {
             try attrs.encodeIfPresent(log.model, forKey: .model)
             try attrs.encodeIfPresent(log.match, forKey: .match)
             try attrs.encodeIfPresent(log.score, forKey: .score)
+            try attrs.encodeIfPresent(log.intentPreservationScore, forKey: .intentPreservationScore)
+            try attrs.encodeIfPresent(log.hallucinationScore, forKey: .hallucinationScore)
+            try attrs.encodeIfPresent(log.hallucinationRate, forKey: .hallucinationRate)
             try attrs.encodeIfPresent(log.requestRef, forKey: .requestRef)
             try attrs.encodeIfPresent(log.responseRef, forKey: .responseRef)
             try attrs.encodeIfPresent(log.error, forKey: .error)
@@ -908,6 +962,9 @@ extension BenchmarkCaseEvent: Codable {
             try attrs.encodeIfPresent(log.cer, forKey: .cer)
             try attrs.encodeIfPresent(log.intentMatch, forKey: .intentMatch)
             try attrs.encodeIfPresent(log.intentScore, forKey: .intentScore)
+            try attrs.encodeIfPresent(log.intentPreservationScore, forKey: .intentPreservationScore)
+            try attrs.encodeIfPresent(log.hallucinationScore, forKey: .hallucinationScore)
+            try attrs.encodeIfPresent(log.hallucinationRate, forKey: .hallucinationRate)
             try attrs.encodeIfPresent(log.latencyMs, forKey: .latencyMs)
             try attrs.encodeIfPresent(log.totalAfterStopMs, forKey: .totalAfterStopMs)
             try attrs.encodeIfPresent(log.outputChars, forKey: .outputChars)

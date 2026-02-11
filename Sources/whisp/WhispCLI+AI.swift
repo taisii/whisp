@@ -144,6 +144,71 @@ extension WhispCLI {
         return IntentJudgeResult(match: decoded.match, score: score)
     }
 
+    static func runLLMEvaluation(
+        model: LLMModel,
+        apiKey: String,
+        referenceText: String,
+        hypothesisText: String,
+        context: ContextInfo?
+    ) async throws -> LLMEvaluationResult {
+        let contextSnippet = llmEvalContextSnippet(context: context)
+        let prompt = """
+        あなたは音声入力ベンチマークの審査員です。reference と hypothesis を比較し、JSONのみで出力してください。
+
+        出力スキーマ:
+        {"intent_preservation_score":0.0-1.0,"hallucination_score":0.0-1.0,"hallucination_rate":0.0-1.0,"error_type":"none|intent_drop|hallucination|both","reason":"短い理由"}
+
+        判定基準:
+        - intent_preservation_score: referenceの依頼意図がどれだけ保持されたか
+        - hallucination_score: 根拠のない追加情報が少ないほど高得点
+        - hallucination_rate: hallucination_score と逆方向（高いほど幻覚が多い）
+
+        reference_text:
+        \(referenceText)
+
+        hypothesis_text:
+        \(hypothesisText)
+
+        context_excerpt:
+        \(contextSnippet)
+        """
+
+        let responseText: String
+        switch model {
+        case .gemini25FlashLite, .gemini25FlashLiteAudio:
+            let body = GeminiTextRequest(contents: [
+                GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
+            ])
+            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(LLMModel.gemini25FlashLite.modelName):generateContent?key=\(apiKey)"
+            guard let url = URL(string: endpoint) else {
+                throw AppError.invalidArgument("Gemini URL生成に失敗")
+            }
+            let data = try await sendJSONRequest(url: url, headers: [:], body: body)
+            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+            responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        case .gpt4oMini, .gpt5Nano:
+            let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
+            guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
+                throw AppError.invalidArgument("OpenAI URL生成に失敗")
+            }
+            let headers = ["Authorization": "Bearer \(apiKey)"]
+            let data = try await sendJSONRequest(url: url, headers: headers, body: body)
+            let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+            responseText = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+
+        let jsonText = extractedJSONObjectText(from: responseText)
+        guard let data = jsonText.data(using: .utf8) else {
+            throw AppError.decode("llm eval response parse failed")
+        }
+        let decoded = try JSONDecoder().decode(LLMEvaluationResponse.self, from: data)
+        return LLMEvaluationResult(
+            intentPreservationScore: clampedScore(decoded.intentPreservationScore),
+            hallucinationScore: clampedScore(decoded.hallucinationScore),
+            hallucinationRate: clampedScore(decoded.hallucinationRate)
+        )
+    }
+
     static func extractedJSONObjectText(from raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("{"), trimmed.hasSuffix("}") {
@@ -294,5 +359,32 @@ extension WhispCLI {
         let length = min(ns.length, maxChars)
         let location = ns.length - length
         return ns.substring(with: NSRange(location: location, length: length))
+    }
+
+    private static func llmEvalContextSnippet(context: ContextInfo?) -> String {
+        guard let context else {
+            return "none"
+        }
+        var lines: [String] = []
+        if let summary = context.visionSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            lines.append("visionSummary: \(String(summary.prefix(300)))")
+        }
+        if !context.visionTerms.isEmpty {
+            lines.append("visionTerms: \(context.visionTerms.prefix(12).joined(separator: ", "))")
+        }
+        if let accessibility = context.accessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines), !accessibility.isEmpty {
+            lines.append("accessibilityText: \(String(accessibility.prefix(300)))")
+        }
+        if let windowText = context.windowText?.trimmingCharacters(in: .whitespacesAndNewlines), !windowText.isEmpty {
+            lines.append("windowText: \(String(windowText.prefix(300)))")
+        }
+        if lines.isEmpty {
+            return "none"
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func clampedScore(_ value: Double) -> Double {
+        max(0, min(1, value))
     }
 }

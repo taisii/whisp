@@ -113,6 +113,9 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                 model: "gpt-5-nano",
                 match: true,
                 score: 4,
+                intentPreservationScore: nil,
+                hallucinationScore: nil,
+                hallucinationRate: nil,
                 requestRef: requestRef,
                 responseRef: nil,
                 error: nil

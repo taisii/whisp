@@ -10,6 +10,7 @@ final class PipelineRunner {
     private let contextService: ContextService
     private let outputService: OutputService
     private let debugCaptureService: DebugCaptureService
+    private let runtimeStatsStore: RuntimeStatsStore
 
     init(
         usageStore: UsageStore,
@@ -17,7 +18,8 @@ final class PipelineRunner {
         sttService: STTService,
         contextService: ContextService,
         outputService: OutputService,
-        debugCaptureService: DebugCaptureService
+        debugCaptureService: DebugCaptureService,
+        runtimeStatsStore: RuntimeStatsStore
     ) {
         self.usageStore = usageStore
         self.postProcessor = postProcessor
@@ -25,6 +27,7 @@ final class PipelineRunner {
         self.contextService = contextService
         self.outputService = outputService
         self.debugCaptureService = debugCaptureService
+        self.runtimeStatsStore = runtimeStatsStore
     }
 
     func run(context: RunContext) async -> PipelineOutcome {
@@ -122,6 +125,16 @@ final class PipelineRunner {
                     ))
                     debugCaptureService.appendLog(captureID: captureID, log: cancelledPipeline)
                 }
+                recordRuntimeStats(
+                    input: input,
+                    outcome: .skipped,
+                    contextSummaryLog: contextSummaryLog,
+                    sttLog: sttLog,
+                    visionLog: visionLog,
+                    postProcessLog: postProcessLog,
+                    directInputLog: directInputLog,
+                    endedAt: Date()
+                )
                 transition(.reset)
                 return .skipped(reason: .emptyAudio, sttText: nil, outputText: nil)
             }
@@ -362,6 +375,16 @@ final class PipelineRunner {
                         ))
                         debugCaptureService.appendLog(captureID: captureID, log: cancelledPipeline)
                     }
+                    recordRuntimeStats(
+                        input: input,
+                        outcome: .skipped,
+                        contextSummaryLog: contextSummaryLog,
+                        sttLog: sttLog,
+                        visionLog: visionLog,
+                        postProcessLog: postProcessLog,
+                        directInputLog: directInputLog,
+                        endedAt: Date()
+                    )
                     transition(.reset)
                     return .skipped(reason: .emptySTT, sttText: sttText, outputText: nil)
                 }
@@ -482,6 +505,16 @@ final class PipelineRunner {
                     ))
                     debugCaptureService.appendLog(captureID: captureID, log: cancelledPipeline)
                 }
+                recordRuntimeStats(
+                    input: input,
+                    outcome: .skipped,
+                    contextSummaryLog: contextSummaryLog,
+                    sttLog: sttLog,
+                    visionLog: visionLog,
+                    postProcessLog: postProcessLog,
+                    directInputLog: directInputLog,
+                    endedAt: Date()
+                )
                 transition(.reset)
                 return .skipped(reason: .emptyOutput, sttText: sttText, outputText: processedText)
             }
@@ -558,6 +591,16 @@ final class PipelineRunner {
                 ))
                 debugCaptureService.appendLog(captureID: captureID, log: pipelineLog)
             }
+            recordRuntimeStats(
+                input: input,
+                outcome: .completed,
+                contextSummaryLog: contextSummaryLog,
+                sttLog: sttLog,
+                visionLog: visionLog,
+                postProcessLog: postProcessLog,
+                directInputLog: directInputLog,
+                endedAt: pipelineDoneAtDate
+            )
             print("[pipeline] stt chars=\(sttText.count), output chars=\(processedText.count)")
             return .completed(sttText: sttText, outputText: processedText, directInputSucceeded: directInputOK)
         } catch {
@@ -609,6 +652,16 @@ final class PipelineRunner {
                 ))
                 debugCaptureService.appendLog(captureID: captureID, log: pipelineLog)
             }
+            recordRuntimeStats(
+                input: input,
+                outcome: .failed,
+                contextSummaryLog: contextSummaryLog,
+                sttLog: sttLog,
+                visionLog: visionLog,
+                postProcessLog: postProcessLog,
+                directInputLog: directInputLog,
+                endedAt: pipelineErrorAt
+            )
             return .failed(
                 message: "処理に失敗: \(error.localizedDescription)",
                 sttText: debugSTTText,
@@ -769,5 +822,41 @@ final class PipelineRunner {
         for log in logs.compactMap({ $0 }) {
             debugCaptureService.appendLog(captureID: captureID, log: log)
         }
+    }
+
+    private func recordRuntimeStats(
+        input: PipelineRunInput,
+        outcome: RuntimeStatsOutcome,
+        contextSummaryLog: DebugRunLog?,
+        sttLog: DebugRunLog?,
+        visionLog: DebugRunLog?,
+        postProcessLog: DebugRunLog?,
+        directInputLog: DebugRunLog?,
+        endedAt: Date
+    ) {
+        let totalAfterStopMs = max(0, endedAt.timeIntervalSince(input.recordingStoppedAtDate) * 1000)
+        let entry = RuntimeStatsEntry(
+            recordedAt: endedAt,
+            outcome: outcome,
+            sttMs: durationMs(from: sttLog),
+            postMs: durationMs(from: postProcessLog),
+            visionMs: durationMs(from: contextSummaryLog) ?? durationMs(from: visionLog),
+            directInputMs: durationMs(from: directInputLog),
+            totalAfterStopMs: totalAfterStopMs
+        )
+
+        do {
+            try runtimeStatsStore.record(entry: entry)
+        } catch {
+            devLog("runtime_stats_record_failed", runID: input.run.id, captureID: input.artifacts.captureID, fields: [
+                "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    private func durationMs(from log: DebugRunLog?) -> Double? {
+        guard let log else { return nil }
+        let duration = Double(log.base.eventEndMs - log.base.eventStartMs)
+        return duration >= 0 ? duration : nil
     }
 }

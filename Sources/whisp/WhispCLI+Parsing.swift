@@ -146,8 +146,10 @@ extension WhispCLI {
         var minAudioSeconds = 2.0
         var benchmarkLogDir: String?
         var intentSource: IntentSource = .auto
-        var intentJudgeEnabled = true
+        var intentJudgeEnabled = false
         var intentJudgeModel: LLMModel?
+        var llmEvalEnabled = false
+        var llmEvalModel: LLMModel?
         var minLabelConfidence: Double?
         var parser = ArgParser(args: args, startIndex: 1)
 
@@ -220,6 +222,22 @@ extension WhispCLI {
                 intentJudgeModel = parsed
                 continue
             }
+            if item == "--llm-eval" {
+                llmEvalEnabled = true
+                continue
+            }
+            if item == "--no-llm-eval" {
+                llmEvalEnabled = false
+                continue
+            }
+            if item == "--llm-eval-model" {
+                let value = try parser.value(for: "--llm-eval-model")
+                guard let parsed = LLMModel(rawValue: value) else {
+                    throw AppError.invalidArgument("--llm-eval-model は有効なモデルIDを指定してください")
+                }
+                llmEvalModel = parsed
+                continue
+            }
             if item.hasPrefix("--") {
                 throw AppError.invalidArgument("不明な引数: \(item)")
             }
@@ -239,6 +257,8 @@ extension WhispCLI {
             intentSource: intentSource,
             intentJudgeEnabled: intentJudgeEnabled,
             intentJudgeModel: intentJudgeModel,
+            llmEvalEnabled: llmEvalEnabled,
+            llmEvalModel: llmEvalModel,
             minLabelConfidence: minLabelConfidence
         )
     }
@@ -349,6 +369,8 @@ extension WhispCLI {
         var requireContext = false
         var benchmarkLogDir: String?
         var useCache = true
+        var llmEvalEnabled = false
+        var llmEvalModel: LLMModel?
         var parser = ArgParser(args: args, startIndex: 1)
 
         while let item = parser.next() {
@@ -368,6 +390,22 @@ extension WhispCLI {
                 useCache = false
                 continue
             }
+            if item == "--llm-eval" {
+                llmEvalEnabled = true
+                continue
+            }
+            if item == "--no-llm-eval" {
+                llmEvalEnabled = false
+                continue
+            }
+            if item == "--llm-eval-model" {
+                let value = try parser.value(for: "--llm-eval-model")
+                guard let parsed = LLMModel(rawValue: value) else {
+                    throw AppError.invalidArgument("--llm-eval-model は有効なモデルIDを指定してください")
+                }
+                llmEvalModel = parsed
+                continue
+            }
             if item.hasPrefix("--") {
                 throw AppError.invalidArgument("不明な引数: \(item)")
             }
@@ -379,7 +417,9 @@ extension WhispCLI {
             limit: limit,
             requireContext: requireContext,
             benchmarkLogDir: benchmarkLogDir,
-            useCache: useCache
+            useCache: useCache,
+            llmEvalEnabled: llmEvalEnabled,
+            llmEvalModel: llmEvalModel
         )
     }
 }

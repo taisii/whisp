@@ -25,6 +25,7 @@ final class AppCoordinator {
     private let settingsWindowController: SettingsWindowController
     private let debugWindowController: DebugWindowController
     private let benchmarkWindowController: BenchmarkWindowController
+    private let statisticsWindowController: StatisticsWindowController
     private let hotKeyMonitor: GlobalHotKeyMonitor
     private let pipelineRunner: PipelineRunner
 
@@ -47,13 +48,15 @@ final class AppCoordinator {
         settingsWindowController = SettingsWindowController()
         debugWindowController = DebugWindowController(store: .shared)
         benchmarkWindowController = BenchmarkWindowController(store: BenchmarkStore())
+        statisticsWindowController = StatisticsWindowController(store: dependencies.runtimeStatsStore)
         pipelineRunner = PipelineRunner(
             usageStore: dependencies.usageStore,
             postProcessor: dependencies.postProcessor,
             sttService: dependencies.sttService,
             contextService: dependencies.contextService,
             outputService: dependencies.outputService,
-            debugCaptureService: dependencies.debugCaptureService
+            debugCaptureService: dependencies.debugCaptureService,
+            runtimeStatsStore: dependencies.runtimeStatsStore
         )
 
         try registerShortcut()
@@ -85,6 +88,10 @@ final class AppCoordinator {
 
     func openBenchmarkWindow() {
         benchmarkWindowController.show()
+    }
+
+    func openStatisticsWindow() {
+        statisticsWindowController.show()
     }
 
     func openMicrophoneSettings() {
@@ -313,6 +320,7 @@ final class AppCoordinator {
         processingTask?.cancel()
         let input = PipelineRunInput(
             result: result,
+            recordingStoppedAtDate: stoppedAtDate,
             config: snapshot,
             run: run,
             artifacts: artifacts,

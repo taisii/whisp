@@ -101,6 +101,9 @@ final class BenchmarkStoreTests: XCTestCase {
                 cer: 0.08,
                 intentMatch: true,
                 intentScore: 4,
+                intentPreservationScore: nil,
+                hallucinationScore: nil,
+                hallucinationRate: nil,
                 latencyMs: nil,
                 totalAfterStopMs: 412,
                 outputChars: 120

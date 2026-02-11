@@ -127,10 +127,10 @@ extension WhispCLI {
         print("usage: whisp --stt-file /path/to/input.wav")
         print("usage: whisp --stt-stream-file /path/to/input.wav [--chunk-ms N] [--realtime]")
         print("usage: whisp --pipeline-file /path/to/input.wav [--stt rest|stream] [--chunk-ms N] [--realtime] [--emit discard|stdout|pbcopy] [--context-file /path/to/context.json]")
-        print("usage: whisp --benchmark-manual-cases [/path/to/manual_test_cases.jsonl] [--stt rest|stream] [--chunk-ms N] [--realtime|--no-realtime] [--limit N] [--require-context] [--min-audio-seconds N] [--min-label-confidence N] [--intent-source auto|gold|silver] [--intent-judge|--no-intent-judge] [--judge-model gemini-2.5-flash-lite|gpt-5-nano] [--benchmark-log-dir /path/to/dir]")
+        print("usage: whisp --benchmark-manual-cases [/path/to/manual_test_cases.jsonl] [--stt rest|stream] [--chunk-ms N] [--realtime|--no-realtime] [--limit N] [--require-context] [--min-audio-seconds N] [--min-label-confidence N] [--intent-source auto|gold|silver] [--intent-judge|--no-intent-judge] [--judge-model gemini-2.5-flash-lite|gpt-5-nano] [--llm-eval|--no-llm-eval] [--llm-eval-model gemini-2.5-flash-lite|gpt-5-nano] [--benchmark-log-dir /path/to/dir]")
         print("usage: whisp --benchmark-vision-cases [/path/to/manual_test_cases.jsonl] [--limit N] [--benchmark-log-dir /path/to/dir] [--no-cache]")
         print("usage: whisp --benchmark-stt-cases [/path/to/manual_test_cases.jsonl] [--stt rest|stream] [--chunk-ms N] [--realtime|--no-realtime] [--limit N] [--min-audio-seconds N] [--benchmark-log-dir /path/to/dir] [--no-cache]")
-        print("usage: whisp --benchmark-generation-cases [/path/to/manual_test_cases.jsonl] [--limit N] [--require-context] [--benchmark-log-dir /path/to/dir] [--no-cache]")
+        print("usage: whisp --benchmark-generation-cases [/path/to/manual_test_cases.jsonl] [--limit N] [--require-context] [--llm-eval|--no-llm-eval] [--llm-eval-model gemini-2.5-flash-lite|gpt-5-nano] [--benchmark-log-dir /path/to/dir] [--no-cache]")
         print("usage: whisp --benchmark-e2e-cases [/path/to/manual_test_cases.jsonl] [manual benchmark options]")
     }
 }
