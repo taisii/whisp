@@ -74,8 +74,8 @@
 
 `AppCoordinator` の大枠:
 
-1. 録音開始時: 必要キー検証、STTストリーミング準備、録音開始。
-2. 録音停止時: 音声データ確定、デバッグrun作成、非同期で処理継続。
+1. 録音開始時: 必要キー検証、debug runディレクトリを先行確保、STTストリーミング準備、録音開始。
+2. 録音停止時: 音声データを予約済みrunへ確定保存し、非同期で処理継続。
 3. STT:
    - `sttProvider=deepgram`: stream優先、失敗時restフォールバック
    - `sttProvider=whisper`: OpenAI Whisper REST
@@ -124,6 +124,7 @@
 
 `status` の代表値:
 
+- `recording`
 - `recorded`
 - `skipped_empty_audio`
 - `skipped_empty_stt`
@@ -134,14 +135,15 @@
 
 ### B. events.jsonl
 
-1行ごとに `DebugRunLog`（`log_type` ごとの厳密Union）を保存:
+1行ごとに `DebugRunLog`（`stage` ごとの厳密Union）を保存:
 
 - 共通項目:
   - `run_id`, `capture_id`
-  - `log_type`（`recording` / `stt` / `vision` / `postprocess` / `direct_input` / `pipeline` / `context_summary`）
-  - `event_start_ms`, `event_end_ms`, `recorded_at_ms`
-  - `status`（`ok` / `error` / `cancelled`）
-- `log_type` ごとの項目:
+  - `stage`（`recording` / `stt` / `vision` / `postprocess` / `direct_input` / `pipeline` / `context_summary`）
+  - `started_at_ms`, `ended_at_ms`, `recorded_at_ms`
+  - `status`（`ok` / `error` / `cancelled` / `skipped`）
+  - `attrs`（stage固有の属性）
+- `stage` ごとの主な `attrs`:
   - `recording`: `mode`, `model`, `stt_provider`, `stt_streaming`, `vision_enabled`, `accessibility_summary_started`, `sample_rate`, `pcm_bytes`
   - `stt`: `provider`, `route`, `source`, `text_chars`, `sample_rate`, `audio_bytes`, `attempts`
   - `vision`: `model`, `mode`, `context_present`, `image_bytes`, `image_width`, `image_height`, `error`
@@ -157,7 +159,7 @@
 - `*.prompt.txt`: 実際に送信したプロンプト本文
 - `*.meta.json`: `stage`, `model`, `context`, `promptChars`, `extra` など
 
-`extra.run_dir` がある場合は、そのrun配下 `prompts/` に保存される。
+`extra.run_dir` がある場合は、そのrun配下 `prompts/` に保存される。App本体のパイプライン実行では録音開始時に run を確保するため、`accessibility_summary` を含むプロンプトは run 配下に保存される。
 
 ### D. manual_test_cases.jsonl
 
@@ -175,6 +177,7 @@
 - 録音停止時に `ContextService.captureAccessibility` を実行し、snapshot/contextを取得する。
 - 権限未許可でも `accessibility_not_trusted` を含むスナップショットとして記録可能。
 - 取得値は debug保存と、後段の文脈合成（LLM入力）に利用される。
+- `context_summary` イベントの `ended_at_ms` は、要約APIの応答完了時刻（ready時）またはキャンセル時刻（未完了で打ち切り時）を記録する。
 
 ## 6. 運用メモ
 

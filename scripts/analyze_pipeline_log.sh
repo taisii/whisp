@@ -67,10 +67,10 @@ for file in "${event_files[@]}"; do
 
   row="$(jq -sr '
     def duration($type):
-      (first(.[] | select(.log_type == $type) | (.event_end_ms - .event_start_ms)) // 0);
+      (first(.[] | select(.stage == $type) | (.ended_at_ms - .started_at_ms)) // 0);
     def context_duration:
-      (first(.[] | select(.log_type == "context_summary") | (.event_end_ms - .event_start_ms))
-       // first(.[] | select(.log_type == "vision") | (.event_end_ms - .event_start_ms))
+      (first(.[] | select(.stage == "context_summary") | (.ended_at_ms - .started_at_ms))
+       // first(.[] | select(.stage == "vision") | (.ended_at_ms - .started_at_ms))
        // 0);
 
     [
@@ -81,8 +81,8 @@ for file in "${event_files[@]}"; do
       context_duration,
       duration("postprocess"),
       duration("direct_input"),
-      (first(.[] | select(.log_type == "stt") | .source) // "n/a"),
-      (first(.[] | select(.log_type == "pipeline") | .status) // "unknown")
+      (first(.[] | select(.stage == "stt") | .attrs.source) // "n/a"),
+      (first(.[] | select(.stage == "pipeline") | .status) // "unknown")
     ] | @tsv
   ' "$file")"
 

@@ -94,6 +94,85 @@ final class PipelineRunnerTests: XCTestCase {
         XCTAssertNotNil(warning)
     }
 
+    func testContextSummaryLogUsesSummaryCompletionTimeWhenReady() async throws {
+        let tempHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+        let store = DebugCaptureStore(environment: ["HOME": tempHome.path])
+        let debugCaptureService = DebugCaptureService(store: store)
+        let harness = try makeHarness(
+            sttTranscript: "hello",
+            postProcessText: "processed",
+            audioTranscribeText: "unused",
+            outputSuccess: true,
+            debugCaptureService: debugCaptureService
+        )
+
+        let recording = RecordingResult(sampleRate: 16_000, pcmData: Data(repeating: 1, count: 3200))
+        let captureID = try store.saveRecording(
+            runID: "run-test",
+            sampleRate: recording.sampleRate,
+            pcmData: recording.pcmData,
+            llmModel: harness.config.llmModel.rawValue,
+            appName: "Xcode"
+        )
+        let runDirectory = try XCTUnwrap(store.runDirectoryPath(captureID: captureID))
+        let summaryStartedAt = Date(timeIntervalSince1970: 1_730_000_000.100)
+        let summaryCompletedAt = Date(timeIntervalSince1970: 1_730_000_000.456)
+        let summaryTask = PipelineAccessibilitySummaryTask(
+            sourceText: "window-text",
+            startedAtDate: summaryStartedAt,
+            task: Task {
+                PipelineAccessibilitySummaryResult(
+                    summary: ContextInfo(visionSummary: "summary", visionTerms: ["term"]),
+                    completedAtDate: summaryCompletedAt
+                )
+            }
+        )
+        let input = PipelineRunInput(
+            result: recording,
+            config: harness.config,
+            run: PipelineRun(
+                id: "run-test",
+                startedAtDate: Date(),
+                debugArtifacts: DebugRunArtifacts(captureID: nil, runDirectory: nil, accessibilityContext: nil),
+                appNameAtStart: "Xcode",
+                appPIDAtStart: nil,
+                accessibilitySummarySourceAtStart: "window-text",
+                accessibilitySummaryTask: summaryTask,
+                recordingMode: "toggle",
+                model: harness.config.llmModel.rawValue,
+                sttProvider: harness.config.sttProvider.rawValue,
+                sttStreaming: false,
+                visionEnabled: false,
+                accessibilitySummaryStarted: true
+            ),
+            artifacts: DebugRunArtifacts(
+                captureID: captureID,
+                runDirectory: runDirectory,
+                accessibilityContext: nil
+            ),
+            sttStreamingSession: nil,
+            accessibilitySummarySourceAtStop: "window-text"
+        )
+
+        let outcome = await run(harness: harness, input: input)
+        guard case .completed = outcome else {
+            return XCTFail("expected completed")
+        }
+
+        let contextSummaryLog = try XCTUnwrap(loadLogs(store: store, captureID: captureID).first(where: { log in
+            if case .contextSummary = log { return true }
+            return false
+        }))
+        guard case let .contextSummary(log) = contextSummaryLog else {
+            return XCTFail("expected context_summary log")
+        }
+
+        XCTAssertEqual(log.base.eventStartMs, Int64((summaryStartedAt.timeIntervalSince1970 * 1000).rounded()))
+        XCTAssertEqual(log.base.eventEndMs, Int64((summaryCompletedAt.timeIntervalSince1970 * 1000).rounded()))
+    }
+
     func testRunFailsWhenSTTThrows() async throws {
         let harness = try makeHarness(
             sttTranscript: nil,
@@ -117,6 +196,7 @@ final class PipelineRunnerTests: XCTestCase {
             run: PipelineRun(
                 id: "run-test",
                 startedAtDate: Date(),
+                debugArtifacts: DebugRunArtifacts(captureID: nil, runDirectory: nil, accessibilityContext: nil),
                 appNameAtStart: "Xcode",
                 appPIDAtStart: nil,
                 accessibilitySummarySourceAtStart: nil,
@@ -151,7 +231,8 @@ final class PipelineRunnerTests: XCTestCase {
         sttTranscript: String?,
         postProcessText: String,
         audioTranscribeText: String,
-        outputSuccess: Bool
+        outputSuccess: Bool,
+        debugCaptureService: DebugCaptureService = DebugCaptureService()
     ) throws -> (
         runner: PipelineRunner,
         config: Config
@@ -175,7 +256,7 @@ final class PipelineRunnerTests: XCTestCase {
             sttService: sttService,
             contextService: contextService,
             outputService: outputService,
-            debugCaptureService: DebugCaptureService()
+            debugCaptureService: debugCaptureService
         )
         return (runner, config)
     }
@@ -194,6 +275,20 @@ final class PipelineRunnerTests: XCTestCase {
     }
 
     private func baseConfig() -> Config { Self.baseConfig() }
+
+    private func loadLogs(store: DebugCaptureStore, captureID: String) throws -> [DebugRunLog] {
+        let details = try XCTUnwrap(store.loadDetails(captureID: captureID))
+        let eventsURL = URL(fileURLWithPath: details.record.eventsFilePath)
+        let data = try Data(contentsOf: eventsURL)
+        guard !data.isEmpty else { return [] }
+
+        let decoder = JSONDecoder()
+        return try String(decoding: data, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .map { line in
+                try decoder.decode(DebugRunLog.self, from: Data(line.utf8))
+            }
+    }
 }
 
 private struct FakeLLMProvider: LLMAPIProvider, @unchecked Sendable {

@@ -145,7 +145,7 @@ final class PipelineRunner {
                                 run: input.run,
                                 captureID: captureID,
                                 task: summaryTask,
-                                endedAt: Date(),
+                                endedAt: summaryResolution.completedAtDate ?? Date(),
                                 status: status,
                                 summary: accessibilitySummary,
                                 error: accessibilitySummary == nil ? "summary_unavailable" : nil
@@ -286,7 +286,7 @@ final class PipelineRunner {
                                 run: input.run,
                                 captureID: captureID,
                                 task: summaryTask,
-                                endedAt: Date(),
+                                endedAt: summaryResolution.completedAtDate ?? Date(),
                                 status: status,
                                 summary: accessibilitySummary,
                                 error: accessibilitySummary == nil ? "summary_unavailable" : nil
@@ -717,9 +717,14 @@ final class PipelineRunner {
         ))
     }
 
-    private func resolveAccessibilitySummaryIfReady(task: Task<ContextInfo?, Never>) async -> (ready: Bool, summary: ContextInfo?) {
+    private func resolveAccessibilitySummaryIfReady(
+        task: Task<PipelineAccessibilitySummaryResult, Never>
+    ) async -> (ready: Bool, summary: ContextInfo?, completedAtDate: Date?) {
         let resolution = await TaskReadiness.awaitIfReady(task: task)
-        return (resolution.ready, resolution.value ?? nil)
+        guard resolution.ready, let value = resolution.value else {
+            return (false, nil, nil)
+        }
+        return (true, value.summary, value.completedAtDate)
     }
 
     private func persistDeferredVisionArtifacts(

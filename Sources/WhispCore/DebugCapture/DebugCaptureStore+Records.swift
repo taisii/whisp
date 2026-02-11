@@ -2,10 +2,8 @@ import Foundation
 
 extension DebugCaptureStore {
     @discardableResult
-    public func saveRecording(
+    public func reserveRun(
         runID: String,
-        sampleRate: Int,
-        pcmData: Data,
         llmModel: String,
         appName: String?,
         accessibilitySnapshot: AccessibilitySnapshot? = nil
@@ -24,10 +22,9 @@ extension DebugCaptureStore {
 
         try fileManager.createDirectory(at: runDir, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: promptsDir, withIntermediateDirectories: true)
-
-        let wav = buildWAVBytes(sampleRate: UInt32(max(sampleRate, 1)), pcmData: pcmData)
-        try wav.write(to: audioPath, options: [.atomic])
-        try Data().write(to: eventsPath, options: [.atomic])
+        if !fileManager.fileExists(atPath: eventsPath.path) {
+            try Data().write(to: eventsPath, options: [.atomic])
+        }
 
         let record = DebugCaptureRecord(
             id: id,
@@ -37,7 +34,7 @@ extension DebugCaptureStore {
             promptsDirectoryPath: promptsDir.path,
             eventsFilePath: eventsPath.path,
             audioFilePath: audioPath.path,
-            sampleRate: sampleRate,
+            sampleRate: 0,
             texts: DebugRunTexts(),
             metrics: DebugRunMetrics(),
             artifacts: DebugRunArtifactsSummary(
@@ -49,9 +46,100 @@ extension DebugCaptureStore {
             ),
             llmModel: llmModel,
             appName: appName,
-            status: "skipped",
+            status: "recording",
             accessibilitySnapshot: accessibilitySnapshot
         )
+        try writeRecord(record, to: manifestPath)
+        return id
+    }
+
+    @discardableResult
+    public func saveRecording(
+        runID: String,
+        sampleRate: Int,
+        pcmData: Data,
+        llmModel: String,
+        appName: String?,
+        captureID: String? = nil,
+        accessibilitySnapshot: AccessibilitySnapshot? = nil
+    ) throws -> String {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureDirectories()
+
+        let id = captureID ?? "\(timestampToken())-\(runID)"
+        let runDir = runDirectory(captureID: id)
+        let promptsDir = runDir.appendingPathComponent("prompts", isDirectory: true)
+        let audioPath = runDir.appendingPathComponent("audio.wav", isDirectory: false)
+        let eventsPath = runDir.appendingPathComponent("events.jsonl", isDirectory: false)
+        let manifestPath = runDir.appendingPathComponent("manifest.json", isDirectory: false)
+
+        try fileManager.createDirectory(at: runDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: promptsDir, withIntermediateDirectories: true)
+        if !fileManager.fileExists(atPath: eventsPath.path) {
+            try Data().write(to: eventsPath, options: [.atomic])
+        }
+
+        if !pcmData.isEmpty {
+            let wav = buildWAVBytes(sampleRate: UInt32(max(sampleRate, 1)), pcmData: pcmData)
+            try wav.write(to: audioPath, options: [.atomic])
+        }
+
+        let record: DebugCaptureRecord
+        if let existing = try loadRecord(path: manifestPath) {
+            record = DebugCaptureRecord(
+                schemaVersion: existing.schemaVersion,
+                id: existing.id,
+                runID: existing.runID,
+                createdAt: existing.createdAt,
+                runDirectoryPath: existing.runDirectoryPath,
+                promptsDirectoryPath: existing.promptsDirectoryPath,
+                eventsFilePath: existing.eventsFilePath,
+                audioFilePath: existing.audioFilePath,
+                sampleRate: sampleRate,
+                skipReason: existing.skipReason,
+                failure: existing.failure,
+                texts: existing.texts,
+                metrics: existing.metrics,
+                artifacts: existing.artifacts,
+                sttText: existing.sttText,
+                outputText: existing.outputText,
+                llmModel: llmModel,
+                appName: appName ?? existing.appName,
+                status: existing.status == "recording" ? "recorded" : existing.status,
+                errorMessage: existing.errorMessage,
+                groundTruthText: existing.groundTruthText,
+                context: existing.context,
+                accessibilitySnapshot: accessibilitySnapshot ?? existing.accessibilitySnapshot,
+                visionImageFilePath: existing.visionImageFilePath,
+                visionImageMimeType: existing.visionImageMimeType
+            )
+        } else {
+            record = DebugCaptureRecord(
+                id: id,
+                runID: runID,
+                createdAt: isoNow(),
+                runDirectoryPath: runDir.path,
+                promptsDirectoryPath: promptsDir.path,
+                eventsFilePath: eventsPath.path,
+                audioFilePath: audioPath.path,
+                sampleRate: sampleRate,
+                texts: DebugRunTexts(),
+                metrics: DebugRunMetrics(),
+                artifacts: DebugRunArtifactsSummary(
+                    audioFile: "audio.wav",
+                    eventsFile: "events.jsonl",
+                    promptsDirectory: "prompts",
+                    visionImageFile: nil,
+                    visionImageMimeType: nil
+                ),
+                llmModel: llmModel,
+                appName: appName,
+                status: "skipped",
+                accessibilitySnapshot: accessibilitySnapshot
+            )
+        }
         try writeRecord(record, to: manifestPath)
         return id
     }

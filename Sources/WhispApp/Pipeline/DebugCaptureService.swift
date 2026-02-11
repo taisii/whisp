@@ -19,14 +19,47 @@ final class DebugCaptureService: @unchecked Sendable {
         store.capturesDirectoryPath
     }
 
+    func reserveRun(
+        runID: String,
+        config: Config,
+        frontmostApp: NSRunningApplication?,
+        accessibility: AccessibilityContextCapture?
+    ) -> DebugRunArtifacts {
+        do {
+            let captureID = try store.reserveRun(
+                runID: runID,
+                llmModel: config.llmModel.rawValue,
+                appName: frontmostApp?.localizedName,
+                accessibilitySnapshot: accessibility?.snapshot
+            )
+            let runDirectory = try store.runDirectoryPath(captureID: captureID)
+            return DebugRunArtifacts(
+                captureID: captureID,
+                runDirectory: runDirectory,
+                accessibilityContext: accessibility?.context
+            )
+        } catch {
+            DevLog.info("debug_capture_reserve_failed", fields: [
+                "run": runID,
+                "error": error.localizedDescription,
+            ])
+            return DebugRunArtifacts(
+                captureID: nil,
+                runDirectory: nil,
+                accessibilityContext: accessibility?.context
+            )
+        }
+    }
+
     func saveRecording(
         runID: String,
         recording: RecordingResult,
         config: Config,
         frontmostApp: NSRunningApplication?,
-        accessibility: AccessibilityContextCapture?
+        accessibility: AccessibilityContextCapture?,
+        existingArtifacts: DebugRunArtifacts? = nil
     ) -> DebugRunArtifacts {
-        guard !recording.pcmData.isEmpty else {
+        guard !recording.pcmData.isEmpty || existingArtifacts?.captureID != nil else {
             return DebugRunArtifacts(
                 captureID: nil,
                 runDirectory: nil,
@@ -41,9 +74,10 @@ final class DebugCaptureService: @unchecked Sendable {
                 pcmData: recording.pcmData,
                 llmModel: config.llmModel.rawValue,
                 appName: frontmostApp?.localizedName,
+                captureID: existingArtifacts?.captureID,
                 accessibilitySnapshot: accessibility?.snapshot
             )
-            let runDirectory = try store.runDirectoryPath(captureID: captureID)
+            let runDirectory = try store.runDirectoryPath(captureID: captureID) ?? existingArtifacts?.runDirectory
             return DebugRunArtifacts(
                 captureID: captureID,
                 runDirectory: runDirectory,
@@ -117,6 +151,18 @@ final class DebugCaptureService: @unchecked Sendable {
             )
         } catch {
             DevLog.info("debug_capture_vision_artifacts_save_failed", fields: [
+                "capture_id": captureID,
+                "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    func deleteCapture(captureID: String?) {
+        guard let captureID else { return }
+        do {
+            try store.deleteCapture(captureID: captureID)
+        } catch {
+            DevLog.info("debug_capture_delete_failed", fields: [
                 "capture_id": captureID,
                 "error": error.localizedDescription,
             ])

@@ -235,7 +235,6 @@ scripts/analyze_prompt_traces.sh /tmp/whisp-fullbench-context
 WHISP_DEV_LOG=1 swift run WhispApp
 ```
 
-デフォルト保存先は `~/.config/whisp/debug/runs/_default/prompts` です。  
 `WHISP_PROMPT_TRACE_DIR` を指定すると保存先を上書きできます。
 
 保存されるもの:
@@ -286,8 +285,23 @@ scripts/analyze_pipeline_log.sh ~/.config/whisp/debug/runs/<capture-id>/events.j
 
 保存先:
 - 録音/メタ/イベント: `~/.config/whisp/debug/runs/<capture-id>/`
-- プロンプト: `~/.config/whisp/debug/runs/<capture-id>/prompts`（`run_dir` 未指定時は `~/.config/whisp/debug/runs/_default/prompts`）
+- プロンプト: `~/.config/whisp/debug/runs/<capture-id>/prompts`
 - 手動テストケース: `~/.config/whisp/debug/manual_test_cases.jsonl`
+
+### DebugViewスクリーンショット（実データ優先）
+
+UI確認用のスクリーンショットは、実際の `events.jsonl` を持つ run を使って生成できます。
+
+```bash
+# 実データ（推奨: STT + pipeline + postprocess/context_summary がある最新run）
+scripts/capture_debug_view_snapshot.sh -o .codex-artifacts/debugview-real.png
+
+# 特定の capture_id を使う場合
+scripts/capture_debug_view_snapshot.sh --capture-id <capture-id> -o .codex-artifacts/debugview-real.png
+
+# 実データが無い場合のみサンプルデータ
+scripts/capture_debug_view_snapshot.sh --sample -o .codex-artifacts/debugview-sample.png
+```
 
 `events.jsonl` は 1 行 1 JSON で、`log_type` ごとの厳密Unionを保存します。例:
 

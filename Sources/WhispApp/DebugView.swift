@@ -5,6 +5,9 @@ import WhispCore
 struct DebugView: View {
     @ObservedObject var viewModel: DebugViewModel
     @State private var showingDeleteConfirmation = false
+    @State private var isVisionAvailabilityExpanded = false
+    @State private var isAccessibilityAvailabilityExpanded = false
+    @State private var isFocusedElementAvailabilityExpanded = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -187,12 +190,12 @@ struct DebugView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("とってこれた情報")
                         .font(.system(size: 13, weight: .semibold))
-                    availabilitySection(title: "Vision", rows: [
+                    availabilityDisclosureSection(title: "Vision", rows: [
                         ("Vision画像", hasText(record.visionImageFilePath)),
                         ("Vision MIMEタイプ", hasText(record.visionImageMimeType)),
-                    ])
+                    ], isExpanded: $isVisionAvailabilityExpanded)
 
-                    availabilitySection(title: "Accessibility", rows: [
+                    availabilityDisclosureSection(title: "Accessibility", rows: [
                         ("Snapshot", accessibility != nil),
                         ("アクセシビリティ許可", accessibility?.trusted == true),
                         ("取得時刻", hasText(accessibility?.capturedAt)),
@@ -202,9 +205,9 @@ struct DebugView: View {
                         ("Window Title", hasText(accessibility?.windowTitle)),
                         ("Window Text", hasText(accessibility?.windowText)),
                         ("エラー情報", hasText(accessibility?.error)),
-                    ])
+                    ], isExpanded: $isAccessibilityAvailabilityExpanded)
 
-                    availabilitySection(title: "Focused Element", rows: [
+                    availabilityDisclosureSection(title: "Focused Element", rows: [
                         ("フォーカス要素", focusedElement != nil),
                         ("Role", hasText(focusedElement?.role)),
                         ("Subrole", hasText(focusedElement?.subrole)),
@@ -219,13 +222,13 @@ struct DebugView: View {
                         ("ラベルテキスト", !(focusedElement?.labelTexts.isEmpty ?? true)),
                         ("Caret Context", hasText(focusedElement?.caretContext)),
                         ("Caret Context Range", focusedElement?.caretContextRange != nil),
-                    ])
+                    ], isExpanded: $isFocusedElementAvailabilityExpanded)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .innerCardStyle()
             }
 
-            phaseTimingCard(analysis.timings, timeline: analysis.timeline)
+            phaseTimingCard(timeline: analysis.timeline)
         }
         .cardStyle()
     }
@@ -500,30 +503,12 @@ struct DebugView: View {
         .padding(.vertical, 8)
     }
 
-    private func phaseTimingCard(_ timings: DebugPhaseTimingSummary, timeline: DebugTimelineSummary) -> some View {
+    private func phaseTimingCard(timeline: DebugTimelineSummary) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("実行時間 (ms)")
                 .font(.system(size: 13, weight: .semibold))
 
             timelineSection(timeline)
-
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 5) {
-                    timingMetricRow("録音", timings.recordingMs)
-                    timingMetricRow("STT", timings.sttMs)
-                    timingMetricRow("STT finalize", timings.sttFinalizeMs)
-                    timingMetricRow("文脈要約 total", timings.visionTotalMs)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-                VStack(alignment: .leading, spacing: 5) {
-                    timingMetricRow("PostProcess", timings.postProcessMs)
-                    timingMetricRow("DirectInput", timings.directInputMs)
-                    timingMetricRow("Pipeline(stop後)", timings.pipelineMs)
-                    timingMetricRow("End-to-end", timings.endToEndMs)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
         .innerCardStyle()
     }
@@ -640,17 +625,6 @@ struct DebugView: View {
         }
     }
 
-    private func timingMetricRow(_ name: String, _ value: Double?) -> some View {
-        HStack(spacing: 6) {
-            Text(name)
-            Spacer(minLength: 0)
-            Text(msText(value))
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(value == nil ? Color.secondary : Color.primary)
-        }
-        .font(.system(size: 11))
-    }
-
     private func labeledMetric(name: String, value: String) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text("\(name):")
@@ -673,13 +647,33 @@ struct DebugView: View {
         .font(.system(size: 11))
     }
 
-    private func availabilitySection(title: String, rows: [(String, Bool)]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(.secondary)
-            ForEach(rows, id: \.0) { row in
-                availabilityRow(name: row.0, isAvailable: row.1)
+    private func availabilityDisclosureSection(
+        title: String,
+        rows: [(String, Bool)],
+        isExpanded: Binding<Bool>
+    ) -> some View {
+        let availableCount = rows.filter { $0.1 }.count
+
+        return DisclosureGroup(isExpanded: isExpanded) {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(rows, id: \.0) { row in
+                    availabilityRow(name: row.0, isAvailable: row.1)
+                }
+            }
+            .padding(.top, 4)
+        } label: {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                Text("\(availableCount)/\(rows.count)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                isExpanded.wrappedValue.toggle()
             }
         }
     }

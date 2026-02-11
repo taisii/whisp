@@ -153,11 +153,25 @@ final class AppCoordinator {
         let appNameAtStart = frontmostApp?.localizedName
         let appPIDAtStart = frontmostApp?.processIdentifier
         var startedSummaryTask: PipelineAccessibilitySummaryTask?
+        var reservedArtifacts: DebugRunArtifacts?
         do {
             try PreflightValidator.validate(config: config)
             let llmKey = try APIKeyResolver.llmKey(config: config, model: config.llmModel)
 
-            let logger = pipelineLogger(runID: runID, captureID: nil)
+            let accessibilityAtStart = contextService.captureAccessibility(frontmostApp: frontmostApp)
+            let debugArtifacts = debugCaptureService.reserveRun(
+                runID: runID,
+                config: config,
+                frontmostApp: frontmostApp,
+                accessibility: accessibilityAtStart
+            )
+            guard let reservedCaptureID = debugArtifacts.captureID,
+                  let reservedRunDirectory = debugArtifacts.runDirectory
+            else {
+                throw AppError.io("debug run reservation failed")
+            }
+            reservedArtifacts = debugArtifacts
+            let logger = pipelineLogger(runID: runID, captureID: reservedCaptureID)
             let streamingSession = sttService.startStreamingSessionIfNeeded(
                 config: config,
                 runID: runID,
@@ -165,19 +179,20 @@ final class AppCoordinator {
                 logger: logger
             )
             sttStreamingSession = streamingSession
-            let accessibilityAtStart = contextService.captureAccessibility(frontmostApp: frontmostApp)
             let accessibilitySummarySource = accessibilitySummarySourceText(from: accessibilityAtStart)
             let accessibilitySummaryTask = startAccessibilitySummaryTask(
                 sourceText: accessibilitySummarySource,
                 model: config.llmModel,
                 apiKey: llmKey,
                 appName: appNameAtStart,
-                runID: runID
+                runID: runID,
+                debugRunDirectory: reservedRunDirectory
             )
             startedSummaryTask = accessibilitySummaryTask
             let run = PipelineRun(
                 id: runID,
                 startedAtDate: startedAtDate,
+                debugArtifacts: debugArtifacts,
                 appNameAtStart: appNameAtStart,
                 appPIDAtStart: appPIDAtStart,
                 accessibilitySummarySourceAtStart: normalizeSummarySource(accessibilitySummarySource),
@@ -209,6 +224,7 @@ final class AppCoordinator {
             _ = outputService.playStartSound()
         } catch {
             (currentRun?.accessibilitySummaryTask ?? startedSummaryTask)?.task.cancel()
+            debugCaptureService.deleteCapture(captureID: (currentRun?.debugArtifacts ?? reservedArtifacts)?.captureID)
             currentRun = nil
             sttStreamingSession = nil
             reportError("録音開始に失敗: \(error.localizedDescription)")
@@ -220,6 +236,7 @@ final class AppCoordinator {
         let run = currentRun ?? PipelineRun(
             id: Self.makeRunID(),
             startedAtDate: Date(),
+            debugArtifacts: DebugRunArtifacts(captureID: nil, runDirectory: nil, accessibilityContext: nil),
             appNameAtStart: nil,
             appPIDAtStart: nil,
             accessibilitySummarySourceAtStart: nil,
@@ -253,7 +270,8 @@ final class AppCoordinator {
             recording: result,
             config: config,
             frontmostApp: frontmostApp,
-            accessibility: accessibility
+            accessibility: accessibility,
+            existingArtifacts: run.debugArtifacts
         )
 
         if let captureID = artifacts.captureID {
@@ -319,7 +337,8 @@ final class AppCoordinator {
         model: LLMModel,
         apiKey: String,
         appName: String?,
-        runID: String
+        runID: String,
+        debugRunDirectory: String?
     ) -> PipelineAccessibilitySummaryTask? {
         guard let sourceText = sourceText?.trimmingCharacters(in: .whitespacesAndNewlines), !sourceText.isEmpty else {
             return nil
@@ -329,16 +348,23 @@ final class AppCoordinator {
         let postProcessor = postProcessor
         let task = Task {
             do {
-                return try await postProcessor.summarizeAccessibilityContext(
+                let summary = try await postProcessor.summarizeAccessibilityContext(
                     model: model,
                     apiKey: apiKey,
                     appName: appName,
                     sourceText: sourceText,
                     debugRunID: runID,
-                    debugRunDirectory: nil
+                    debugRunDirectory: debugRunDirectory
+                )
+                return PipelineAccessibilitySummaryResult(
+                    summary: summary,
+                    completedAtDate: Date()
                 )
             } catch {
-                return nil
+                return PipelineAccessibilitySummaryResult(
+                    summary: nil,
+                    completedAtDate: Date()
+                )
             }
         }
         return PipelineAccessibilitySummaryTask(

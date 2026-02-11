@@ -1,15 +1,21 @@
 import Foundation
 import WhispCore
 
+struct PipelineAccessibilitySummaryResult: Sendable {
+    let summary: ContextInfo?
+    let completedAtDate: Date
+}
+
 struct PipelineAccessibilitySummaryTask {
     let sourceText: String
     let startedAtDate: Date
-    let task: Task<ContextInfo?, Never>
+    let task: Task<PipelineAccessibilitySummaryResult, Never>
 }
 
 struct PipelineRun {
     let id: String
     let startedAtDate: Date
+    let debugArtifacts: DebugRunArtifacts
     let appNameAtStart: String?
     let appPIDAtStart: Int32?
     let accessibilitySummarySourceAtStart: String?

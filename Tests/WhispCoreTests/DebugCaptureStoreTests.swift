@@ -48,6 +48,37 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: details.record.runDirectoryPath))
     }
 
+    func testReserveRunThenSaveRecordingReusesSameCaptureID() throws {
+        let home = tempHome()
+        let store = makeStore(home: home)
+        let captureID = try store.reserveRun(
+            runID: "run-reserved",
+            llmModel: "gpt-5-nano",
+            appName: "Xcode"
+        )
+
+        let reserved = try XCTUnwrap(store.loadDetails(captureID: captureID))
+        XCTAssertEqual(reserved.record.status, "recording")
+        XCTAssertEqual(reserved.record.sampleRate, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: reserved.record.eventsFilePath))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: reserved.record.promptsDirectoryPath))
+
+        let finalizedCaptureID = try store.saveRecording(
+            runID: "run-reserved",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 7, count: 640),
+            llmModel: "gpt-5-nano",
+            appName: "Xcode",
+            captureID: captureID
+        )
+        XCTAssertEqual(finalizedCaptureID, captureID)
+
+        let finalized = try XCTUnwrap(store.loadDetails(captureID: captureID))
+        XCTAssertEqual(finalized.record.status, "recorded")
+        XCTAssertEqual(finalized.record.sampleRate, 16_000)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: finalized.record.audioFilePath))
+    }
+
     func testAppendLogWritesStructuredJSONL() throws {
         let home = tempHome()
         let store = makeStore(home: home)
