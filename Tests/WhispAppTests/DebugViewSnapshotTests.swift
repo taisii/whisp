@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SwiftUI
 import XCTest
 import WhispCore
@@ -6,48 +7,43 @@ import WhispCore
 
 @MainActor
 final class DebugViewSnapshotTests: XCTestCase {
-    func testCaptureDebugViewSnapshot() throws {
-        let env = ProcessInfo.processInfo.environment
-        let outputPath = env["DEBUG_VIEW_SNAPSHOT_PATH"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !outputPath.isEmpty else {
-            throw XCTSkip("DEBUG_VIEW_SNAPSHOT_PATH is not set")
-        }
-
-        let requestedCaptureID = env["DEBUG_VIEW_CAPTURE_ID"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let sourceMode = env["DEBUG_VIEW_SOURCE_MODE"]?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? "real"
-
-        let source = try resolveSource(mode: sourceMode, requestedCaptureID: requestedCaptureID)
+    func testDebugViewSnapshotMatchesBaseline() throws {
+        let source = try makeSampleSource()
 
         let viewModel = DebugViewModel(store: source.store)
         viewModel.refresh()
         viewModel.select(captureID: source.captureID)
 
-        let root = DebugView(viewModel: viewModel)
-            .frame(width: 1200, height: 1700)
-        let hosting = NSHostingView(rootView: root)
-        hosting.frame = NSRect(x: 0, y: 0, width: 1200, height: 1700)
-        hosting.layoutSubtreeIfNeeded()
+        let actualBitmap = try renderSnapshot(viewModel: viewModel)
+        let baselineURL = fixtureURL(fileName: "debug_view_snapshot_baseline.png")
+        let baselineBitmap = try loadBitmap(at: baselineURL)
 
-        guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
-            XCTFail("failed to create bitmap")
-            return
-        }
-        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
-        guard let pngData = bitmap.representation(using: .png, properties: [:]) else {
-            XCTFail("failed to create png data")
-            return
-        }
+        XCTAssertEqual(actualBitmap.pixelsWide, baselineBitmap.pixelsWide)
+        XCTAssertEqual(actualBitmap.pixelsHigh, baselineBitmap.pixelsHigh)
 
-        let outputURL = URL(fileURLWithPath: outputPath)
-        try FileManager.default.createDirectory(
-            at: outputURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
+        let diff = try compare(
+            actual: try cgImage(from: actualBitmap),
+            baseline: try cgImage(from: baselineBitmap),
+            channelTolerance: 2
         )
-        try pngData.write(to: outputURL, options: .atomic)
+
+        let allowedRatio = 0.0005
+        if diff.ratio > allowedRatio {
+            let ratioText = String(format: "%.6f", diff.ratio)
+            let artifactDir = try makeArtifactDirectory()
+            let actualURL = artifactDir.appendingPathComponent("debug_view_snapshot_actual.png")
+            let diffURL = artifactDir.appendingPathComponent("debug_view_snapshot_diff.png")
+            try pngData(from: actualBitmap).write(to: actualURL, options: .atomic)
+            if let diffPNGData = diff.diffPNGData {
+                try diffPNGData.write(to: diffURL, options: .atomic)
+            }
+
+            XCTFail(
+                "DebugView snapshot mismatch: changed=\(diff.changedPixels)/\(diff.totalPixels) " +
+                    "(ratio=\(ratioText), allowed=\(allowedRatio)). " +
+                    "actual=\(actualURL.path), diff=\(diffURL.path)"
+            )
+        }
     }
 
     private struct SnapshotSource {
@@ -55,38 +51,160 @@ final class DebugViewSnapshotTests: XCTestCase {
         let captureID: String
     }
 
-    private func resolveSource(mode: String, requestedCaptureID: String?) throws -> SnapshotSource {
-        if mode == "sample" {
-            return try makeSampleSource()
-        }
-
-        let sharedStore = DebugCaptureStore.shared
-        if let captureID = try resolveRealCaptureID(store: sharedStore, requestedCaptureID: requestedCaptureID) {
-            return SnapshotSource(store: sharedStore, captureID: captureID)
-        }
-
-        throw XCTSkip("real capture data not found. record once in app or use DEBUG_VIEW_SOURCE_MODE=sample")
+    private struct SnapshotDiff {
+        let changedPixels: Int
+        let totalPixels: Int
+        let ratio: Double
+        let diffPNGData: Data?
     }
 
-    private func resolveRealCaptureID(store: DebugCaptureStore, requestedCaptureID: String?) throws -> String? {
-        if let requestedCaptureID, !requestedCaptureID.isEmpty,
-           (try store.loadDetails(captureID: requestedCaptureID)) != nil {
-            return requestedCaptureID
+    private func renderSnapshot(viewModel: DebugViewModel) throws -> NSBitmapImageRep {
+        let root = DebugView(viewModel: viewModel)
+            .frame(width: 1200, height: 1700)
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: 1200, height: 1700)
+        hosting.layoutSubtreeIfNeeded()
+
+        guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+            throw AppError.io("failed to create bitmap")
+        }
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        return bitmap
+    }
+
+    private func fixtureURL(fileName: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures", isDirectory: true)
+            .appendingPathComponent(fileName)
+    }
+
+    private func makeArtifactDirectory() throws -> URL {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let dir = root.appendingPathComponent(".build/snapshot-artifacts", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func loadBitmap(at url: URL) throws -> NSBitmapImageRep {
+        let data = try Data(contentsOf: url)
+        guard let bitmap = NSBitmapImageRep(data: data) else {
+            throw AppError.io("failed to decode baseline image: \(url.path)")
+        }
+        return bitmap
+    }
+
+    private func cgImage(from bitmap: NSBitmapImageRep) throws -> CGImage {
+        guard let image = bitmap.cgImage else {
+            throw AppError.io("failed to create cgImage")
+        }
+        return image
+    }
+
+    private func pngData(from bitmap: NSBitmapImageRep) throws -> Data {
+        guard let png = bitmap.representation(using: .png, properties: [:]) else {
+            throw AppError.io("failed to encode png")
+        }
+        return png
+    }
+
+    private func compare(actual: CGImage, baseline: CGImage, channelTolerance: UInt8) throws -> SnapshotDiff {
+        let actualRGBA = try rgbaBytes(from: actual)
+        let baselineRGBA = try rgbaBytes(from: baseline)
+
+        guard actualRGBA.width == baselineRGBA.width, actualRGBA.height == baselineRGBA.height else {
+            throw AppError.io("snapshot size mismatch")
         }
 
-        let records = try store.listRecords(limit: 200)
-        for record in records {
-            let logs = loadLogs(path: record.eventsFilePath)
-            let hasSTT = logs.contains { $0.base.logType == .stt }
-            let hasPipeline = logs.contains { $0.base.logType == .pipeline }
-            let hasTimelineStage = logs.contains {
-                $0.base.logType == .postprocess || $0.base.logType == .contextSummary || $0.base.logType == .vision
-            }
-            if hasSTT, hasPipeline, hasTimelineStage {
-                return record.id
+        let totalPixels = actualRGBA.width * actualRGBA.height
+        var changedPixels = 0
+        var diffBytes = [UInt8](repeating: 0, count: totalPixels * 4)
+
+        for idx in stride(from: 0, to: actualRGBA.data.count, by: 4) {
+            let dr = abs(Int(actualRGBA.data[idx]) - Int(baselineRGBA.data[idx]))
+            let dg = abs(Int(actualRGBA.data[idx + 1]) - Int(baselineRGBA.data[idx + 1]))
+            let db = abs(Int(actualRGBA.data[idx + 2]) - Int(baselineRGBA.data[idx + 2]))
+            let da = abs(Int(actualRGBA.data[idx + 3]) - Int(baselineRGBA.data[idx + 3]))
+            let maxDiff = max(dr, dg, db, da)
+
+            if maxDiff > Int(channelTolerance) {
+                changedPixels += 1
+                diffBytes[idx] = 255
+                diffBytes[idx + 1] = 0
+                diffBytes[idx + 2] = 0
+                diffBytes[idx + 3] = 180
             }
         }
-        return nil
+
+        let ratio = totalPixels == 0 ? 0 : Double(changedPixels) / Double(totalPixels)
+        let diffPNGData: Data?
+        if changedPixels > 0 {
+            let diffCG = try cgImage(fromRGBA: diffBytes, width: actualRGBA.width, height: actualRGBA.height)
+            let diffRep = NSBitmapImageRep(cgImage: diffCG)
+            diffPNGData = diffRep.representation(using: .png, properties: [:])
+        } else {
+            diffPNGData = nil
+        }
+
+        return SnapshotDiff(
+            changedPixels: changedPixels,
+            totalPixels: totalPixels,
+            ratio: ratio,
+            diffPNGData: diffPNGData
+        )
+    }
+
+    private func rgbaBytes(from image: CGImage) throws -> (data: [UInt8], width: Int, height: Int) {
+        let width = image.width
+        let height = image.height
+        let bytesPerRow = width * 4
+        var bytes = [UInt8](repeating: 0, count: height * bytesPerRow)
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: &bytes,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: bytesPerRow,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            throw AppError.io("failed to create bitmap context")
+        }
+
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return (bytes, width, height)
+    }
+
+    private func cgImage(fromRGBA bytes: [UInt8], width: Int, height: Int) throws -> CGImage {
+        let bytesPerRow = width * 4
+        let data = Data(bytes)
+        guard let provider = CGDataProvider(data: data as CFData) else {
+            throw AppError.io("failed to create diff data provider")
+        }
+
+        guard let image = CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: bytesPerRow,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else {
+            throw AppError.io("failed to create diff cgImage")
+        }
+
+        return image
     }
 
     private func makeSampleSource() throws -> SnapshotSource {
@@ -301,21 +419,5 @@ final class DebugViewSnapshotTests: XCTestCase {
         }
 
         return SnapshotSource(store: store, captureID: captureID)
-    }
-
-    private func loadLogs(path: String) -> [DebugRunLog] {
-        guard !path.isEmpty,
-              let text = try? String(contentsOfFile: path, encoding: .utf8)
-        else {
-            return []
-        }
-
-        let decoder = JSONDecoder()
-        return text
-            .split(whereSeparator: \.isNewline)
-            .compactMap { line in
-                guard let data = String(line).data(using: .utf8) else { return nil }
-                return try? decoder.decode(DebugRunLog.self, from: data)
-            }
     }
 }

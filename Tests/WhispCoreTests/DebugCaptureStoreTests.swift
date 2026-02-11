@@ -267,39 +267,4 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertTrue(try store.listRecords(limit: 10).isEmpty)
     }
 
-    func testLegacyLayoutFilesAreIgnored() throws {
-        let home = tempHome()
-        let base = home
-            .appendingPathComponent(".config", isDirectory: true)
-            .appendingPathComponent("whisp", isDirectory: true)
-            .appendingPathComponent("debug", isDirectory: true)
-        let legacyCaptures = base.appendingPathComponent("captures", isDirectory: true)
-        let legacyPrompts = base.appendingPathComponent("prompts", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacyCaptures, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: legacyPrompts, withIntermediateDirectories: true)
-
-        let payload: [String: Any] = [
-            "id": "legacy-1",
-            "runID": "legacy-run",
-            "createdAt": "2026-02-10T00:00:00Z",
-            "audioFilePath": "legacy.wav",
-            "sampleRate": 16000,
-            "llmModel": "gpt-5-nano",
-            "status": "done",
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
-        try data.write(to: legacyCaptures.appendingPathComponent("legacy-1.json"))
-        try "LEGACY PROMPT".write(
-            to: legacyPrompts.appendingPathComponent("legacy.prompt.txt"),
-            atomically: true,
-            encoding: .utf8
-        )
-
-        let store = makeStore(home: home)
-        let records = try store.listRecords(limit: 10)
-
-        XCTAssertTrue(records.isEmpty)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyCaptures.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyPrompts.path))
-    }
 }

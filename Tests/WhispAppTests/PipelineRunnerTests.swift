@@ -15,11 +15,12 @@ final class PipelineRunnerTests: XCTestCase {
         )
         let input = makeInput(config: harness.config, pcmData: Data())
 
-        let outcome = await run(harness: harness, input: input)
+        let (outcome, transitions) = await run(harness: harness, input: input)
         guard case let .skipped(reason, _, _) = outcome else {
             return XCTFail("expected skipped")
         }
         XCTAssertEqual(reason, .emptyAudio)
+        XCTAssertEqual(transitions, [.reset])
     }
 
     func testRunSkipsWhenSTTIsEmpty() async throws {
@@ -31,11 +32,12 @@ final class PipelineRunnerTests: XCTestCase {
         )
         let input = makeInput(config: harness.config, pcmData: Data(repeating: 1, count: 3200))
 
-        let outcome = await run(harness: harness, input: input)
+        let (outcome, transitions) = await run(harness: harness, input: input)
         guard case let .skipped(reason, _, _) = outcome else {
             return XCTFail("expected skipped")
         }
         XCTAssertEqual(reason, .emptySTT)
+        XCTAssertEqual(transitions, [.reset])
     }
 
     func testRunSkipsWhenPostProcessOutputIsEmpty() async throws {
@@ -47,11 +49,12 @@ final class PipelineRunnerTests: XCTestCase {
         )
         let input = makeInput(config: harness.config, pcmData: Data(repeating: 1, count: 3200))
 
-        let outcome = await run(harness: harness, input: input)
+        let (outcome, transitions) = await run(harness: harness, input: input)
         guard case let .skipped(reason, _, _) = outcome else {
             return XCTFail("expected skipped")
         }
         XCTAssertEqual(reason, .emptyOutput)
+        XCTAssertEqual(transitions, [.startPostProcessing, .reset])
     }
 
     func testRunDirectAudioPathCompletes() async throws {
@@ -66,13 +69,14 @@ final class PipelineRunnerTests: XCTestCase {
         )
         let input = makeInput(config: harness.config, pcmData: Data(repeating: 1, count: 3200))
 
-        let outcome = await run(harness: harness, input: input)
+        let (outcome, transitions) = await run(harness: harness, input: input)
         guard case let .completed(sttText, outputText, directInputSucceeded) = outcome else {
             return XCTFail("expected completed")
         }
         XCTAssertEqual(sttText, "direct-audio-text")
         XCTAssertEqual(outputText, "direct-audio-text")
         XCTAssertTrue(directInputSucceeded)
+        XCTAssertEqual(transitions, [.startPostProcessing, .startDirectInput, .finish, .reset])
     }
 
     func testRunCompletesWithOutputErrorWhenDirectInputFails() async throws {
@@ -85,13 +89,14 @@ final class PipelineRunnerTests: XCTestCase {
         let input = makeInput(config: harness.config, pcmData: Data(repeating: 1, count: 3200))
         var warning: String?
 
-        let outcome = await run(harness: harness, input: input, notifyWarning: { warning = $0 })
+        let (outcome, transitions) = await run(harness: harness, input: input, notifyWarning: { warning = $0 })
         guard case let .completed(_, outputText, directInputSucceeded) = outcome else {
             return XCTFail("expected completed")
         }
         XCTAssertEqual(outputText, "processed")
         XCTAssertFalse(directInputSucceeded)
         XCTAssertNotNil(warning)
+        XCTAssertEqual(transitions, [.startPostProcessing, .startDirectInput, .finish, .reset])
     }
 
     func testContextSummaryLogUsesSummaryCompletionTimeWhenReady() async throws {
@@ -156,10 +161,11 @@ final class PipelineRunnerTests: XCTestCase {
             accessibilitySummarySourceAtStop: "window-text"
         )
 
-        let outcome = await run(harness: harness, input: input)
+        let (outcome, transitions) = await run(harness: harness, input: input)
         guard case .completed = outcome else {
             return XCTFail("expected completed")
         }
+        XCTAssertEqual(transitions, [.startPostProcessing, .startDirectInput, .finish, .reset])
 
         let contextSummaryLog = try XCTUnwrap(loadLogs(store: store, captureID: captureID).first(where: { log in
             if case .contextSummary = log { return true }
@@ -186,11 +192,12 @@ final class PipelineRunnerTests: XCTestCase {
         )
         let input = makeInput(config: harness.config, pcmData: Data(repeating: 1, count: 3200))
 
-        let outcome = await run(harness: harness, input: input)
+        let (outcome, transitions) = await run(harness: harness, input: input)
         guard case let .failed(message, _, _) = outcome else {
             return XCTFail("expected failed")
         }
         XCTAssertTrue(message.contains("処理に失敗"))
+        XCTAssertTrue(transitions.isEmpty)
     }
 
     private func makeInput(config: Config, pcmData: Data) -> PipelineRunInput {
@@ -222,12 +229,14 @@ final class PipelineRunnerTests: XCTestCase {
         harness: (runner: PipelineRunner, config: Config),
         input: PipelineRunInput,
         notifyWarning: @escaping (String) -> Void = { _ in }
-    ) async -> PipelineOutcome {
-        await harness.runner.run(context: RunContext(
+    ) async -> (PipelineOutcome, [PipelineStateMachine.Event]) {
+        var transitions: [PipelineStateMachine.Event] = []
+        let outcome = await harness.runner.run(context: RunContext(
             input: input,
-            transition: { _ in },
+            transition: { transitions.append($0) },
             notifyWarning: notifyWarning
         ))
+        return (outcome, transitions)
     }
 
     private func makeHarness(

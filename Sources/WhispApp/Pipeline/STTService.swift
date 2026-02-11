@@ -44,6 +44,45 @@ protocol STTService: Sendable {
     ) async throws -> STTTranscriptionResult
 }
 
+protocol DeepgramRESTTranscriber: Sendable {
+    func transcribe(
+        apiKey: String,
+        sampleRate: Int,
+        audio: Data,
+        language: String?
+    ) async throws -> (transcript: String, usage: STTUsage?)
+}
+
+extension DeepgramClient: DeepgramRESTTranscriber {}
+
+protocol WhisperRESTTranscriber: Sendable {
+    func transcribe(
+        apiKey: String,
+        sampleRate: Int,
+        audio: Data,
+        language: String?
+    ) async throws -> (transcript: String, usage: STTUsage?)
+}
+
+extension WhisperClient: WhisperRESTTranscriber {}
+
+protocol AppleSpeechTranscriber: Sendable {
+    func transcribe(
+        sampleRate: Int,
+        audio: Data,
+        language: String?
+    ) async throws -> (transcript: String, usage: STTUsage?)
+}
+
+extension AppleSpeechClient: AppleSpeechTranscriber {}
+
+typealias DeepgramStreamingSessionBuilder = @Sendable (
+    _ apiKey: String,
+    _ language: String?,
+    _ runID: String,
+    _ logger: @escaping PipelineEventLogger
+) -> (any STTStreamingSession)?
+
 final class ProviderSwitchingSTTService: STTService, @unchecked Sendable {
     private let deepgramService: DeepgramSTTService
     private let whisperService: WhisperSTTService
@@ -104,10 +143,15 @@ final class ProviderSwitchingSTTService: STTService, @unchecked Sendable {
 }
 
 final class DeepgramSTTService: STTService, @unchecked Sendable {
-    private let restClient: DeepgramClient
+    private let restClient: any DeepgramRESTTranscriber
+    private let streamingSessionBuilder: DeepgramStreamingSessionBuilder
 
-    init(restClient: DeepgramClient = DeepgramClient()) {
+    init(
+        restClient: any DeepgramRESTTranscriber = DeepgramClient(),
+        streamingSessionBuilder: DeepgramStreamingSessionBuilder? = nil
+    ) {
         self.restClient = restClient
+        self.streamingSessionBuilder = streamingSessionBuilder ?? Self.defaultStreamingSessionBuilder
     }
 
     func startStreamingSessionIfNeeded(
@@ -123,12 +167,21 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
             return nil
         }
 
+        return streamingSessionBuilder(deepgramKey, language, runID, logger)
+    }
+
+    private static func defaultStreamingSessionBuilder(
+        apiKey: String,
+        language: String?,
+        runID: String,
+        logger: @escaping PipelineEventLogger
+    ) -> (any STTStreamingSession)? {
         let stream = DeepgramStreamingClient()
         let session = DeepgramLiveSession(stream: stream, logger: logger, runID: runID)
         Task {
             do {
                 try await stream.start(
-                    apiKey: deepgramKey,
+                    apiKey: apiKey,
                     sampleRate: AudioRecorder.targetSampleRate,
                     language: language
                 )
@@ -305,9 +358,9 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
 }
 
 final class WhisperSTTService: STTService, @unchecked Sendable {
-    private let client: WhisperClient
+    private let client: any WhisperRESTTranscriber
 
-    init(client: WhisperClient = WhisperClient()) {
+    init(client: any WhisperRESTTranscriber = WhisperClient()) {
         self.client = client
     }
 
@@ -369,9 +422,9 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
 }
 
 final class AppleSpeechSTTService: STTService, @unchecked Sendable {
-    private let client: AppleSpeechClient
+    private let client: any AppleSpeechTranscriber
 
-    init(client: AppleSpeechClient = AppleSpeechClient()) {
+    init(client: any AppleSpeechTranscriber = AppleSpeechClient()) {
         self.client = client
     }
 
