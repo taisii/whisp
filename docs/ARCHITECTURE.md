@@ -157,9 +157,11 @@
 
 `PromptTrace.dump` により保存:
 
-- `*.prompt.txt`: 実際に送信したプロンプト本文
-- `*.meta.json`: `stage`, `model`, `context`, `promptChars`, `extra` など
+- `prompts/<trace_id>/request.txt`: 実際に送信したプロンプト本文
+- `prompts/<trace_id>/request.json`: `traceID`, `stage`, `model`, `context`, `requestChars`, `extra` など
   - `context` はその stage のAPIに実際に渡した文脈（postprocess/audio_transcribe では sanitize 後）を保持する。
+- `prompts/<trace_id>/response.txt`: 対応するレスポンス本文
+- `prompts/<trace_id>/response.json`: `status(ok/error)`, `responseChars`, `usage`, `errorMessage` など
 
 `extra.run_dir` がある場合は、そのrun配下 `prompts/` に保存される。App本体のパイプライン実行では録音開始時に run を確保するため、`accessibility_summary` を含むプロンプトは run 配下に保存される。
 

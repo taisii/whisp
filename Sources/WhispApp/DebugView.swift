@@ -435,7 +435,7 @@ struct DebugView: View {
 
     private func promptSection(details: DebugCaptureDetails) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("送信プロンプト")
+            Text("送信プロンプトとレスポンス")
                 .font(.system(size: 14, weight: .semibold))
 
             if details.prompts.isEmpty {
@@ -452,27 +452,56 @@ struct DebugView: View {
                 .labelsHidden()
 
                 if let prompt = viewModel.selectedPrompt {
-                    Text("chars: \(prompt.promptChars) / context terms: \(prompt.contextTermsCount)")
+                    Text("prompt chars: \(prompt.promptChars) / response chars: \(prompt.responseText.count) / context terms: \(prompt.contextTermsCount)")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.secondary)
-                    ScrollView {
-                        Text(prompt.promptText)
-                            .font(.system(size: 12, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(10)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        promptTextPane(
+                            title: "送信プロンプト",
+                            text: prompt.promptText,
+                            placeholder: "プロンプトが保存されていません。",
+                            minHeight: 120
+                        )
+                        promptTextPane(
+                            title: "レスポンス",
+                            text: prompt.responseText,
+                            placeholder: "このプロンプトのレスポンスはまだ保存されていません。",
+                            minHeight: 120
+                        )
                     }
-                    .background(Color(NSColor.textBackgroundColor))
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                    }
-                    .frame(minHeight: 180)
                 }
             }
         }
         .cardStyle()
+    }
+
+    private func promptTextPane(
+        title: String,
+        text: String,
+        placeholder: String,
+        minHeight: CGFloat
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+
+            ScrollView {
+                Text(text.isEmpty ? placeholder : text)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(text.isEmpty ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+            }
+            .background(Color(NSColor.textBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+            }
+            .frame(minHeight: minHeight)
+        }
     }
 
     private var statusBar: some View {

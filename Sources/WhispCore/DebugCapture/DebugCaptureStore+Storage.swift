@@ -47,19 +47,29 @@ extension DebugCaptureStore {
             return []
         }
 
-        let files = try fileManager.contentsOfDirectory(at: promptsURL, includingPropertiesForKeys: nil)
-        let metaFiles = files.filter { $0.pathExtension == "json" && $0.lastPathComponent.hasSuffix(".meta.json") }
+        let files = try fileManager.contentsOfDirectory(
+            at: promptsURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        )
+        let traceDirectories = files.filter { url in
+            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
         var snapshots: [DebugPromptSnapshot] = []
 
-        for metaURL in metaFiles {
-            guard let metaData = try? Data(contentsOf: metaURL),
-                  let trace = try? JSONDecoder().decode(PromptTraceRecord.self, from: metaData)
+        for traceDirectory in traceDirectories {
+            let requestMetaURL = traceDirectory.appendingPathComponent("request.json", isDirectory: false)
+            let requestTextURL = traceDirectory.appendingPathComponent("request.txt", isDirectory: false)
+            let responseTextURL = traceDirectory.appendingPathComponent("response.txt", isDirectory: false)
+
+            guard let metaData = try? Data(contentsOf: requestMetaURL),
+                  let trace = try? JSONDecoder().decode(PromptTraceRequestRecord.self, from: metaData)
             else {
                 continue
             }
 
-            let promptURL = promptsURL.appendingPathComponent(trace.promptFile, isDirectory: false)
-            let promptText = (try? String(contentsOf: promptURL, encoding: .utf8)) ?? ""
+            let promptText = (try? String(contentsOf: requestTextURL, encoding: .utf8)) ?? ""
+            let responseText = (try? String(contentsOf: responseTextURL, encoding: .utf8)) ?? ""
             let summaryChars = trace.context?.visionSummary?.count ?? 0
             let termsCount = trace.context?.visionTerms.count ?? 0
             let accessibilityChars = (trace.context?.accessibilityText?.count ?? 0)
@@ -69,19 +79,20 @@ extension DebugCaptureStore {
                 DebugPromptSnapshot(
                     stage: trace.stage,
                     model: trace.model,
-                    promptChars: trace.promptChars,
-                    promptFilePath: promptURL.path,
-                    metaFilePath: metaURL.path,
+                    promptChars: trace.requestChars,
+                    promptFilePath: requestTextURL.path,
+                    metaFilePath: requestMetaURL.path,
                     contextSummaryChars: summaryChars,
                     contextTermsCount: termsCount,
                     contextAccessibilityChars: accessibilityChars,
                     context: trace.context,
-                    promptText: promptText
+                    promptText: promptText,
+                    responseText: responseText
                 )
             )
         }
 
-        return snapshots.sorted { $0.metaFilePath > $1.metaFilePath }
+        return snapshots.sorted { $0.promptFilePath > $1.promptFilePath }
     }
 
     func isoNow() -> String {

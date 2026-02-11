@@ -50,7 +50,7 @@ final class PostProcessorService: @unchecked Sendable {
             extra["run_dir"] = debugRunDirectory
         }
 
-        PromptTrace.dump(
+        let traceReference = PromptTrace.dump(
             stage: "postprocess",
             model: model.rawValue,
             appName: appName,
@@ -59,11 +59,18 @@ final class PostProcessorService: @unchecked Sendable {
             extra: extra
         )
 
-        return try await resolveProvider(model: model).postProcess(
-            apiKey: apiKey,
-            model: model,
-            prompt: prompt
-        )
+        do {
+            let response = try await resolveProvider(model: model).postProcess(
+                apiKey: apiKey,
+                model: model,
+                prompt: prompt
+            )
+            PromptTrace.writeResponse(response.text, usage: response.usage, reference: traceReference)
+            return response
+        } catch {
+            PromptTrace.writeFailure(error.localizedDescription, reference: traceReference)
+            throw error
+        }
     }
 
     func transcribeAudio(
@@ -92,7 +99,7 @@ final class PostProcessorService: @unchecked Sendable {
             extra["run_dir"] = debugRunDirectory
         }
 
-        PromptTrace.dump(
+        let traceReference = PromptTrace.dump(
             stage: "audio_transcribe",
             model: model.rawValue,
             appName: nil,
@@ -101,13 +108,20 @@ final class PostProcessorService: @unchecked Sendable {
             extra: extra
         )
 
-        return try await resolveProvider(model: model).transcribeAudio(
-            apiKey: apiKey,
-            model: model,
-            prompt: prompt,
-            wavData: wavData,
-            mimeType: mimeType
-        )
+        do {
+            let response = try await resolveProvider(model: model).transcribeAudio(
+                apiKey: apiKey,
+                model: model,
+                prompt: prompt,
+                wavData: wavData,
+                mimeType: mimeType
+            )
+            PromptTrace.writeResponse(response.text, usage: response.usage, reference: traceReference)
+            return response
+        } catch {
+            PromptTrace.writeFailure(error.localizedDescription, reference: traceReference)
+            throw error
+        }
     }
 
     func summarizeAccessibilityContext(
@@ -140,7 +154,7 @@ final class PostProcessorService: @unchecked Sendable {
             extra["run_dir"] = debugRunDirectory
         }
 
-        PromptTrace.dump(
+        let traceReference = PromptTrace.dump(
             stage: "accessibility_summary",
             model: model.rawValue,
             appName: appName,
@@ -149,19 +163,25 @@ final class PostProcessorService: @unchecked Sendable {
             extra: extra
         )
 
-        let response = try await resolveProvider(model: model).postProcess(
-            apiKey: apiKey,
-            model: model,
-            prompt: prompt
-        )
-        guard let parsed = parseVisionContext(response.text) else {
-            return nil
-        }
+        do {
+            let response = try await resolveProvider(model: model).postProcess(
+                apiKey: apiKey,
+                model: model,
+                prompt: prompt
+            )
+            PromptTrace.writeResponse(response.text, usage: response.usage, reference: traceReference)
+            guard let parsed = parseVisionContext(response.text) else {
+                return nil
+            }
 
-        return ContextInfo(
-            visionSummary: parsed.summary,
-            visionTerms: parsed.terms
-        )
+            return ContextInfo(
+                visionSummary: parsed.summary,
+                visionTerms: parsed.terms
+            )
+        } catch {
+            PromptTrace.writeFailure(error.localizedDescription, reference: traceReference)
+            throw error
+        }
     }
 
     private func sanitizeContextForPrompt(_ context: ContextInfo?) -> ContextInfo? {

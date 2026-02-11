@@ -136,19 +136,28 @@ final class DebugCaptureStoreTests: XCTestCase {
         let promptsDir = runDirectory.appendingPathComponent("prompts", isDirectory: true)
         try FileManager.default.createDirectory(at: promptsDir, withIntermediateDirectories: true)
 
-        let promptFile = "sample.prompt.txt"
-        let promptURL = promptsDir.appendingPathComponent(promptFile)
-        try "PROMPT BODY".write(to: promptURL, atomically: true, encoding: .utf8)
+        let traceDir = promptsDir.appendingPathComponent("sample-trace", isDirectory: true)
+        try FileManager.default.createDirectory(at: traceDir, withIntermediateDirectories: true)
+        try "PROMPT BODY".write(
+            to: traceDir.appendingPathComponent("request.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "RESPONSE BODY".write(
+            to: traceDir.appendingPathComponent("response.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
 
-        let metaURL = promptsDir.appendingPathComponent("sample.meta.json")
-        let trace = PromptTraceRecord(
+        let metaURL = traceDir.appendingPathComponent("request.json")
+        let trace = PromptTraceRequestRecord(
+            traceID: "sample-trace",
             timestamp: "2026-02-09T00:00:00Z",
             stage: "postprocess",
             model: "gpt-5-nano",
             appName: nil,
             context: ContextInfo(visionSummary: "summary", visionTerms: ["term1", "term2"]),
-            promptChars: 11,
-            promptFile: promptFile,
+            requestChars: 11,
             extra: [:]
         )
         try JSONEncoder().encode(trace).write(to: metaURL)
@@ -156,6 +165,7 @@ final class DebugCaptureStoreTests: XCTestCase {
         let details = try XCTUnwrap(store.loadDetails(captureID: captureID))
         XCTAssertEqual(details.prompts.count, 1)
         XCTAssertEqual(details.prompts.first?.promptText, "PROMPT BODY")
+        XCTAssertEqual(details.prompts.first?.responseText, "RESPONSE BODY")
         XCTAssertEqual(details.prompts.first?.contextTermsCount, 2)
         XCTAssertEqual(details.prompts.first?.context?.visionSummary, "summary")
     }

@@ -27,9 +27,9 @@ final class DebugViewSnapshotTests: XCTestCase {
         viewModel.select(captureID: source.captureID)
 
         let root = DebugView(viewModel: viewModel)
-            .frame(width: 1200, height: 900)
+            .frame(width: 1200, height: 1700)
         let hosting = NSHostingView(rootView: root)
-        hosting.frame = NSRect(x: 0, y: 0, width: 1200, height: 900)
+        hosting.frame = NSRect(x: 0, y: 0, width: 1200, height: 1700)
         hosting.layoutSubtreeIfNeeded()
 
         guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
@@ -136,6 +136,39 @@ final class DebugViewSnapshotTests: XCTestCase {
             sttText: "これはテストです",
             outputText: "これは整形済みテキストです",
             status: "completed"
+        )
+        let details = try XCTUnwrap(store.loadDetails(captureID: captureID))
+        let promptsDir = URL(fileURLWithPath: details.record.promptsDirectoryPath, isDirectory: true)
+        try FileManager.default.createDirectory(at: promptsDir, withIntermediateDirectories: true)
+        let traceDir = promptsDir.appendingPathComponent("sample-postprocess", isDirectory: true)
+        try FileManager.default.createDirectory(at: traceDir, withIntermediateDirectories: true)
+        try """
+        音声を整えてください。
+
+        入力: これはテストです
+        """.write(
+            to: traceDir.appendingPathComponent("request.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try "これは整形済みテキストです".write(
+            to: traceDir.appendingPathComponent("response.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+        let trace = PromptTraceRequestRecord(
+            traceID: "sample-postprocess",
+            timestamp: "2026-02-11T00:00:00Z",
+            stage: "postprocess",
+            model: "gpt-5-nano",
+            appName: "Xcode",
+            context: ContextInfo(visionSummary: "editor open", visionTerms: ["Swift", "Xcode"]),
+            requestChars: 27,
+            extra: [:]
+        )
+        try JSONEncoder().encode(trace).write(
+            to: traceDir.appendingPathComponent("request.json"),
+            options: .atomic
         )
         try store.saveVisionArtifacts(
             captureID: captureID,
