@@ -302,36 +302,23 @@ struct DebugView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
                 VStack(alignment: .leading, spacing: 6) {
-                    DisclosureGroup("詳細（必要なときだけ表示）") {
+                    DisclosureGroup("入力コンテキスト（Raw）") {
                         VStack(alignment: .leading, spacing: 4) {
-                            if let context = record.context, !context.isEmpty {
-                                Text("context.summary: \(context.visionSummary ?? "-")")
-                                Text("context.terms: \(context.visionTerms.joined(separator: ", "))")
-                                Text("context.accessibility: \(context.accessibilityText ?? "-")")
-                                Text("context.window_text: \(context.windowText ?? "-")")
+                            let rawRows = rawContextRows(record: record)
+                            if rawRows.isEmpty {
+                                Text("表示できるRaw入力がありません。")
+                                    .foregroundStyle(.secondary)
                             } else {
-                                Text("context: なし")
-                            }
-
-                            if let accessibility = record.accessibilitySnapshot {
-                                Text("bundle: \(accessibility.bundleID ?? "-")")
-                                Text("window: \(accessibility.windowTitle ?? "-")")
-                                Text("selected: \(accessibility.focusedElement?.selectedText ?? "-")")
-                                Text("caret_context: \(accessibility.focusedElement?.caretContext ?? "-")")
-                                Text("window_text_chars: \(accessibility.windowTextChars)")
-                                if let error = accessibility.error, !error.isEmpty {
-                                    Text("accessibility_error: \(error)")
-                                        .foregroundStyle(.red)
+                                ForEach(rawRows.indices, id: \.self) { index in
+                                    rawContextRow(
+                                        name: rawRows[index].name,
+                                        value: rawRows[index].value,
+                                        isError: rawRows[index].isError
+                                    )
                                 }
                             }
-
-                            Text("sample_rate: \(record.sampleRate)")
-                            Text("audio_file: \(record.audioFilePath)")
-                            Text("run_dir: \(record.runDirectoryPath)")
-                            Text("events: \(record.eventsFilePath)")
                         }
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                     }
                 }
@@ -676,6 +663,71 @@ struct DebugView: View {
                 isExpanded.wrappedValue.toggle()
             }
         }
+    }
+
+    private func rawContextRows(record: DebugCaptureRecord) -> [(name: String, value: String, isError: Bool)] {
+        let context = record.context
+        let accessibility = record.accessibilitySnapshot
+        let focusedElement = accessibility?.focusedElement
+        var rows: [(name: String, value: String, isError: Bool)] = []
+
+        if let value = normalizedText(context?.visionSummary) {
+            rows.append(("context.summary", value, false))
+        }
+        if let value = normalizedTerms(context?.visionTerms ?? []) {
+            rows.append(("context.terms", value, false))
+        }
+        if let value = normalizedText(context?.accessibilityText) {
+            rows.append(("context.accessibility", value, false))
+        }
+        if let value = summarizedText(context?.windowText, maxChars: 320) {
+            rows.append(("context.window_text", value, false))
+        }
+        if let value = normalizedText(focusedElement?.selectedText) {
+            rows.append(("selected_text", value, false))
+        }
+        if let value = summarizedText(focusedElement?.caretContext, maxChars: 280) {
+            rows.append(("caret_context", value, false))
+        }
+        if let value = normalizedText(accessibility?.error) {
+            rows.append(("accessibility_error", value, true))
+        }
+
+        return rows
+    }
+
+    private func rawContextRow(name: String, value: String, isError: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(name)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .foregroundStyle(isError ? Color.red : Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(value)
+        }
+    }
+
+    private func normalizedText(_ value: String?) -> String? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
+    private func normalizedTerms(_ values: [String]) -> String? {
+        let terms = values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !terms.isEmpty else {
+            return nil
+        }
+        return terms.joined(separator: ", ")
+    }
+
+    private func summarizedText(_ value: String?, maxChars: Int) -> String? {
+        guard let normalized = normalizedText(value) else { return nil }
+        guard normalized.count > maxChars else { return normalized }
+        return "\(normalized.prefix(maxChars)) ... (\(normalized.count) chars)"
     }
 
     private func hasText(_ value: String?) -> Bool {

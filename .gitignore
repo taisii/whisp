@@ -14,7 +14,6 @@ dist-ssr
 
 # Editor directories and files
 .vscode/*
-!.vscode/extensions.json
 .idea
 .DS_Store
 *.suo
@@ -26,3 +25,5 @@ dist-ssr
 .build
 .tmp/
 tmp/
+.codex-artifacts/
+.claude/settings.json
