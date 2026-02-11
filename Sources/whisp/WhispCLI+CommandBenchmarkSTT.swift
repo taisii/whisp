@@ -224,6 +224,22 @@ extension WhispCLI {
         print("avg_stt_after_stop_ms: \(summary.avgAfterStopMs.map(msString) ?? "n/a")")
         print("case_rows_log: \(logPaths.rowsPath)")
         print("summary_log: \(logPaths.summaryPath)")
+
+        _ = importLegacyBenchmarkLogs(
+            kind: .stt,
+            rowsPath: logPaths.rowsPath,
+            summaryPath: logPaths.summaryPath,
+            logDirectoryPath: logPaths.baseDir,
+            options: BenchmarkRunOptions(
+                sourceCasesPath: options.jsonlPath,
+                sttMode: options.sttMode.rawValue,
+                chunkMs: options.chunkMs,
+                realtime: options.realtime,
+                minAudioSeconds: options.minAudioSeconds,
+                useCache: options.useCache,
+                caseLimit: options.limit
+            )
+        )
     }
 
 }

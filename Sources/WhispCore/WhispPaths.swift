@@ -7,6 +7,8 @@ public struct WhispPaths: Sendable {
     public let usageFile: URL
     public let debugDirectory: URL
     public let runsDirectory: URL
+    public let benchmarkDirectory: URL
+    public let benchmarkRunsDirectory: URL
     public let manualCasesFile: URL
     public let promptDefaultDirectory: URL
     public let devLogFile: URL
@@ -33,6 +35,8 @@ public struct WhispPaths: Sendable {
         usageFile = baseDirectory.appendingPathComponent("usage.json", isDirectory: false)
         debugDirectory = baseDirectory.appendingPathComponent("debug", isDirectory: true)
         runsDirectory = debugDirectory.appendingPathComponent("runs", isDirectory: true)
+        benchmarkDirectory = debugDirectory.appendingPathComponent("benchmarks", isDirectory: true)
+        benchmarkRunsDirectory = benchmarkDirectory.appendingPathComponent("runs", isDirectory: true)
         manualCasesFile = debugDirectory.appendingPathComponent("manual_test_cases.jsonl", isDirectory: false)
         promptDefaultDirectory = runsDirectory
             .appendingPathComponent("_default", isDirectory: true)

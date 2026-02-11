@@ -216,6 +216,20 @@ extension WhispCLI {
         print("avg_post_ms: \(summary.avgLatencyMs.map(msString) ?? "n/a")")
         print("case_rows_log: \(logPaths.rowsPath)")
         print("summary_log: \(logPaths.summaryPath)")
+
+        _ = importLegacyBenchmarkLogs(
+            kind: .generation,
+            rowsPath: logPaths.rowsPath,
+            summaryPath: logPaths.summaryPath,
+            logDirectoryPath: logPaths.baseDir,
+            options: BenchmarkRunOptions(
+                sourceCasesPath: options.jsonlPath,
+                requireContext: options.requireContext,
+                useCache: options.useCache,
+                llmModel: model.rawValue,
+                caseLimit: options.limit
+            )
+        )
     }
 
 }

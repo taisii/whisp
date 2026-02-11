@@ -189,6 +189,38 @@
 - `PromptTrace` は失敗しても本処理を止めない（ベストエフォート保存）。
 - Vision文脈は設定/タイミング条件によりスキップされる場合がある。
 
+## 7. ベンチマーク保存モデル
+
+ベンチマークは `Run` と `Case` を分離し、さらに `events` と `artifacts` を併用して再現性を確保する。
+
+### 7.1 保存ルート
+
+- ベース: `~/.config/whisp/debug/benchmarks/runs/<run_id>/`
+- `manifest.json`: Runサマリ
+- `cases.jsonl`: Caseサマリ（1行1case）
+- `events.jsonl`: Caseイベント（1行1event）
+- `artifacts/`: prompt/response/judge/rawレスポンスなどの生データ
+
+### 7.2 イベントモデル
+
+`BenchmarkCaseEvent` は `stage` ごとの厳密Unionで保存:
+
+- `load_case`
+- `stt`
+- `context`
+- `generation`
+- `judge`
+- `aggregate`
+- `cache`
+- `error`
+- `artifact_write_failed`
+
+### 7.3 CLIログとの関係
+
+- 既存CLIが出力する `rows/summary` は維持する（互換運用）。
+- 実行後に importer (`BenchmarkLegacyImporter`) で `BenchmarkStore` へ正規化保存する。
+- AppのベンチマークUIは `BenchmarkStore` のデータを参照する。
+
 ---
 
 更新時ルール:

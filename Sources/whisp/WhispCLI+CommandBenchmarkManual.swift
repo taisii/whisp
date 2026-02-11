@@ -428,6 +428,26 @@ extension WhispCLI {
         if let judgeUnavailableReason {
             print("intent_judge_note: \(judgeUnavailableReason)")
         }
+
+        _ = importLegacyBenchmarkLogs(
+            kind: .e2e,
+            rowsPath: logPaths.caseRowsPath,
+            summaryPath: logPaths.summaryPath,
+            logDirectoryPath: logPaths.baseDir,
+            options: BenchmarkRunOptions(
+                sourceCasesPath: options.jsonlPath,
+                sttMode: options.sttMode.rawValue,
+                chunkMs: options.chunkMs,
+                realtime: options.realtime,
+                requireContext: options.requireContext,
+                minAudioSeconds: options.minAudioSeconds,
+                minLabelConfidence: options.minLabelConfidence,
+                intentSource: options.intentSource.rawValue,
+                intentJudgeEnabled: options.intentJudgeEnabled,
+                intentJudgeModel: options.intentJudgeModel?.rawValue,
+                caseLimit: options.limit
+            )
+        )
     }
 
 }

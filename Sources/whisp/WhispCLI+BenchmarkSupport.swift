@@ -210,4 +210,37 @@ extension WhispCLI {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
     }
+
+    @discardableResult
+    static func importLegacyBenchmarkLogs(
+        kind: BenchmarkKind,
+        rowsPath: String,
+        summaryPath: String,
+        logDirectoryPath: String,
+        options: BenchmarkRunOptions
+    ) -> String? {
+        do {
+            let store = BenchmarkStore()
+            let importer = BenchmarkLegacyImporter(store: store)
+            let run = try importer.importRun(
+                input: BenchmarkLegacyImportInput(
+                    kind: kind,
+                    rowsPath: rowsPath,
+                    summaryPath: summaryPath,
+                    logDirectoryPath: logDirectoryPath,
+                    options: options
+                )
+            )
+            print("benchmark_run_id: \(run.id)")
+            let manifestPath = URL(fileURLWithPath: store.runsDirectoryPath, isDirectory: true)
+                .appendingPathComponent(run.id, isDirectory: true)
+                .appendingPathComponent("manifest.json", isDirectory: false)
+                .path
+            print("benchmark_manifest: \(manifestPath)")
+            return run.id
+        } catch {
+            print("benchmark_import_error: \(error.localizedDescription)")
+            return nil
+        }
+    }
 }

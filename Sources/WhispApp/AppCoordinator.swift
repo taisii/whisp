@@ -24,6 +24,7 @@ final class AppCoordinator {
     private let debugCaptureService: DebugCaptureService
     private let settingsWindowController: SettingsWindowController
     private let debugWindowController: DebugWindowController
+    private let benchmarkWindowController: BenchmarkWindowController
     private let hotKeyMonitor: GlobalHotKeyMonitor
     private let pipelineRunner: PipelineRunner
 
@@ -45,6 +46,7 @@ final class AppCoordinator {
         hotKeyMonitor = dependencies.hotKeyMonitor
         settingsWindowController = SettingsWindowController()
         debugWindowController = DebugWindowController(store: .shared)
+        benchmarkWindowController = BenchmarkWindowController(store: BenchmarkStore())
         pipelineRunner = PipelineRunner(
             usageStore: dependencies.usageStore,
             postProcessor: dependencies.postProcessor,
@@ -79,6 +81,10 @@ final class AppCoordinator {
 
     func openDebugWindow() {
         debugWindowController.show()
+    }
+
+    func openBenchmarkWindow() {
+        benchmarkWindowController.show()
     }
 
     func openMicrophoneSettings() {
