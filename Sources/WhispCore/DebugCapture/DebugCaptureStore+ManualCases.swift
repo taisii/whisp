@@ -48,6 +48,14 @@ extension DebugCaptureStore {
         if let imageMimeType = record.visionImageMimeType {
             payload["vision_image_mime_type"] = imageMimeType
         }
+        if let sttGroundTruth = record.sttGroundTruthText?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !sttGroundTruth.isEmpty
+        {
+            payload["labels"] = [
+                "transcript_gold": sttGroundTruth,
+            ]
+        }
         let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
 
         try ensureDirectories()

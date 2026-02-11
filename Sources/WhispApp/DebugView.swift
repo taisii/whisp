@@ -252,15 +252,6 @@ struct DebugView: View {
                 ) {
                     viewModel.toggleAudioPlayback()
                 }
-                iconButton(symbol: "folder", helpText: "録音ファイルを表示") {
-                    viewModel.revealAudioFile()
-                }
-                iconButton(symbol: "photo", helpText: "画像ファイルを表示", disabled: (record.visionImageFilePath == nil)) {
-                    viewModel.revealVisionImageFile()
-                }
-                iconButton(symbol: "text.quote", helpText: "Prompt保存先を開く") {
-                    viewModel.openPromptsDirectory()
-                }
                 iconButton(symbol: "trash", helpText: "削除", role: .destructive) {
                     showingDeleteConfirmation = true
                 }
@@ -389,39 +380,35 @@ struct DebugView: View {
     }
 
     private var groundTruthSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("正解テキスト")
+                Text("正解データ")
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Image(systemName: viewModel.hasUnsavedGroundTruthChanges ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
                     .foregroundStyle(viewModel.hasUnsavedGroundTruthChanges ? Color.orange : Color.green)
             }
 
-            TextEditor(text: $viewModel.groundTruthDraft)
-                .font(.system(size: 12, design: .monospaced))
-                .frame(minHeight: 120)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                }
+            groundTruthEditor(
+                title: "STT正解 (transcript_gold)",
+                text: $viewModel.sttGroundTruthDraft
+            )
+
+            groundTruthEditor(
+                title: "最終出力の正解 (ground_truth_text)",
+                text: $viewModel.groundTruthDraft
+            )
 
             HStack(spacing: 8) {
-                iconButton(symbol: "arrow.down.doc", helpText: "LLM出力を正解欄に反映") {
-                    viewModel.applyOutputAsGroundTruth()
-                }
-                iconButton(symbol: "doc.on.doc", helpText: "正解テキストをコピー") {
-                    viewModel.copyGroundTruth()
-                }
-                iconButton(symbol: "clipboard", helpText: "正解テキストを貼り付け") {
-                    viewModel.pasteGroundTruth()
-                }
-                iconButton(symbol: "square.and.arrow.down.fill", helpText: "正解を保存") {
+                Button("正解を保存") {
                     viewModel.saveGroundTruth()
                 }
-                iconButton(symbol: "plus.square.on.square", helpText: "テストケースに追加") {
+                .buttonStyle(.borderedProminent)
+
+                Button("テストケースに追加") {
                     viewModel.appendManualTestCase()
                 }
+                .buttonStyle(.bordered)
             }
 
             if !viewModel.groundTruthSaveMessage.isEmpty {
@@ -431,6 +418,21 @@ struct DebugView: View {
             }
         }
         .cardStyle()
+    }
+
+    private func groundTruthEditor(title: String, text: Binding<String>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.secondary)
+            TextEditor(text: text)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 110)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+                }
+        }
     }
 
     private func promptSection(details: DebugCaptureDetails) -> some View {

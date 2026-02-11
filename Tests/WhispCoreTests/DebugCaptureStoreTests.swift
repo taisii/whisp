@@ -32,6 +32,7 @@ final class DebugCaptureStoreTests: XCTestCase {
             status: "completed"
         )
         try store.setGroundTruth(captureID: captureID, text: "  これは正解です  ")
+        try store.setSTTGroundTruth(captureID: captureID, text: "  これはSTT正解です  ")
 
         let records = try store.listRecords(limit: 10)
         XCTAssertEqual(records.count, 1)
@@ -44,6 +45,7 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertEqual(details.record.sttText, "これはsttです")
         XCTAssertEqual(details.record.outputText, "これは整形結果です")
         XCTAssertEqual(details.record.groundTruthText, "これは正解です")
+        XCTAssertEqual(details.record.sttGroundTruthText, "これはSTT正解です")
         XCTAssertTrue(FileManager.default.fileExists(atPath: details.record.eventsFilePath))
         XCTAssertTrue(FileManager.default.fileExists(atPath: details.record.runDirectoryPath))
     }
@@ -211,6 +213,7 @@ final class DebugCaptureStoreTests: XCTestCase {
         )
         try store.updateResult(captureID: captureID, sttText: "stt", outputText: "out", status: "completed")
         try store.setGroundTruth(captureID: captureID, text: "正解")
+        try store.setSTTGroundTruth(captureID: captureID, text: "stt正解")
         try store.saveVisionArtifacts(
             captureID: captureID,
             context: ContextInfo(visionSummary: "editor", visionTerms: ["Swift"]),
@@ -232,6 +235,8 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertEqual(json["llm_model"] as? String, "gemini-2.5-flash-lite")
         XCTAssertNotNil(json["audio_duration_sec"] as? Double)
         XCTAssertNotNil(json["vision_image_file"] as? String)
+        let labels = json["labels"] as? [String: Any]
+        XCTAssertEqual(labels?["transcript_gold"] as? String, "stt正解")
         let context = json["context"] as? [String: Any]
         XCTAssertEqual(context?["visionSummary"] as? String, "editor")
     }

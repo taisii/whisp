@@ -110,6 +110,7 @@ extension DebugCaptureStore {
                 status: existing.status == "recording" ? "recorded" : existing.status,
                 errorMessage: existing.errorMessage,
                 groundTruthText: existing.groundTruthText,
+                sttGroundTruthText: existing.sttGroundTruthText,
                 context: existing.context,
                 accessibilitySnapshot: accessibilitySnapshot ?? existing.accessibilitySnapshot,
                 visionImageFilePath: existing.visionImageFilePath,
@@ -205,6 +206,17 @@ extension DebugCaptureStore {
         guard var record = try loadRecord(path: path) else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         record.groundTruthText = trimmed.isEmpty ? nil : trimmed
+        try writeRecord(record, to: path)
+    }
+
+    public func setSTTGroundTruth(captureID: String, text: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let path = recordPath(captureID: captureID)
+        guard var record = try loadRecord(path: path) else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        record.sttGroundTruthText = trimmed.isEmpty ? nil : trimmed
         try writeRecord(record, to: path)
     }
 

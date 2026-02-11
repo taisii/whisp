@@ -200,6 +200,7 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
     public var status: String
     public var errorMessage: String?
     public var groundTruthText: String?
+    public var sttGroundTruthText: String?
     public var context: ContextInfo?
     public var accessibilitySnapshot: AccessibilitySnapshot?
     public var visionImageFilePath: String?
@@ -227,6 +228,7 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
         status: String,
         errorMessage: String? = nil,
         groundTruthText: String? = nil,
+        sttGroundTruthText: String? = nil,
         context: ContextInfo? = nil,
         accessibilitySnapshot: AccessibilitySnapshot? = nil,
         visionImageFilePath: String? = nil,
@@ -253,6 +255,7 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
         self.status = status
         self.errorMessage = errorMessage
         self.groundTruthText = groundTruthText
+        self.sttGroundTruthText = sttGroundTruthText
         self.context = context
         self.accessibilitySnapshot = accessibilitySnapshot
         self.visionImageFilePath = visionImageFilePath

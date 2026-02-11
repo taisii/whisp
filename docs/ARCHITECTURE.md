@@ -173,6 +173,7 @@
 - run識別情報
 - 音声/イベントファイルパス
 - `stt_text`, `output_text`, `ground_truth_text`
+- `labels.transcript_gold`（STT正解を保存した場合）
 - `context`
 - `accessibility`（取得済みなら）
 - `vision_image_file`, `vision_image_mime_type`（取得済みなら）

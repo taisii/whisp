@@ -89,7 +89,16 @@ final class DebugViewModel: ObservableObject {
     @Published var selectedPromptIndex = 0
     @Published var groundTruthDraft = "" {
         didSet {
-            hasUnsavedGroundTruthChanges = (groundTruthDraft != persistedGroundTruthText)
+            refreshGroundTruthDirtyState()
+            if hasUnsavedGroundTruthChanges {
+                groundTruthSaveMessage = ""
+                groundTruthSaveIsError = false
+            }
+        }
+    }
+    @Published var sttGroundTruthDraft = "" {
+        didSet {
+            refreshGroundTruthDirtyState()
             if hasUnsavedGroundTruthChanges {
                 groundTruthSaveMessage = ""
                 groundTruthSaveIsError = false
@@ -107,6 +116,7 @@ final class DebugViewModel: ObservableObject {
     private let store: DebugCaptureStore
     private let eventAnalyzer = DebugEventAnalyzer()
     private var persistedGroundTruthText = ""
+    private var persistedSTTGroundTruthText = ""
     private var eventAnalysisCache: [String: DebugEventAnalysis] = [:]
     private var audioPlayer: AVAudioPlayer?
     private var audioPollingTimer: Timer?
@@ -161,7 +171,9 @@ final class DebugViewModel: ObservableObject {
             details = nil
             selectedPromptIndex = 0
             persistedGroundTruthText = ""
+            persistedSTTGroundTruthText = ""
             groundTruthDraft = ""
+            sttGroundTruthDraft = ""
             selectedEventAnalysis = .empty
             clearGroundTruthSaveFeedback()
             return
@@ -173,10 +185,12 @@ final class DebugViewModel: ObservableObject {
         guard let captureID = selectedCaptureID else { return }
         let previousGroundTruth = persistedGroundTruthText.trimmingCharacters(in: .whitespacesAndNewlines)
         let newGroundTruth = groundTruthDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let newSTTGroundTruth = sttGroundTruthDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         let shouldAppendManualCaseByDefault = previousGroundTruth.isEmpty && !newGroundTruth.isEmpty
 
         do {
             try store.setGroundTruth(captureID: captureID, text: groundTruthDraft)
+            try store.setSTTGroundTruth(captureID: captureID, text: newSTTGroundTruth)
             var autoAppendError: String?
             if shouldAppendManualCaseByDefault {
                 do {
@@ -326,8 +340,12 @@ final class DebugViewModel: ObservableObject {
             details = try store.loadDetails(captureID: captureID)
             selectedPromptIndex = 0
             let groundTruth = details?.record.groundTruthText ?? ""
+            let sttGroundTruth = details?.record.sttGroundTruthText ?? ""
             persistedGroundTruthText = groundTruth
+            persistedSTTGroundTruthText = sttGroundTruth
             groundTruthDraft = groundTruth
+            sttGroundTruthDraft = sttGroundTruth
+            refreshGroundTruthDirtyState()
             selectedEventAnalysis = eventAnalysis(captureID: captureID, eventsFilePath: details?.record.eventsFilePath ?? "")
             clearGroundTruthSaveFeedback()
             return true
@@ -335,7 +353,10 @@ final class DebugViewModel: ObservableObject {
             details = nil
             selectedPromptIndex = 0
             persistedGroundTruthText = ""
+            persistedSTTGroundTruthText = ""
             groundTruthDraft = ""
+            sttGroundTruthDraft = ""
+            refreshGroundTruthDirtyState()
             selectedEventAnalysis = .empty
             clearGroundTruthSaveFeedback()
             setStatus("詳細読み込みに失敗: \(error.localizedDescription)", isError: true)
@@ -358,7 +379,10 @@ final class DebugViewModel: ObservableObject {
         details = nil
         selectedPromptIndex = 0
         persistedGroundTruthText = ""
+        persistedSTTGroundTruthText = ""
         groundTruthDraft = ""
+        sttGroundTruthDraft = ""
+        refreshGroundTruthDirtyState()
         selectedEventAnalysis = .empty
         clearGroundTruthSaveFeedback()
         return true
@@ -402,6 +426,12 @@ final class DebugViewModel: ObservableObject {
     private func clearGroundTruthSaveFeedback() {
         groundTruthSaveMessage = ""
         groundTruthSaveIsError = false
+    }
+
+    private func refreshGroundTruthDirtyState() {
+        hasUnsavedGroundTruthChanges =
+            (groundTruthDraft != persistedGroundTruthText) ||
+            (sttGroundTruthDraft != persistedSTTGroundTruthText)
     }
 
     private func hasGroundTruth(_ record: DebugCaptureRecord?) -> Bool {
