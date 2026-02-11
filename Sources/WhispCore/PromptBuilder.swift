@@ -101,9 +101,6 @@ private func appendContext(to prompt: inout String, context: ContextInfo) {
     if let text = context.accessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
         lines.append("選択テキスト: \(text)")
     }
-    if let text = context.windowText?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
-        lines.append("同一ウィンドウ本文: \(text)")
-    }
     if let summary = context.visionSummary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
         lines.append("画面の要約: \(summary)")
     }

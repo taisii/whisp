@@ -166,18 +166,19 @@ extension WhispCLI {
         context: ContextInfo?,
         sttMode: String
     ) async throws -> PostProcessResult {
+        let sanitizedContext = sanitizeContextForPrompt(context)
         let prompt = buildPrompt(
             sttResult: sttText,
             languageHint: config.inputLanguage,
             appName: nil,
             appPromptRules: config.appPromptRules,
-            context: context
+            context: sanitizedContext
         )
         PromptTrace.dump(
             stage: "pipeline_benchmark_postprocess",
             model: model.rawValue,
             appName: nil,
-            context: context,
+            context: sanitizedContext,
             prompt: prompt,
             extra: [
                 "stt_mode": sttMode,
@@ -272,6 +273,18 @@ extension WhispCLI {
             }
         }
         return terms
+    }
+
+    private static func sanitizeContextForPrompt(_ context: ContextInfo?) -> ContextInfo? {
+        guard let context else {
+            return nil
+        }
+        let sanitized = ContextInfo(
+            accessibilityText: context.accessibilityText,
+            visionSummary: context.visionSummary,
+            visionTerms: context.visionTerms
+        )
+        return sanitized.isEmpty ? nil : sanitized
     }
 
     private static func tailExcerpt(from text: String, maxChars: Int) -> String {

@@ -42,7 +42,7 @@ final class PromptBuilderTests: XCTestCase {
 
         XCTAssertTrue(prompt.contains("画面コンテキスト"))
         XCTAssertTrue(prompt.contains("選択テキスト: 選択された単語"))
-        XCTAssertTrue(prompt.contains("同一ウィンドウ本文: 直前の会話ログ"))
+        XCTAssertFalse(prompt.contains("同一ウィンドウ本文: 直前の会話ログ"))
         XCTAssertTrue(prompt.contains("画面の要約: エディタでGoファイル編集中"))
         XCTAssertTrue(prompt.contains("専門用語候補: func main, http.Server"))
     }

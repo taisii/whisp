@@ -29,12 +29,13 @@ final class PostProcessorService: @unchecked Sendable {
         debugRunID: String? = nil,
         debugRunDirectory: String? = nil
     ) async throws -> PostProcessResult {
+        let sanitizedContext = sanitizeContextForPrompt(context)
         let prompt = buildPrompt(
             sttResult: sttResult,
             languageHint: languageHint,
             appName: appName,
             appPromptRules: appPromptRules,
-            context: context
+            context: sanitizedContext
         )
 
         var extra: [String: String] = [
@@ -53,7 +54,7 @@ final class PostProcessorService: @unchecked Sendable {
             stage: "postprocess",
             model: model.rawValue,
             appName: appName,
-            context: context,
+            context: sanitizedContext,
             prompt: prompt,
             extra: extra
         )
@@ -74,9 +75,10 @@ final class PostProcessorService: @unchecked Sendable {
         debugRunID: String? = nil,
         debugRunDirectory: String? = nil
     ) async throws -> PostProcessResult {
+        let sanitizedContext = sanitizeContextForPrompt(context)
         var prompt = "次の音声を文字起こしし、フィラー除去と最小限の整形を行ってください。出力は整形後テキストのみ。"
-        if let context, !context.isEmpty {
-            prompt += "\n\n画面コンテキスト:\n\(contextPromptLines(context))"
+        if let sanitizedContext, !sanitizedContext.isEmpty {
+            prompt += "\n\n画面コンテキスト:\n\(contextPromptLines(sanitizedContext))"
         }
 
         var extra: [String: String] = [
@@ -94,7 +96,7 @@ final class PostProcessorService: @unchecked Sendable {
             stage: "audio_transcribe",
             model: model.rawValue,
             appName: nil,
-            context: context,
+            context: sanitizedContext,
             prompt: prompt,
             extra: extra
         )
@@ -162,6 +164,18 @@ final class PostProcessorService: @unchecked Sendable {
         )
     }
 
+    private func sanitizeContextForPrompt(_ context: ContextInfo?) -> ContextInfo? {
+        guard let context else {
+            return nil
+        }
+        let sanitized = ContextInfo(
+            accessibilityText: context.accessibilityText,
+            visionSummary: context.visionSummary,
+            visionTerms: context.visionTerms
+        )
+        return sanitized.isEmpty ? nil : sanitized
+    }
+
     private func resolveProvider(model: LLMModel) throws -> any LLMAPIProvider {
         guard let provider = providers.first(where: { $0.supports(model: model) }) else {
             throw AppError.invalidArgument("model \(model.rawValue) に対応するLLM provider がありません")
@@ -179,9 +193,6 @@ final class PostProcessorService: @unchecked Sendable {
         }
         if let accessibility = context.accessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines), !accessibility.isEmpty {
             lines.append("- 選択テキスト: \(accessibility)")
-        }
-        if let windowText = context.windowText?.trimmingCharacters(in: .whitespacesAndNewlines), !windowText.isEmpty {
-            lines.append("- 同一ウィンドウ本文: \(windowText)")
         }
         return lines.joined(separator: "\n")
     }
