@@ -29,43 +29,51 @@ extension WhispCLI {
         print("")
         print("id\tstatus\tcached\texact_match\tcer\tpost_ms\toutput_chars\tintent_preservation\thallucination_rate")
 
-        let runOptions = BenchmarkRunOptions(
-            sourceCasesPath: options.jsonlPath,
-            datasetHash: options.datasetHash,
-            runtimeOptionsHash: options.runtimeOptionsHash,
-            evaluatorVersion: options.evaluatorVersion,
-            codeVersion: options.codeVersion,
-            candidateID: options.candidateID,
-            promptName: options.promptName,
-            generationPromptHash: effectivePromptHash,
-            requireContext: options.requireContext,
-            useCache: options.useCache,
-            llmEvalEnabled: options.llmEvalEnabled,
-            llmEvalModel: options.llmEvalModel?.rawValue,
-            llmModel: model.rawValue,
-            caseLimit: options.limit
-        )
+        func makeRunOptions(resolvedLLMEvalModel: String?) -> BenchmarkRunOptions {
+            .generation(BenchmarkGenerationRunOptions(
+                common: BenchmarkRunCommonOptions(
+                    sourceCasesPath: options.jsonlPath,
+                    datasetHash: options.datasetHash,
+                    runtimeOptionsHash: options.runtimeOptionsHash,
+                    evaluatorVersion: options.evaluatorVersion,
+                    codeVersion: options.codeVersion,
+                    caseLimit: options.limit,
+                    useCache: options.useCache
+                ),
+                candidateID: options.candidateID,
+                promptName: options.promptName,
+                generationPromptHash: effectivePromptHash,
+                requireContext: options.requireContext,
+                llmEvalEnabled: options.llmEvalEnabled,
+                llmEvalModel: resolvedLLMEvalModel ?? options.llmEvalModel?.rawValue,
+                llmModel: model.rawValue
+            ))
+        }
+
+        let initialRunOptions = makeRunOptions(resolvedLLMEvalModel: nil)
         let recorder = try BenchmarkRunRecorder(
             runID: runID,
             kind: .generation,
-            options: runOptions,
+            options: initialRunOptions,
             candidateID: options.candidateID,
             benchmarkKey: options.benchmarkKey,
-            initialMetrics: BenchmarkRunMetrics(
-                casesTotal: allCases.count,
-                casesSelected: selectedCases.count,
-                executedCases: 0,
-                skippedCases: 0,
-                failedCases: 0,
-                cachedHits: 0
-            )
+            initialMetrics: .generation(BenchmarkGenerationRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: allCases.count,
+                    casesSelected: selectedCases.count,
+                    executedCases: 0,
+                    skippedCases: 0,
+                    failedCases: 0,
+                    cachedHits: 0
+                )
+            ))
         )
 
-        for item in selectedCases {
-            try recorder.markCaseQueued(caseID: item.id)
-        }
         let accumulator = GenerationOutcomeAccumulator()
-        do {
+        let lifecycle = try await executeBenchmarkRunLifecycle(
+            selectedCases: selectedCases,
+            recorder: recorder
+        ) {
             try await runGenerationCaseBenchmarkWithWorkers(
                 runID: runID,
                 selectedCases: selectedCases,
@@ -77,57 +85,22 @@ extension WhispCLI {
             ) { outcome in
                 try await accumulator.consume(outcome, recorder: recorder)
             }
-        } catch {
-            let partial = await accumulator.snapshot()
-            let failedMetrics = makeGenerationRunMetrics(
+        } snapshotSummary: {
+            await accumulator.snapshot()
+        } makeMetrics: { summary in
+            makeGenerationRunMetrics(
                 allCasesCount: allCases.count,
                 selectedCasesCount: selectedCases.count,
-                summary: partial
+                summary: summary
             )
-            let failedRunOptions = BenchmarkRunOptions(
-                sourceCasesPath: options.jsonlPath,
-                datasetHash: options.datasetHash,
-                runtimeOptionsHash: options.runtimeOptionsHash,
-                evaluatorVersion: options.evaluatorVersion,
-                codeVersion: options.codeVersion,
-                candidateID: options.candidateID,
-                promptName: options.promptName,
-                generationPromptHash: effectivePromptHash,
-                requireContext: options.requireContext,
-                useCache: options.useCache,
-                llmEvalEnabled: options.llmEvalEnabled,
-                llmEvalModel: partial.resolvedLLMEvalModel ?? options.llmEvalModel?.rawValue,
-                llmModel: model.rawValue,
-                caseLimit: options.limit
-            )
-            _ = try? recorder.finalize(metrics: failedMetrics, options: failedRunOptions, status: .failed)
-            throw error
+        } makeRunOptions: { summary in
+            makeRunOptions(resolvedLLMEvalModel: summary.resolvedLLMEvalModel)
         }
 
-        let summary = await accumulator.snapshot()
+        let summary = lifecycle.summary
         let exactRate = summary.executed > 0 ? Double(summary.exactCount) / Double(summary.executed) : 0
-        let metrics = makeGenerationRunMetrics(
-            allCasesCount: allCases.count,
-            selectedCasesCount: selectedCases.count,
-            summary: summary
-        )
-        let finalRunOptions = BenchmarkRunOptions(
-            sourceCasesPath: options.jsonlPath,
-            datasetHash: options.datasetHash,
-            runtimeOptionsHash: options.runtimeOptionsHash,
-            evaluatorVersion: options.evaluatorVersion,
-            codeVersion: options.codeVersion,
-            candidateID: options.candidateID,
-            promptName: options.promptName,
-            generationPromptHash: effectivePromptHash,
-            requireContext: options.requireContext,
-            useCache: options.useCache,
-            llmEvalEnabled: options.llmEvalEnabled,
-            llmEvalModel: summary.resolvedLLMEvalModel ?? options.llmEvalModel?.rawValue,
-            llmModel: model.rawValue,
-            caseLimit: options.limit
-        )
-        let run = try recorder.finalize(metrics: metrics, options: finalRunOptions, status: .completed)
+        let metrics = lifecycle.metrics
+        let run = lifecycle.run
 
         print("")
         print("summary")
@@ -180,41 +153,44 @@ extension WhispCLI {
         print("")
         print("id\tstatus\toverall\tintent\thallucination\tstyle_context")
 
-        let runOptions = BenchmarkRunOptions(
-            sourceCasesPath: options.jsonlPath,
-            datasetHash: options.datasetHash,
-            runtimeOptionsHash: options.runtimeOptionsHash,
-            evaluatorVersion: options.evaluatorVersion,
-            codeVersion: options.codeVersion,
-            llmModel: "\(descriptorA.model.rawValue)|\(descriptorB.model.rawValue)",
-            caseLimit: options.limit,
-            compareMode: .pairwise,
+        let runOptions = BenchmarkRunOptions.generationPairwise(BenchmarkGenerationPairwiseRunOptions(
+            common: BenchmarkRunCommonOptions(
+                sourceCasesPath: options.jsonlPath,
+                datasetHash: options.datasetHash,
+                runtimeOptionsHash: options.runtimeOptionsHash,
+                evaluatorVersion: options.evaluatorVersion,
+                codeVersion: options.codeVersion,
+                caseLimit: options.limit
+            ),
             pairCandidateAID: descriptorA.id,
             pairCandidateBID: descriptorB.id,
-            pairJudgeModel: judgeContext.model.rawValue
-        )
+            pairJudgeModel: judgeContext.model.rawValue,
+            llmModel: "\(descriptorA.model.rawValue)|\(descriptorB.model.rawValue)"
+        ))
         let recorder = try BenchmarkRunRecorder(
             runID: runID,
             kind: .generation,
             options: runOptions,
             candidateID: nil,
             benchmarkKey: options.benchmarkKey,
-            initialMetrics: BenchmarkRunMetrics(
-                casesTotal: allCases.count,
-                casesSelected: selectedCases.count,
-                executedCases: 0,
-                skippedCases: 0,
-                failedCases: 0,
-                cachedHits: 0
-            )
+            initialMetrics: .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: allCases.count,
+                    casesSelected: selectedCases.count,
+                    executedCases: 0,
+                    skippedCases: 0,
+                    failedCases: 0,
+                    cachedHits: 0
+                ),
+                pairwiseSummary: PairwiseRunSummary()
+            ))
         )
 
-        for item in selectedCases {
-            try recorder.markCaseQueued(caseID: item.id)
-        }
-
         let accumulator = PairwiseOutcomeAccumulator()
-        do {
+        let lifecycle = try await executeBenchmarkRunLifecycle(
+            selectedCases: selectedCases,
+            recorder: recorder
+        ) {
             try await runBenchmarkCaseWorkers(
                 cases: selectedCases,
                 workers: options.benchmarkWorkers
@@ -232,24 +208,20 @@ extension WhispCLI {
             } onResult: { outcome in
                 try await accumulator.consume(outcome, recorder: recorder)
             }
-        } catch {
-            let partial = await accumulator.snapshot()
-            let failedMetrics = makeGenerationPairwiseRunMetrics(
+        } snapshotSummary: {
+            await accumulator.snapshot()
+        } makeMetrics: { summary in
+            makeGenerationPairwiseRunMetrics(
                 allCasesCount: allCases.count,
                 selectedCasesCount: selectedCases.count,
-                summary: partial
+                summary: summary
             )
-            _ = try? recorder.finalize(metrics: failedMetrics, options: runOptions, status: BenchmarkRunStatus.failed)
-            throw error
+        } makeRunOptions: { _ in
+            runOptions
         }
 
-        let summary = await accumulator.snapshot()
-        let metrics = makeGenerationPairwiseRunMetrics(
-            allCasesCount: allCases.count,
-            selectedCasesCount: selectedCases.count,
-            summary: summary
-        )
-        let run = try recorder.finalize(metrics: metrics, options: runOptions, status: BenchmarkRunStatus.completed)
+        let summary = lifecycle.summary
+        let run = lifecycle.run
 
         print("")
         print("summary")
@@ -318,10 +290,38 @@ extension WhispCLI {
             summary.cachedHits += outcome.cachedHits
             if let judgement = outcome.pairwise {
                 summary.pairwiseSummary.judgedCases += 1
-                applyWinner(&summary.pairwiseSummary.overallAWins, &summary.pairwiseSummary.overallBWins, &summary.pairwiseSummary.overallTies, judgement.overallWinner)
-                applyWinner(&summary.pairwiseSummary.intentAWins, &summary.pairwiseSummary.intentBWins, &summary.pairwiseSummary.intentTies, judgement.intentWinner)
-                applyWinner(&summary.pairwiseSummary.hallucinationAWins, &summary.pairwiseSummary.hallucinationBWins, &summary.pairwiseSummary.hallucinationTies, judgement.hallucinationWinner)
-                applyWinner(&summary.pairwiseSummary.styleContextAWins, &summary.pairwiseSummary.styleContextBWins, &summary.pairwiseSummary.styleContextTies, judgement.styleContextWinner)
+                switch judgement.overallWinner {
+                case .a:
+                    summary.pairwiseSummary.overallAWins += 1
+                case .b:
+                    summary.pairwiseSummary.overallBWins += 1
+                case .tie:
+                    summary.pairwiseSummary.overallTies += 1
+                }
+                switch judgement.intentWinner {
+                case .a:
+                    summary.pairwiseSummary.intentAWins += 1
+                case .b:
+                    summary.pairwiseSummary.intentBWins += 1
+                case .tie:
+                    summary.pairwiseSummary.intentTies += 1
+                }
+                switch judgement.hallucinationWinner {
+                case .a:
+                    summary.pairwiseSummary.hallucinationAWins += 1
+                case .b:
+                    summary.pairwiseSummary.hallucinationBWins += 1
+                case .tie:
+                    summary.pairwiseSummary.hallucinationTies += 1
+                }
+                switch judgement.styleContextWinner {
+                case .a:
+                    summary.pairwiseSummary.styleContextAWins += 1
+                case .b:
+                    summary.pairwiseSummary.styleContextBWins += 1
+                case .tie:
+                    summary.pairwiseSummary.styleContextTies += 1
+                }
             }
             if outcome.judgeError {
                 summary.pairwiseSummary.judgeErrorCases += 1
@@ -720,7 +720,7 @@ extension WhispCLI {
                 model: descriptor.model.rawValue,
                 output: result.text,
                 postMs: postMs,
-                createdAt: ISO8601DateFormatter().string(from: Date())
+                createdAt: WhispTime.isoNow()
             )
             try saveCacheEntry(component: "generation", key: cacheKey, value: cache)
         }
@@ -882,26 +882,17 @@ extension WhispCLI {
         selectedCasesCount: Int,
         summary: PairwiseOutcomeSummary
     ) -> BenchmarkRunMetrics {
-        BenchmarkRunMetrics(
-            casesTotal: allCasesCount,
-            casesSelected: selectedCasesCount,
-            executedCases: summary.executed,
-            skippedCases: summary.skipped,
-            failedCases: summary.failed,
-            cachedHits: summary.cachedHits,
+        .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(
+            counts: BenchmarkRunCounts(
+                casesTotal: allCasesCount,
+                casesSelected: selectedCasesCount,
+                executedCases: summary.executed,
+                skippedCases: summary.skipped,
+                failedCases: summary.failed,
+                cachedHits: summary.cachedHits
+            ),
             pairwiseSummary: summary.pairwiseSummary
-        )
-    }
-
-    private static func applyWinner(_ aWins: inout Int, _ bWins: inout Int, _ ties: inout Int, _ winner: PairwiseWinner) {
-        switch winner {
-        case .a:
-            aWins += 1
-        case .b:
-            bWins += 1
-        case .tie:
-            ties += 1
-        }
+        ))
     }
 
     private struct GenerationCaseIOWrite: Sendable {
@@ -1006,27 +997,23 @@ extension WhispCLI {
     ) -> BenchmarkRunMetrics {
         let exactRate = summary.executed > 0 ? Double(summary.exactCount) / Double(summary.executed) : 0
         let postDistribution = latencyDistribution(values: summary.postLatencies)
-        return BenchmarkRunMetrics(
-            casesTotal: allCasesCount,
-            casesSelected: selectedCasesCount,
-            executedCases: summary.executed,
-            skippedCases: summary.skipped,
-            failedCases: summary.failed,
-            cachedHits: summary.cachedHits,
+        return .generation(BenchmarkGenerationRunMetrics(
+            counts: BenchmarkRunCounts(
+                casesTotal: allCasesCount,
+                casesSelected: selectedCasesCount,
+                executedCases: summary.executed,
+                skippedCases: summary.skipped,
+                failedCases: summary.failed,
+                cachedHits: summary.cachedHits
+            ),
             exactMatchRate: exactRate,
             avgCER: summary.cerValues.isEmpty ? nil : summary.cerValues.reduce(0, +) / Double(summary.cerValues.count),
             weightedCER: summary.totalRefChars > 0 ? Double(summary.totalEdits) / Double(summary.totalRefChars) : nil,
-            avgTermsF1: nil,
-            intentMatchRate: nil,
-            intentAvgScore: nil,
             intentPreservationScore: summary.intentPreservationValues.isEmpty ? nil : summary.intentPreservationValues.reduce(0, +) / Double(summary.intentPreservationValues.count),
             hallucinationScore: summary.hallucinationScoreValues.isEmpty ? nil : summary.hallucinationScoreValues.reduce(0, +) / Double(summary.hallucinationScoreValues.count),
             hallucinationRate: summary.hallucinationRateValues.isEmpty ? nil : summary.hallucinationRateValues.reduce(0, +) / Double(summary.hallucinationRateValues.count),
-            latencyMs: nil,
-            afterStopLatencyMs: nil,
-            postLatencyMs: toBenchmarkLatencyDistribution(postDistribution),
-            totalAfterStopLatencyMs: nil
-        )
+            postLatencyMs: toBenchmarkLatencyDistribution(postDistribution)
+        ))
     }
 
     private static func runGenerationCaseBenchmarkWithWorkers(
@@ -1068,59 +1055,21 @@ extension WhispCLI {
         let caseStartedAtMs = nowEpochMs()
 
         guard let input = item.resolvedGenerationInputSTT() else {
-            let status: BenchmarkCaseStatus = .skipped
-            let result = BenchmarkCaseResult(
-                id: item.id,
-                status: status,
+            let artifacts = makeSkippedCaseArtifacts(
+                runID: runID,
+                caseID: item.id,
+                caseStartedAtMs: caseStartedAtMs,
                 reason: "stt入力がありません",
-                cache: BenchmarkCacheRecord(hit: false, namespace: "generation"),
+                cacheNamespace: "generation",
                 sources: BenchmarkReferenceSources(),
-                contextUsed: item.context != nil,
-                visionImageAttached: item.visionImageFile != nil,
-                metrics: BenchmarkCaseMetrics()
+                contextPresent: item.context != nil,
+                visionImagePresent: item.visionImageFile != nil,
+                audioFilePath: item.audioFile
             )
-            let loadEndedAtMs = nowEpochMs()
-            let events: [BenchmarkCaseEvent] = [
-                .loadCase(BenchmarkLoadCaseLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    ),
-                    sources: BenchmarkReferenceSources(),
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )),
-                .aggregate(BenchmarkAggregateLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: .skipped,
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    ),
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )),
-            ]
             return GenerationCaseWorkerOutcome(
                 displayLine: "\(item.id)\tskipped_missing_input_stt\tfalse\t-\t-\t-\t-",
-                result: result,
-                events: events,
+                result: artifacts.result,
+                events: artifacts.events,
                 ioWrites: [],
                 executed: 0,
                 skipped: 1,
@@ -1141,60 +1090,22 @@ extension WhispCLI {
             )
         }
         guard let reference = item.resolvedGenerationReferenceText() else {
-            let status: BenchmarkCaseStatus = .skipped
             let sources = BenchmarkReferenceSources(input: input.source)
-            let result = BenchmarkCaseResult(
-                id: item.id,
-                status: status,
+            let artifacts = makeSkippedCaseArtifacts(
+                runID: runID,
+                caseID: item.id,
+                caseStartedAtMs: caseStartedAtMs,
                 reason: "参照テキストがありません",
-                cache: BenchmarkCacheRecord(hit: false, namespace: "generation"),
+                cacheNamespace: "generation",
                 sources: sources,
-                contextUsed: item.context != nil,
-                visionImageAttached: item.visionImageFile != nil,
-                metrics: BenchmarkCaseMetrics()
+                contextPresent: item.context != nil,
+                visionImagePresent: item.visionImageFile != nil,
+                audioFilePath: item.audioFile
             )
-            let loadEndedAtMs = nowEpochMs()
-            let events: [BenchmarkCaseEvent] = [
-                .loadCase(BenchmarkLoadCaseLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    ),
-                    sources: sources,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )),
-                .aggregate(BenchmarkAggregateLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: .skipped,
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    ),
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )),
-            ]
             return GenerationCaseWorkerOutcome(
                 displayLine: "\(item.id)\tskipped_missing_reference\tfalse\t-\t-\t-\t-",
-                result: result,
-                events: events,
+                result: artifacts.result,
+                events: artifacts.events,
                 ioWrites: [],
                 executed: 0,
                 skipped: 1,
@@ -1215,60 +1126,22 @@ extension WhispCLI {
             )
         }
         if options.requireContext, item.context == nil {
-            let status: BenchmarkCaseStatus = .skipped
             let sources = BenchmarkReferenceSources(input: input.source, reference: reference.source)
-            let result = BenchmarkCaseResult(
-                id: item.id,
-                status: status,
+            let artifacts = makeSkippedCaseArtifacts(
+                runID: runID,
+                caseID: item.id,
+                caseStartedAtMs: caseStartedAtMs,
                 reason: "--require-context が指定されています",
-                cache: BenchmarkCacheRecord(hit: false, namespace: "generation"),
+                cacheNamespace: "generation",
                 sources: sources,
-                contextUsed: false,
-                visionImageAttached: item.visionImageFile != nil,
-                metrics: BenchmarkCaseMetrics()
+                contextPresent: false,
+                visionImagePresent: item.visionImageFile != nil,
+                audioFilePath: item.audioFile
             )
-            let loadEndedAtMs = nowEpochMs()
-            let events: [BenchmarkCaseEvent] = [
-                .loadCase(BenchmarkLoadCaseLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    ),
-                    sources: sources,
-                    contextPresent: false,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )),
-                .aggregate(BenchmarkAggregateLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: .skipped,
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    ),
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )),
-            ]
             return GenerationCaseWorkerOutcome(
                 displayLine: "\(item.id)\tskipped_missing_context\tfalse\t-\t-\t-\t-",
-                result: result,
-                events: events,
+                result: artifacts.result,
+                events: artifacts.events,
                 ioWrites: [],
                 executed: 0,
                 skipped: 1,
@@ -1340,7 +1213,7 @@ extension WhispCLI {
                         model: model.rawValue,
                         output: result.text,
                         postMs: postMs,
-                        createdAt: ISO8601DateFormatter().string(from: Date())
+                        createdAt: WhispTime.isoNow()
                     )
                     try saveCacheEntry(component: "generation", key: cacheKey, value: cache)
                 }

@@ -67,12 +67,14 @@ final class BenchmarkEventCodableTests: XCTestCase {
     }
 
     func testRunOptionsCodableRoundtripIncludesExecutionProfile() throws {
-        let options = BenchmarkRunOptions(
-            sourceCasesPath: "/tmp/cases.jsonl",
-            sttExecutionProfile: "file_replay_realtime",
-            datasetHash: "hash",
-            runtimeOptionsHash: "runtime"
-        )
+        let options = BenchmarkRunOptions.stt(BenchmarkSTTRunOptions(
+            common: BenchmarkRunCommonOptions(
+                sourceCasesPath: "/tmp/cases.jsonl",
+                datasetHash: "hash",
+                runtimeOptionsHash: "runtime"
+            ),
+            sttExecutionProfile: "file_replay_realtime"
+        ))
 
         let data = try JSONEncoder().encode(options)
         let decoded = try JSONDecoder().decode(BenchmarkRunOptions.self, from: data)

@@ -239,14 +239,14 @@ final class CLICommandTests: XCTestCase {
     func testParseBenchmarkCompareOptions() throws {
         let options = try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation",
+            "--task", "generation-battle",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",
             "--judge-model", "gpt-5-nano",
             "--force",
         ])
-        XCTAssertEqual(options.task, .generation)
+        XCTAssertEqual(options.task, .generationBattle)
         XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
         XCTAssertEqual(options.candidateIDs, ["gen-a", "gen-b"])
         XCTAssertEqual(options.judgeModel, .gpt5Nano)
@@ -254,7 +254,7 @@ final class CLICommandTests: XCTestCase {
 
         XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "vision",
+            "--task", "stt",
             "--candidate-id", "x",
         ]))
     }
@@ -262,14 +262,14 @@ final class CLICommandTests: XCTestCase {
     func testParseBenchmarkCompareOptionsRequiresTwoGenerationCandidates() {
         XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation",
+            "--task", "generation-battle",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
         ]))
 
         XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation",
+            "--task", "generation-battle",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",
@@ -280,7 +280,7 @@ final class CLICommandTests: XCTestCase {
     func testParseBenchmarkCompareOptionsRejectsInvalidJudgeModel() {
         XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation",
+            "--task", "generation-battle",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",

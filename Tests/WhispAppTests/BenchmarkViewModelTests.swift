@@ -40,12 +40,14 @@ final class BenchmarkViewModelTests: XCTestCase {
             status: .completed,
             createdAt: now,
             updatedAt: now,
-            options: BenchmarkRunOptions(
-                sourceCasesPath: casesPath.path,
-                datasetHash: "hash-a",
+            options: .stt(BenchmarkSTTRunOptions(
+                common: BenchmarkRunCommonOptions(
+                    sourceCasesPath: casesPath.path,
+                    datasetHash: "hash-a"
+                ),
                 candidateID: candidate.id,
                 sttMode: "stream"
-            ),
+            )),
             candidateID: candidate.id,
             benchmarkKey: BenchmarkKey(
                 task: .stt,
@@ -56,18 +58,20 @@ final class BenchmarkViewModelTests: XCTestCase {
                 evaluatorVersion: "v1",
                 codeVersion: "dev"
             ),
-            metrics: BenchmarkRunMetrics(
-                casesTotal: 10,
-                casesSelected: 10,
-                executedCases: 8,
-                skippedCases: 1,
-                failedCases: 1,
-                cachedHits: 2,
+            metrics: .stt(BenchmarkSTTRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: 10,
+                    casesSelected: 10,
+                    executedCases: 8,
+                    skippedCases: 1,
+                    failedCases: 1,
+                    cachedHits: 2
+                ),
                 avgCER: 0.12,
                 weightedCER: 0.2,
                 latencyMs: BenchmarkLatencyDistribution(avg: 120, p50: 110, p95: 180, p99: 220),
                 afterStopLatencyMs: BenchmarkLatencyDistribution(avg: 55, p50: 48, p95: 90, p99: 120)
-            ),
+            )),
             paths: paths
         )
         try store.saveRun(run)
@@ -197,13 +201,15 @@ final class BenchmarkViewModelTests: XCTestCase {
             status: .completed,
             createdAt: now,
             updatedAt: now,
-            options: BenchmarkRunOptions(
-                sourceCasesPath: casesPath.path,
-                sttExecutionProfile: "file_replay_realtime",
-                datasetHash: "hash-a",
+            options: .stt(BenchmarkSTTRunOptions(
+                common: BenchmarkRunCommonOptions(
+                    sourceCasesPath: casesPath.path,
+                    datasetHash: "hash-a"
+                ),
                 candidateID: candidate.id,
+                sttExecutionProfile: "file_replay_realtime",
                 sttMode: "stream"
-            ),
+            )),
             candidateID: candidate.id,
             benchmarkKey: BenchmarkKey(
                 task: .stt,
@@ -214,14 +220,16 @@ final class BenchmarkViewModelTests: XCTestCase {
                 evaluatorVersion: "v1",
                 codeVersion: "dev"
             ),
-            metrics: BenchmarkRunMetrics(
-                casesTotal: 1,
-                casesSelected: 1,
-                executedCases: 1,
-                skippedCases: 0,
-                failedCases: 0,
-                cachedHits: 0
-            ),
+            metrics: .stt(BenchmarkSTTRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: 1,
+                    casesSelected: 1,
+                    executedCases: 1,
+                    skippedCases: 0,
+                    failedCases: 0,
+                    cachedHits: 0
+                )
+            )),
             paths: paths
         )
         try store.saveRun(run)
@@ -320,7 +328,10 @@ final class BenchmarkViewModelTests: XCTestCase {
                 status: .completed,
                 createdAt: now,
                 updatedAt: now,
-                options: BenchmarkRunOptions(sourceCasesPath: casesPath.path, candidateID: candidate.id),
+                options: .stt(BenchmarkSTTRunOptions(
+                    common: BenchmarkRunCommonOptions(sourceCasesPath: casesPath.path),
+                    candidateID: candidate.id
+                )),
                 candidateID: candidate.id,
                 benchmarkKey: BenchmarkKey(
                     task: .stt,
@@ -331,13 +342,15 @@ final class BenchmarkViewModelTests: XCTestCase {
                     evaluatorVersion: "v1",
                     codeVersion: "dev"
                 ),
-                metrics: BenchmarkRunMetrics(
-                    casesTotal: 1,
-                    casesSelected: 1,
-                    executedCases: 1,
-                    skippedCases: 0,
-                    failedCases: 0
-                ),
+                metrics: .stt(BenchmarkSTTRunMetrics(
+                    counts: BenchmarkRunCounts(
+                        casesTotal: 1,
+                        casesSelected: 1,
+                        executedCases: 1,
+                        skippedCases: 0,
+                        failedCases: 0
+                    )
+                )),
                 paths: paths
             )
         )
@@ -566,17 +579,18 @@ final class BenchmarkViewModelTests: XCTestCase {
                 status: .completed,
                 createdAt: now,
                 updatedAt: now,
-                options: BenchmarkRunOptions(
-                    sourceCasesPath: casesPath.path,
-                    datasetHash: "hash-pair",
-                    runtimeOptionsHash: "runtime-pair",
-                    evaluatorVersion: "pairwise-v1",
-                    codeVersion: "dev",
-                    compareMode: .pairwise,
+                options: .generationPairwise(BenchmarkGenerationPairwiseRunOptions(
+                    common: BenchmarkRunCommonOptions(
+                        sourceCasesPath: casesPath.path,
+                        datasetHash: "hash-pair",
+                        runtimeOptionsHash: "runtime-pair",
+                        evaluatorVersion: "pairwise-v1",
+                        codeVersion: "dev"
+                    ),
                     pairCandidateAID: candidateA.id,
                     pairCandidateBID: candidateB.id,
                     pairJudgeModel: "gpt-5-nano"
-                ),
+                )),
                 benchmarkKey: BenchmarkKey(
                     task: .generation,
                     datasetPath: casesPath.path,
@@ -586,12 +600,14 @@ final class BenchmarkViewModelTests: XCTestCase {
                     evaluatorVersion: "pairwise-v1",
                     codeVersion: "dev"
                 ),
-                metrics: BenchmarkRunMetrics(
-                    casesTotal: 1,
-                    casesSelected: 1,
-                    executedCases: 1,
-                    skippedCases: 0,
-                    failedCases: 0,
+                metrics: .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(
+                    counts: BenchmarkRunCounts(
+                        casesTotal: 1,
+                        casesSelected: 1,
+                        executedCases: 1,
+                        skippedCases: 0,
+                        failedCases: 0
+                    ),
                     pairwiseSummary: PairwiseRunSummary(
                         judgedCases: 1,
                         judgeErrorCases: 0,
@@ -608,7 +624,7 @@ final class BenchmarkViewModelTests: XCTestCase {
                         styleContextBWins: 0,
                         styleContextTies: 1
                     )
-                ),
+                )),
                 paths: paths
             )
         )
@@ -639,6 +655,7 @@ final class BenchmarkViewModelTests: XCTestCase {
         )
         _ = try store.writeCaseIOText(runID: runID, caseID: "case-1", fileName: "output_generation_a.txt", text: "A output")
         _ = try store.writeCaseIOText(runID: runID, caseID: "case-1", fileName: "output_generation_b.txt", text: "B output")
+        _ = try store.writeCaseIOText(runID: runID, caseID: "case-1", fileName: "input_stt.txt", text: "STT入力テキスト")
 
         let viewModel = BenchmarkViewModel(
             store: store,
@@ -662,6 +679,7 @@ final class BenchmarkViewModelTests: XCTestCase {
         XCTAssertEqual(detail.intentReason, "Aは依頼意図を維持")
         XCTAssertEqual(detail.hallucinationReason, "Bは不要な補完が少ない")
         XCTAssertEqual(detail.styleContextReason, "文体は同等")
+        XCTAssertEqual(detail.sttText, "STT入力テキスト")
         XCTAssertEqual(detail.outputA, "A output")
         XCTAssertEqual(detail.outputB, "B output")
     }
@@ -709,21 +727,22 @@ final class BenchmarkViewModelTests: XCTestCase {
                 status: .completed,
                 createdAt: "2026-02-12T10:00:00.000Z",
                 updatedAt: "2026-02-12T10:00:00.000Z",
-                options: BenchmarkRunOptions(
-                    sourceCasesPath: casesPath.path,
-                    compareMode: .pairwise,
+                options: .generationPairwise(BenchmarkGenerationPairwiseRunOptions(
+                    common: BenchmarkRunCommonOptions(sourceCasesPath: casesPath.path),
                     pairCandidateAID: candidateA.id,
                     pairCandidateBID: candidateB.id,
                     pairJudgeModel: LLMModel.gemini25FlashLite.rawValue
-                ),
-                metrics: BenchmarkRunMetrics(
-                    casesTotal: 1,
-                    casesSelected: 1,
-                    executedCases: 1,
-                    skippedCases: 0,
-                    failedCases: 0,
+                )),
+                metrics: .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(
+                    counts: BenchmarkRunCounts(
+                        casesTotal: 1,
+                        casesSelected: 1,
+                        executedCases: 1,
+                        skippedCases: 0,
+                        failedCases: 0
+                    ),
                     pairwiseSummary: PairwiseRunSummary(overallAWins: 1)
-                ),
+                )),
                 paths: store.resolveRunPaths(runID: geminiRunID)
             )
         )
@@ -736,21 +755,22 @@ final class BenchmarkViewModelTests: XCTestCase {
                 status: .completed,
                 createdAt: "2026-02-12T10:05:00.000Z",
                 updatedAt: "2026-02-12T10:05:00.000Z",
-                options: BenchmarkRunOptions(
-                    sourceCasesPath: casesPath.path,
-                    compareMode: .pairwise,
+                options: .generationPairwise(BenchmarkGenerationPairwiseRunOptions(
+                    common: BenchmarkRunCommonOptions(sourceCasesPath: casesPath.path),
                     pairCandidateAID: candidateA.id,
                     pairCandidateBID: candidateB.id,
                     pairJudgeModel: LLMModel.gpt5Nano.rawValue
-                ),
-                metrics: BenchmarkRunMetrics(
-                    casesTotal: 1,
-                    casesSelected: 1,
-                    executedCases: 1,
-                    skippedCases: 0,
-                    failedCases: 0,
+                )),
+                metrics: .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(
+                    counts: BenchmarkRunCounts(
+                        casesTotal: 1,
+                        casesSelected: 1,
+                        executedCases: 1,
+                        skippedCases: 0,
+                        failedCases: 0
+                    ),
                     pairwiseSummary: PairwiseRunSummary(overallBWins: 1)
-                ),
+                )),
                 paths: store.resolveRunPaths(runID: gptRunID)
             )
         )

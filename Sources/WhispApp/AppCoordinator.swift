@@ -232,7 +232,7 @@ final class AppCoordinator {
                 "stt_streaming": String(run.sttStreaming),
                 "accessibility_summary_started": String(run.accessibilitySummaryStarted),
                 "log_file": DevLog.filePath ?? "n/a",
-                "recording_started_at_ms": epochMsString(startedAtDate),
+                "recording_started_at_ms": WhispTime.epochMsString(startedAtDate),
             ])
             _ = outputService.playStartSound()
         } catch {
@@ -271,7 +271,7 @@ final class AppCoordinator {
         let recordingStopFields: [String: String] = [
             "pcm_bytes": String(result.pcmData.count),
             "sample_rate": String(result.sampleRate),
-            "recording_stopped_at_ms": epochMsString(stoppedAtDate),
+            "recording_stopped_at_ms": WhispTime.epochMsString(stoppedAtDate),
         ]
         devLog("recording_stop", runID: run.id, fields: recordingStopFields)
 
@@ -422,10 +422,6 @@ final class AppCoordinator {
     private func notifyError(_ message: String) {
         print("[warn] \(message)")
         onError?(message)
-    }
-
-    private func epochMsString(_ date: Date) -> String {
-        String(format: "%.3f", date.timeIntervalSince1970 * 1000)
     }
 
     private func pipelineLogger(runID: String, captureID: String?) -> PipelineEventLogger {

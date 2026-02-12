@@ -412,95 +412,322 @@ public struct BenchmarkCostBreakdown: Codable, Equatable, Sendable {
     }
 }
 
-public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
+public struct BenchmarkRunCommonOptions: Codable, Equatable, Sendable {
     public var sourceCasesPath: String
-    public var sttExecutionProfile: String?
     public var datasetHash: String?
     public var runtimeOptionsHash: String?
     public var evaluatorVersion: String?
     public var codeVersion: String?
-    public var candidateID: String?
-    public var promptName: String?
-    public var generationPromptHash: String?
-    public var sttMode: String?
-    public var chunkMs: Int?
-    public var realtime: Bool?
-    public var requireContext: Bool?
-    public var minAudioSeconds: Double?
-    public var minLabelConfidence: Double?
-    public var useCache: Bool?
-    public var intentSource: String?
-    public var intentJudgeEnabled: Bool?
-    public var intentJudgeModel: String?
-    public var llmEvalEnabled: Bool?
-    public var llmEvalModel: String?
-    public var llmModel: String?
     public var caseLimit: Int?
-    public var compareMode: BenchmarkCompareMode?
-    public var pairCandidateAID: String?
-    public var pairCandidateBID: String?
-    public var pairJudgeModel: String?
+    public var useCache: Bool?
 
     public init(
         sourceCasesPath: String,
-        sttExecutionProfile: String? = nil,
         datasetHash: String? = nil,
         runtimeOptionsHash: String? = nil,
         evaluatorVersion: String? = nil,
         codeVersion: String? = nil,
-        candidateID: String? = nil,
-        promptName: String? = nil,
-        generationPromptHash: String? = nil,
-        sttMode: String? = nil,
-        chunkMs: Int? = nil,
-        realtime: Bool? = nil,
-        requireContext: Bool? = nil,
-        minAudioSeconds: Double? = nil,
-        minLabelConfidence: Double? = nil,
-        useCache: Bool? = nil,
-        intentSource: String? = nil,
-        intentJudgeEnabled: Bool? = nil,
-        intentJudgeModel: String? = nil,
-        llmEvalEnabled: Bool? = nil,
-        llmEvalModel: String? = nil,
-        llmModel: String? = nil,
         caseLimit: Int? = nil,
-        compareMode: BenchmarkCompareMode? = nil,
-        pairCandidateAID: String? = nil,
-        pairCandidateBID: String? = nil,
-        pairJudgeModel: String? = nil
+        useCache: Bool? = nil
     ) {
         self.sourceCasesPath = sourceCasesPath
-        self.sttExecutionProfile = sttExecutionProfile
         self.datasetHash = datasetHash
         self.runtimeOptionsHash = runtimeOptionsHash
         self.evaluatorVersion = evaluatorVersion
         self.codeVersion = codeVersion
-        self.candidateID = candidateID
-        self.promptName = promptName
-        self.generationPromptHash = generationPromptHash
-        self.sttMode = sttMode
-        self.chunkMs = chunkMs
-        self.realtime = realtime
-        self.requireContext = requireContext
-        self.minAudioSeconds = minAudioSeconds
-        self.minLabelConfidence = minLabelConfidence
-        self.useCache = useCache
-        self.intentSource = intentSource
-        self.intentJudgeEnabled = intentJudgeEnabled
-        self.intentJudgeModel = intentJudgeModel
-        self.llmEvalEnabled = llmEvalEnabled
-        self.llmEvalModel = llmEvalModel
-        self.llmModel = llmModel
         self.caseLimit = caseLimit
-        self.compareMode = compareMode
-        self.pairCandidateAID = pairCandidateAID
-        self.pairCandidateBID = pairCandidateBID
-        self.pairJudgeModel = pairJudgeModel
+        self.useCache = useCache
     }
 }
 
-public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
+public struct BenchmarkSTTRunOptions: Codable, Equatable, Sendable {
+    public var common: BenchmarkRunCommonOptions
+    public var candidateID: String?
+    public var sttExecutionProfile: String?
+    public var sttMode: String?
+    public var chunkMs: Int?
+    public var realtime: Bool?
+    public var minAudioSeconds: Double?
+
+    public init(
+        common: BenchmarkRunCommonOptions,
+        candidateID: String? = nil,
+        sttExecutionProfile: String? = nil,
+        sttMode: String? = nil,
+        chunkMs: Int? = nil,
+        realtime: Bool? = nil,
+        minAudioSeconds: Double? = nil
+    ) {
+        self.common = common
+        self.candidateID = candidateID
+        self.sttExecutionProfile = sttExecutionProfile
+        self.sttMode = sttMode
+        self.chunkMs = chunkMs
+        self.realtime = realtime
+        self.minAudioSeconds = minAudioSeconds
+    }
+}
+
+public struct BenchmarkGenerationRunOptions: Codable, Equatable, Sendable {
+    public var common: BenchmarkRunCommonOptions
+    public var candidateID: String?
+    public var promptName: String?
+    public var generationPromptHash: String?
+    public var requireContext: Bool?
+    public var llmEvalEnabled: Bool?
+    public var llmEvalModel: String?
+    public var llmModel: String?
+
+    public init(
+        common: BenchmarkRunCommonOptions,
+        candidateID: String? = nil,
+        promptName: String? = nil,
+        generationPromptHash: String? = nil,
+        requireContext: Bool? = nil,
+        llmEvalEnabled: Bool? = nil,
+        llmEvalModel: String? = nil,
+        llmModel: String? = nil
+    ) {
+        self.common = common
+        self.candidateID = candidateID
+        self.promptName = promptName
+        self.generationPromptHash = generationPromptHash
+        self.requireContext = requireContext
+        self.llmEvalEnabled = llmEvalEnabled
+        self.llmEvalModel = llmEvalModel
+        self.llmModel = llmModel
+    }
+}
+
+public struct BenchmarkGenerationPairwiseRunOptions: Codable, Equatable, Sendable {
+    public var common: BenchmarkRunCommonOptions
+    public var pairCandidateAID: String
+    public var pairCandidateBID: String
+    public var pairJudgeModel: String
+    public var llmModel: String?
+
+    public init(
+        common: BenchmarkRunCommonOptions,
+        pairCandidateAID: String,
+        pairCandidateBID: String,
+        pairJudgeModel: String,
+        llmModel: String? = nil
+    ) {
+        self.common = common
+        self.pairCandidateAID = pairCandidateAID
+        self.pairCandidateBID = pairCandidateBID
+        self.pairJudgeModel = pairJudgeModel
+        self.llmModel = llmModel
+    }
+}
+
+public struct BenchmarkVisionRunOptions: Codable, Equatable, Sendable {
+    public var common: BenchmarkRunCommonOptions
+
+    public init(common: BenchmarkRunCommonOptions) {
+        self.common = common
+    }
+}
+
+public enum BenchmarkRunOptions: Codable, Equatable, Sendable {
+    case stt(BenchmarkSTTRunOptions)
+    case generation(BenchmarkGenerationRunOptions)
+    case generationPairwise(BenchmarkGenerationPairwiseRunOptions)
+    case vision(BenchmarkVisionRunOptions)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case stt
+        case generation
+        case generationPairwise
+        case vision
+    }
+
+    private enum Kind: String, Codable {
+        case stt
+        case generation
+        case generationPairwise = "generation_pairwise"
+        case vision
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(Kind.self, forKey: .kind)
+        switch kind {
+        case .stt:
+            self = .stt(try container.decode(BenchmarkSTTRunOptions.self, forKey: .stt))
+        case .generation:
+            self = .generation(try container.decode(BenchmarkGenerationRunOptions.self, forKey: .generation))
+        case .generationPairwise:
+            self = .generationPairwise(try container.decode(BenchmarkGenerationPairwiseRunOptions.self, forKey: .generationPairwise))
+        case .vision:
+            self = .vision(try container.decode(BenchmarkVisionRunOptions.self, forKey: .vision))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .stt(value):
+            try container.encode(Kind.stt, forKey: .kind)
+            try container.encode(value, forKey: .stt)
+        case let .generation(value):
+            try container.encode(Kind.generation, forKey: .kind)
+            try container.encode(value, forKey: .generation)
+        case let .generationPairwise(value):
+            try container.encode(Kind.generationPairwise, forKey: .kind)
+            try container.encode(value, forKey: .generationPairwise)
+        case let .vision(value):
+            try container.encode(Kind.vision, forKey: .kind)
+            try container.encode(value, forKey: .vision)
+        }
+    }
+
+    public var common: BenchmarkRunCommonOptions {
+        switch self {
+        case let .stt(value):
+            return value.common
+        case let .generation(value):
+            return value.common
+        case let .generationPairwise(value):
+            return value.common
+        case let .vision(value):
+            return value.common
+        }
+    }
+
+    public var sourceCasesPath: String { common.sourceCasesPath }
+    public var datasetHash: String? { common.datasetHash }
+    public var runtimeOptionsHash: String? { common.runtimeOptionsHash }
+    public var evaluatorVersion: String? { common.evaluatorVersion }
+    public var codeVersion: String? { common.codeVersion }
+    public var caseLimit: Int? { common.caseLimit }
+    public var useCache: Bool? { common.useCache }
+
+    public var sttExecutionProfile: String? {
+        if case let .stt(value) = self {
+            return value.sttExecutionProfile
+        }
+        return nil
+    }
+
+    public var candidateID: String? {
+        switch self {
+        case let .stt(value):
+            return value.candidateID
+        case let .generation(value):
+            return value.candidateID
+        case .generationPairwise, .vision:
+            return nil
+        }
+    }
+
+    public var promptName: String? {
+        if case let .generation(value) = self {
+            return value.promptName
+        }
+        return nil
+    }
+
+    public var generationPromptHash: String? {
+        if case let .generation(value) = self {
+            return value.generationPromptHash
+        }
+        return nil
+    }
+
+    public var sttMode: String? {
+        if case let .stt(value) = self {
+            return value.sttMode
+        }
+        return nil
+    }
+
+    public var chunkMs: Int? {
+        if case let .stt(value) = self {
+            return value.chunkMs
+        }
+        return nil
+    }
+
+    public var realtime: Bool? {
+        if case let .stt(value) = self {
+            return value.realtime
+        }
+        return nil
+    }
+
+    public var requireContext: Bool? {
+        if case let .generation(value) = self {
+            return value.requireContext
+        }
+        return nil
+    }
+
+    public var minAudioSeconds: Double? {
+        if case let .stt(value) = self {
+            return value.minAudioSeconds
+        }
+        return nil
+    }
+
+    public var llmEvalEnabled: Bool? {
+        if case let .generation(value) = self {
+            return value.llmEvalEnabled
+        }
+        return nil
+    }
+
+    public var llmEvalModel: String? {
+        if case let .generation(value) = self {
+            return value.llmEvalModel
+        }
+        return nil
+    }
+
+    public var llmModel: String? {
+        switch self {
+        case let .generation(value):
+            return value.llmModel
+        case let .generationPairwise(value):
+            return value.llmModel
+        case .stt, .vision:
+            return nil
+        }
+    }
+
+    public var compareMode: BenchmarkCompareMode? {
+        switch self {
+        case .generationPairwise:
+            return .pairwise
+        case .stt, .generation, .vision:
+            return nil
+        }
+    }
+
+    public var pairCandidateAID: String? {
+        if case let .generationPairwise(value) = self {
+            return value.pairCandidateAID
+        }
+        return nil
+    }
+
+    public var pairCandidateBID: String? {
+        if case let .generationPairwise(value) = self {
+            return value.pairCandidateBID
+        }
+        return nil
+    }
+
+    public var pairJudgeModel: String? {
+        if case let .generationPairwise(value) = self {
+            return value.pairJudgeModel
+        }
+        return nil
+    }
+}
+
+public struct BenchmarkRunCounts: Codable, Equatable, Sendable {
     public var casesTotal: Int
     public var casesSelected: Int
     public var executedCases: Int
@@ -508,45 +735,13 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
     public var failedCases: Int
     public var cachedHits: Int
 
-    public var exactMatchRate: Double?
-    public var avgCER: Double?
-    public var weightedCER: Double?
-    public var avgTermsF1: Double?
-    public var intentMatchRate: Double?
-    public var intentAvgScore: Double?
-    public var intentPreservationScore: Double?
-    public var hallucinationScore: Double?
-    public var hallucinationRate: Double?
-
-    public var latencyMs: BenchmarkLatencyDistribution?
-    public var afterStopLatencyMs: BenchmarkLatencyDistribution?
-    public var postLatencyMs: BenchmarkLatencyDistribution?
-    public var totalAfterStopLatencyMs: BenchmarkLatencyDistribution?
-    public var cost: BenchmarkCostBreakdown?
-    public var pairwiseSummary: PairwiseRunSummary?
-
     public init(
         casesTotal: Int,
         casesSelected: Int,
         executedCases: Int,
         skippedCases: Int,
         failedCases: Int,
-        cachedHits: Int = 0,
-        exactMatchRate: Double? = nil,
-        avgCER: Double? = nil,
-        weightedCER: Double? = nil,
-        avgTermsF1: Double? = nil,
-        intentMatchRate: Double? = nil,
-        intentAvgScore: Double? = nil,
-        intentPreservationScore: Double? = nil,
-        hallucinationScore: Double? = nil,
-        hallucinationRate: Double? = nil,
-        latencyMs: BenchmarkLatencyDistribution? = nil,
-        afterStopLatencyMs: BenchmarkLatencyDistribution? = nil,
-        postLatencyMs: BenchmarkLatencyDistribution? = nil,
-        totalAfterStopLatencyMs: BenchmarkLatencyDistribution? = nil,
-        cost: BenchmarkCostBreakdown? = nil,
-        pairwiseSummary: PairwiseRunSummary? = nil
+        cachedHits: Int = 0
     ) {
         self.casesTotal = casesTotal
         self.casesSelected = casesSelected
@@ -554,21 +749,261 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
         self.skippedCases = skippedCases
         self.failedCases = failedCases
         self.cachedHits = cachedHits
+    }
+}
+
+public struct BenchmarkSTTRunMetrics: Codable, Equatable, Sendable {
+    public var counts: BenchmarkRunCounts
+    public var exactMatchRate: Double?
+    public var avgCER: Double?
+    public var weightedCER: Double?
+    public var latencyMs: BenchmarkLatencyDistribution?
+    public var afterStopLatencyMs: BenchmarkLatencyDistribution?
+
+    public init(
+        counts: BenchmarkRunCounts,
+        exactMatchRate: Double? = nil,
+        avgCER: Double? = nil,
+        weightedCER: Double? = nil,
+        latencyMs: BenchmarkLatencyDistribution? = nil,
+        afterStopLatencyMs: BenchmarkLatencyDistribution? = nil
+    ) {
+        self.counts = counts
         self.exactMatchRate = exactMatchRate
         self.avgCER = avgCER
         self.weightedCER = weightedCER
-        self.avgTermsF1 = avgTermsF1
-        self.intentMatchRate = intentMatchRate
-        self.intentAvgScore = intentAvgScore
+        self.latencyMs = latencyMs
+        self.afterStopLatencyMs = afterStopLatencyMs
+    }
+}
+
+public struct BenchmarkGenerationRunMetrics: Codable, Equatable, Sendable {
+    public var counts: BenchmarkRunCounts
+    public var exactMatchRate: Double?
+    public var avgCER: Double?
+    public var weightedCER: Double?
+    public var intentPreservationScore: Double?
+    public var hallucinationScore: Double?
+    public var hallucinationRate: Double?
+    public var postLatencyMs: BenchmarkLatencyDistribution?
+
+    public init(
+        counts: BenchmarkRunCounts,
+        exactMatchRate: Double? = nil,
+        avgCER: Double? = nil,
+        weightedCER: Double? = nil,
+        intentPreservationScore: Double? = nil,
+        hallucinationScore: Double? = nil,
+        hallucinationRate: Double? = nil,
+        postLatencyMs: BenchmarkLatencyDistribution? = nil
+    ) {
+        self.counts = counts
+        self.exactMatchRate = exactMatchRate
+        self.avgCER = avgCER
+        self.weightedCER = weightedCER
         self.intentPreservationScore = intentPreservationScore
         self.hallucinationScore = hallucinationScore
         self.hallucinationRate = hallucinationRate
-        self.latencyMs = latencyMs
-        self.afterStopLatencyMs = afterStopLatencyMs
         self.postLatencyMs = postLatencyMs
-        self.totalAfterStopLatencyMs = totalAfterStopLatencyMs
-        self.cost = cost
+    }
+}
+
+public struct BenchmarkGenerationPairwiseRunMetrics: Codable, Equatable, Sendable {
+    public var counts: BenchmarkRunCounts
+    public var pairwiseSummary: PairwiseRunSummary
+
+    public init(counts: BenchmarkRunCounts, pairwiseSummary: PairwiseRunSummary) {
+        self.counts = counts
         self.pairwiseSummary = pairwiseSummary
+    }
+}
+
+public struct BenchmarkVisionRunMetrics: Codable, Equatable, Sendable {
+    public var counts: BenchmarkRunCounts
+    public var avgCER: Double?
+    public var avgTermsF1: Double?
+    public var latencyMs: BenchmarkLatencyDistribution?
+
+    public init(
+        counts: BenchmarkRunCounts,
+        avgCER: Double? = nil,
+        avgTermsF1: Double? = nil,
+        latencyMs: BenchmarkLatencyDistribution? = nil
+    ) {
+        self.counts = counts
+        self.avgCER = avgCER
+        self.avgTermsF1 = avgTermsF1
+        self.latencyMs = latencyMs
+    }
+}
+
+public enum BenchmarkRunMetrics: Codable, Equatable, Sendable {
+    case stt(BenchmarkSTTRunMetrics)
+    case generation(BenchmarkGenerationRunMetrics)
+    case generationPairwise(BenchmarkGenerationPairwiseRunMetrics)
+    case vision(BenchmarkVisionRunMetrics)
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case stt
+        case generation
+        case generationPairwise
+        case vision
+    }
+
+    private enum Kind: String, Codable {
+        case stt
+        case generation
+        case generationPairwise = "generation_pairwise"
+        case vision
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(Kind.self, forKey: .kind)
+        switch kind {
+        case .stt:
+            self = .stt(try container.decode(BenchmarkSTTRunMetrics.self, forKey: .stt))
+        case .generation:
+            self = .generation(try container.decode(BenchmarkGenerationRunMetrics.self, forKey: .generation))
+        case .generationPairwise:
+            self = .generationPairwise(try container.decode(BenchmarkGenerationPairwiseRunMetrics.self, forKey: .generationPairwise))
+        case .vision:
+            self = .vision(try container.decode(BenchmarkVisionRunMetrics.self, forKey: .vision))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .stt(value):
+            try container.encode(Kind.stt, forKey: .kind)
+            try container.encode(value, forKey: .stt)
+        case let .generation(value):
+            try container.encode(Kind.generation, forKey: .kind)
+            try container.encode(value, forKey: .generation)
+        case let .generationPairwise(value):
+            try container.encode(Kind.generationPairwise, forKey: .kind)
+            try container.encode(value, forKey: .generationPairwise)
+        case let .vision(value):
+            try container.encode(Kind.vision, forKey: .kind)
+            try container.encode(value, forKey: .vision)
+        }
+    }
+
+    public var counts: BenchmarkRunCounts {
+        switch self {
+        case let .stt(value):
+            return value.counts
+        case let .generation(value):
+            return value.counts
+        case let .generationPairwise(value):
+            return value.counts
+        case let .vision(value):
+            return value.counts
+        }
+    }
+
+    public var casesTotal: Int { counts.casesTotal }
+    public var casesSelected: Int { counts.casesSelected }
+    public var executedCases: Int { counts.executedCases }
+    public var skippedCases: Int { counts.skippedCases }
+    public var failedCases: Int { counts.failedCases }
+    public var cachedHits: Int { counts.cachedHits }
+
+    public var exactMatchRate: Double? {
+        switch self {
+        case let .stt(value):
+            return value.exactMatchRate
+        case let .generation(value):
+            return value.exactMatchRate
+        case .generationPairwise, .vision:
+            return nil
+        }
+    }
+
+    public var avgCER: Double? {
+        switch self {
+        case let .stt(value):
+            return value.avgCER
+        case let .generation(value):
+            return value.avgCER
+        case let .vision(value):
+            return value.avgCER
+        case .generationPairwise:
+            return nil
+        }
+    }
+
+    public var weightedCER: Double? {
+        switch self {
+        case let .stt(value):
+            return value.weightedCER
+        case let .generation(value):
+            return value.weightedCER
+        case .generationPairwise, .vision:
+            return nil
+        }
+    }
+
+    public var avgTermsF1: Double? {
+        if case let .vision(value) = self {
+            return value.avgTermsF1
+        }
+        return nil
+    }
+
+    public var intentPreservationScore: Double? {
+        if case let .generation(value) = self {
+            return value.intentPreservationScore
+        }
+        return nil
+    }
+
+    public var hallucinationScore: Double? {
+        if case let .generation(value) = self {
+            return value.hallucinationScore
+        }
+        return nil
+    }
+
+    public var hallucinationRate: Double? {
+        if case let .generation(value) = self {
+            return value.hallucinationRate
+        }
+        return nil
+    }
+
+    public var latencyMs: BenchmarkLatencyDistribution? {
+        switch self {
+        case let .stt(value):
+            return value.latencyMs
+        case let .vision(value):
+            return value.latencyMs
+        case .generation, .generationPairwise:
+            return nil
+        }
+    }
+
+    public var afterStopLatencyMs: BenchmarkLatencyDistribution? {
+        if case let .stt(value) = self {
+            return value.afterStopLatencyMs
+        }
+        return nil
+    }
+
+    public var postLatencyMs: BenchmarkLatencyDistribution? {
+        if case let .generation(value) = self {
+            return value.postLatencyMs
+        }
+        return nil
+    }
+
+    public var pairwiseSummary: PairwiseRunSummary? {
+        if case let .generationPairwise(value) = self {
+            return value.pairwiseSummary
+        }
+        return nil
     }
 }
 
@@ -606,7 +1041,7 @@ public struct BenchmarkRunRecord: Codable, Equatable, Identifiable, Sendable {
     public var paths: BenchmarkRunPaths
 
     public init(
-        schemaVersion: Int = 5,
+        schemaVersion: Int = 7,
         id: String,
         kind: BenchmarkKind,
         status: BenchmarkRunStatus = .completed,

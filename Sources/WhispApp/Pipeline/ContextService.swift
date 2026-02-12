@@ -323,7 +323,7 @@ final class ContextService: @unchecked Sendable {
         let requestSentAt = Date()
         logger("vision_start", [
             "mode": mode.rawValue,
-            "request_sent_at_ms": epochMsString(requestSentAt),
+            "request_sent_at_ms": WhispTime.epochMsString(requestSentAt),
         ])
         return Task {
             await visionProvider.collect(
@@ -355,17 +355,13 @@ final class ContextService: @unchecked Sendable {
             "context_present": String(result.context != nil),
             "mode": result.mode,
             "error": result.error ?? "none",
-            "response_received_at_ms": epochMsString(Date()),
+            "response_received_at_ms": WhispTime.epochMsString(Date()),
         ])
         return result
     }
 
     func compose(accessibility: ContextInfo?, vision: ContextInfo?) -> ContextInfo? {
         composer.compose(accessibility: accessibility, vision: vision)
-    }
-
-    private func epochMsString(_ date: Date) -> String {
-        String(format: "%.3f", date.timeIntervalSince1970 * 1000)
     }
 
     private func resolveVisionTaskIfReady(

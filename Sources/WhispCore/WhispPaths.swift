@@ -52,4 +52,17 @@ public struct WhispPaths: Sendable {
         devLogFile = baseDirectory.appendingPathComponent("dev.log", isDirectory: false)
         benchmarkCacheDirectory = baseDirectory.appendingPathComponent("benchmark_cache", isDirectory: true)
     }
+
+    public static func normalizeForStorage(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        let resolvedPath: String
+        if trimmed.hasPrefix("~/") {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            resolvedPath = home + "/" + trimmed.dropFirst(2)
+        } else {
+            resolvedPath = trimmed
+        }
+        return URL(fileURLWithPath: resolvedPath).standardizedFileURL.path
+    }
 }

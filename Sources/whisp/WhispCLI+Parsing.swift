@@ -323,7 +323,7 @@ extension WhispCLI {
     }
 
     static func parseBenchmarkCompareOptions(args: [String]) throws -> BenchmarkCompareOptions {
-        var task: BenchmarkKind?
+        var task: BenchmarkCompareFlow?
         var casesPath = defaultManualCasesPath()
         var candidateIDs: [String] = []
         var force = false
@@ -365,15 +365,29 @@ extension WhispCLI {
         }
 
         guard let task else {
-            throw AppError.invalidArgument("--task が必要です (stt|generation)")
+            throw AppError.invalidArgument("--task が必要です (stt|generation-single|generation-battle)")
         }
-        if task == .generation {
-            guard candidateIDs.count == 2 else {
-                throw AppError.invalidArgument("generation compare は --candidate-id を2件指定してください")
-            }
-        } else {
+        switch task {
+        case .stt:
             guard !candidateIDs.isEmpty else {
                 throw AppError.invalidArgument("--candidate-id が1件以上必要です")
+            }
+            if judgeModel != nil {
+                throw AppError.invalidArgument("--judge-model は generation-battle のみ利用できます")
+            }
+        case .generationSingle:
+            guard candidateIDs.count == 1 else {
+                throw AppError.invalidArgument("generation-single は --candidate-id を1件指定してください")
+            }
+            if judgeModel != nil {
+                throw AppError.invalidArgument("--judge-model は generation-battle のみ利用できます")
+            }
+        case .generationBattle:
+            guard candidateIDs.count == 2 else {
+                throw AppError.invalidArgument("generation-battle は --candidate-id を2件指定してください")
+            }
+            if candidateIDs[0] == candidateIDs[1] {
+                throw AppError.invalidArgument("candidate A/B は異なる ID を指定してください")
             }
         }
         return BenchmarkCompareOptions(
@@ -394,7 +408,7 @@ extension WhispCLI {
         while let item = parser.next() {
             if item == "--task" {
                 let raw = try parser.value(for: "--task")
-                task = try parseCompareTask(raw)
+                task = try parseIntegrityTask(raw)
                 continue
             }
             if item == "--cases" {
@@ -410,11 +424,19 @@ extension WhispCLI {
         return BenchmarkIntegrityScanOptions(task: task, casesPath: casesPath)
     }
 
-    private static func parseCompareTask(_ raw: String) throws -> BenchmarkKind {
+    private static func parseIntegrityTask(_ raw: String) throws -> BenchmarkKind {
         guard let task = BenchmarkKind(rawValue: raw),
               task == .stt || task == .generation
         else {
             throw AppError.invalidArgument("--task は stt または generation を指定してください")
+        }
+        return task
+    }
+
+    private static func parseCompareTask(_ raw: String) throws -> BenchmarkCompareFlow {
+        guard let task = BenchmarkCompareFlow(rawValue: raw)
+        else {
+            throw AppError.invalidArgument("--task は stt|generation-single|generation-battle を指定してください")
         }
         return task
     }

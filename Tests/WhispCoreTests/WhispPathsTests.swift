@@ -26,4 +26,18 @@ final class WhispPathsTests: XCTestCase {
     func testMissingHomeThrowsWhenFallbackDisabled() {
         XCTAssertThrowsError(try WhispPaths(environment: [:], allowTemporaryFallback: false))
     }
+
+    func testNormalizeForStorage() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual(
+            WhispPaths.normalizeForStorage("  ~/tmp/../sample.jsonl  "),
+            home + "/sample.jsonl"
+        )
+        XCTAssertEqual(WhispPaths.normalizeForStorage(""), "")
+        XCTAssertEqual(WhispPaths.normalizeForStorage("   "), "")
+        XCTAssertEqual(
+            WhispPaths.normalizeForStorage("/tmp/foo/../bar"),
+            "/tmp/bar"
+        )
+    }
 }

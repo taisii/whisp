@@ -25,13 +25,7 @@ final class BenchmarkRunRecorder: @unchecked Sendable {
             options: options,
             candidateID: candidateID ?? options.candidateID,
             benchmarkKey: benchmarkKey,
-            metrics: initialMetrics ?? BenchmarkRunMetrics(
-                casesTotal: 0,
-                casesSelected: 0,
-                executedCases: 0,
-                skippedCases: 0,
-                failedCases: 0
-            ),
+            metrics: initialMetrics ?? Self.zeroMetrics(for: kind),
             paths: store.resolveRunPaths(runID: runID)
         )
         try store.saveRun(run)
@@ -47,6 +41,28 @@ final class BenchmarkRunRecorder: @unchecked Sendable {
     }
 
     var runID: String { run.id }
+
+    private static func zeroCounts() -> BenchmarkRunCounts {
+        BenchmarkRunCounts(
+            casesTotal: 0,
+            casesSelected: 0,
+            executedCases: 0,
+            skippedCases: 0,
+            failedCases: 0,
+            cachedHits: 0
+        )
+    }
+
+    private static func zeroMetrics(for kind: BenchmarkKind) -> BenchmarkRunMetrics {
+        switch kind {
+        case .stt:
+            return .stt(BenchmarkSTTRunMetrics(counts: zeroCounts()))
+        case .generation:
+            return .generation(BenchmarkGenerationRunMetrics(counts: zeroCounts()))
+        case .vision:
+            return .vision(BenchmarkVisionRunMetrics(counts: zeroCounts()))
+        }
+    }
 
     func appendCaseResult(_ result: BenchmarkCaseResult) throws {
         try store.appendCaseResult(runID: run.id, result: result)
@@ -197,10 +213,7 @@ extension WhispCLI {
     }
 
     static func benchmarkTimestampToken() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-        return formatter.string(from: Date())
+        WhispTime.timestampTokenWithMillis()
     }
 
     static func defaultBenchmarkRunID(kind: BenchmarkKind) -> String {
@@ -209,9 +222,7 @@ extension WhispCLI {
     }
 
     static func isoNow() -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: Date())
+        WhispTime.isoNow()
     }
 
     static func toBenchmarkLatencyDistribution(_ source: LatencyDistributionLog?) -> BenchmarkLatencyDistribution? {
@@ -236,7 +247,7 @@ extension WhispCLI {
     }
 
     static func nowEpochMs() -> Int64 {
-        Int64((Date().timeIntervalSince1970 * 1000).rounded())
+        WhispTime.epochMs()
     }
 
     static func defaultBenchmarkWorkers() -> Int {
@@ -383,13 +394,15 @@ extension WhispCLI {
 
     static func canonicalContextString(_ context: ContextInfo?) -> String {
         guard let context else { return "{}" }
-        let payload: [String: Any] = [
-            "accessibilityText": context.accessibilityText ?? "",
-            "windowText": context.windowText ?? "",
-            "visionSummary": context.visionSummary ?? "",
-            "visionTerms": context.visionTerms,
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+        let payload = CanonicalContextPayload(
+            accessibilityText: context.accessibilityText ?? "",
+            windowText: context.windowText ?? "",
+            visionSummary: context.visionSummary ?? "",
+            visionTerms: context.visionTerms
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(payload),
               let text = String(data: data, encoding: .utf8)
         else {
             return "{}"
@@ -440,4 +453,11 @@ extension WhispCLI {
             .appendingPathComponent("manifest.json", isDirectory: false)
             .path
     }
+}
+
+private struct CanonicalContextPayload: Codable {
+    let accessibilityText: String
+    let windowText: String
+    let visionSummary: String
+    let visionTerms: [String]
 }

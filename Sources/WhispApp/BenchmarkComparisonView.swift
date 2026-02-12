@@ -3,6 +3,7 @@ import WhispCore
 
 struct BenchmarkComparisonView: View {
     @ObservedObject var viewModel: BenchmarkViewModel
+    let mode: BenchmarkComparisonMode
     private let judgeModels: [LLMModel] = [.gemini25FlashLite, .gpt4oMini, .gpt5Nano]
 
     private struct ComparisonColumn: Identifiable {
@@ -15,7 +16,7 @@ struct BenchmarkComparisonView: View {
         VStack(spacing: 0) {
             controlBar
             Divider()
-            if viewModel.selectedTask == .generation {
+            if mode == .generationBattle {
                 generationPairwiseBody
             } else {
                 sttComparisonBody
@@ -42,14 +43,7 @@ struct BenchmarkComparisonView: View {
 
     private var controlBar: some View {
         HStack(spacing: 10) {
-            Picker("Task", selection: $viewModel.selectedTask) {
-                Text("STT").tag(BenchmarkKind.stt)
-                Text("Generation").tag(BenchmarkKind.generation)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 220)
-
-            if viewModel.selectedTask == .generation {
+            if mode == .generationBattle {
                 Picker("candidate A", selection: Binding(
                     get: { viewModel.generationPairCandidateAID ?? "" },
                     set: { viewModel.setGenerationPairCandidateA($0) }
@@ -79,6 +73,16 @@ struct BenchmarkComparisonView: View {
                     }
                 }
                 .frame(width: 190)
+            } else if mode == .generationSingle {
+                Picker("candidate", selection: Binding(
+                    get: { viewModel.selectedGenerationSingleCandidateID ?? "" },
+                    set: { viewModel.setGenerationSingleCandidate($0) }
+                )) {
+                    ForEach(viewModel.generationCandidates, id: \.id) { candidate in
+                        Text(candidate.id).tag(candidate.id)
+                    }
+                }
+                .frame(width: 280)
             } else {
                 Menu {
                     if viewModel.taskCandidates.isEmpty {
@@ -108,7 +112,14 @@ struct BenchmarkComparisonView: View {
                 .toggleStyle(.switch)
 
             Button {
-                viewModel.runCompare()
+                switch mode {
+                case .stt:
+                    viewModel.runCompare()
+                case .generationSingle:
+                    viewModel.runGenerationSingleCompare()
+                case .generationBattle:
+                    viewModel.runGenerationBattleCompare()
+                }
             } label: {
                 if viewModel.isExecutingBenchmark {
                     HStack(spacing: 6) {
@@ -131,7 +142,7 @@ struct BenchmarkComparisonView: View {
             .buttonStyle(.bordered)
             .disabled(viewModel.isExecutingBenchmark)
 
-            if viewModel.selectedTask == .generation {
+            if mode == .generationSingle || mode == .generationBattle {
                 Button {
                     viewModel.openCreatePromptCandidateModal()
                 } label: {
@@ -149,11 +160,11 @@ struct BenchmarkComparisonView: View {
         VStack(spacing: 0) {
             generationSummary
             Divider()
-            HSplitView {
+            VStack(spacing: 0) {
                 generationCaseList
-                    .frame(minWidth: 760)
-                generationCaseDetail
-                    .frame(minWidth: 520, maxWidth: .infinity)
+                    .frame(minHeight: 430)
+                Divider()
+                generationCaseListBottomArea
             }
         }
     }
@@ -351,6 +362,11 @@ struct BenchmarkComparisonView: View {
                         winnerCell(row.styleContextWinner, width: 150)
                         Spacer(minLength: 0)
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        viewModel.selectGenerationPairwiseCase(row.id)
+                        viewModel.isPairwiseCaseDetailPresented = true
+                    }
                     .tag(Optional(row.id))
                 }
             }
@@ -359,53 +375,80 @@ struct BenchmarkComparisonView: View {
         .padding(.bottom, 8)
     }
 
-    private var generationCaseDetail: some View {
+    private var generationCaseListBottomArea: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 8) {
-                    Text("Case Detail")
+                HStack {
+                    Text("Case Quick View")
                         .font(.system(size: 13, weight: .semibold))
                     Spacer()
-                    if let candidateA = viewModel.generationPairCandidateA {
-                        Button("Aを編集") {
-                            viewModel.openEditPromptCandidateModal(candidateID: candidateA.id)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    if let candidateB = viewModel.generationPairCandidateB {
-                        Button("Bを編集") {
-                            viewModel.openEditPromptCandidateModal(candidateID: candidateB.id)
-                        }
-                        .buttonStyle(.bordered)
+                    if let caseID = viewModel.selectedGenerationPairwiseCaseID {
+                        Text("case_id: \(caseID)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
 
                 if let detail = viewModel.generationPairwiseCaseDetail {
-                    detailLine("case_id", detail.caseID)
-                    detailLine("status", detail.status.rawValue)
-                    detailLine("overall_winner", winnerText(detail.overallWinner))
-                    detailLine("intent_winner", winnerText(detail.intentWinner))
-                    detailLine("hallucination_winner", winnerText(detail.hallucinationWinner))
-                    detailLine("style_context_winner", winnerText(detail.styleContextWinner))
-
-                    section(title: "overall_reason", text: detail.overallReason ?? "-")
-                    section(title: "intent_reason", text: detail.intentReason ?? "-")
-                    section(title: "hallucination_reason", text: detail.hallucinationReason ?? "-")
-                    section(title: "style_context_reason", text: detail.styleContextReason ?? "-")
-
-                    if let judgeError = detail.judgeError, !judgeError.isEmpty {
-                        section(title: "judge_error", text: judgeError)
+                    HStack(spacing: 10) {
+                        summaryChip("overall", text: winnerText(detail.overallWinner))
+                        summaryChip("intent", text: winnerText(detail.intentWinner))
+                        summaryChip("hallucination", text: winnerText(detail.hallucinationWinner))
+                        summaryChip("style_context", text: winnerText(detail.styleContextWinner))
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
 
-                    section(title: "output_generation_a", text: detail.outputA.isEmpty ? "-" : detail.outputA)
-                    section(title: "output_generation_b", text: detail.outputB.isEmpty ? "-" : detail.outputB)
-                } else {
-                    Text("ケースを選択してください。")
-                        .font(.system(size: 12))
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("overall / intent / hallucination / style_context")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text("overall: \(detail.overallReason ?? "-")")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text("intent: \(detail.intentReason ?? "-")")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text("hallucination: \(detail.hallucinationReason ?? "-")")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        Text("style_context: \(detail.styleContextReason ?? "-")")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 12)
+                } else if viewModel.selectedGenerationPairwiseCaseID != nil {
+                    Text("詳細を読み込み中です。")
+                        .font(.system(size: 11))
                         .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                } else {
+                    Text("左側のケースを選択してください。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
                 }
+
             }
-            .padding(12)
+        }
+    }
+
+    private func summaryChip(_ title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            Text(text)
+                .font(.system(size: 11, design: .monospaced))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
         }
     }
 
@@ -483,7 +526,7 @@ struct BenchmarkComparisonView: View {
             headerText("case_id", width: 180)
             headerText("status", width: 74)
             headerText("cer", width: 80)
-            if viewModel.selectedTask == .stt {
+            if isSttMode {
                 headerText("stt_total_ms", width: 90)
                 headerText("stt_after_stop_ms", width: 120)
             } else {
@@ -546,7 +589,7 @@ struct BenchmarkComparisonView: View {
     }
 
     private var comparisonColumns: [ComparisonColumn] {
-        switch viewModel.selectedTask {
+        switch mode {
         case .stt:
             var columns = [
                 ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 220),
@@ -562,7 +605,7 @@ struct BenchmarkComparisonView: View {
                 columns.insert(ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90), at: 3)
             }
             return columns
-        case .generation:
+        case .generationSingle, .generationBattle:
             var columns = [
                 ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 210),
                 ComparisonColumn(id: "model", label: "model", width: 120),
@@ -579,18 +622,11 @@ struct BenchmarkComparisonView: View {
                 columns.insert(ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90), at: 4)
             }
             return columns
-        case .vision:
-            var columns = [
-                ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 220),
-                ComparisonColumn(id: "model", label: "model", width: 140),
-                ComparisonColumn(id: "last_run_at", label: "last_run_at", width: 180),
-            ]
-            if shouldShowCaseCountColumns {
-                columns.insert(ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110), at: 2)
-                columns.insert(ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90), at: 3)
-            }
-            return columns
         }
+    }
+
+    private var isSttMode: Bool {
+        mode == .stt
     }
 
     private var shouldShowCaseCountColumns: Bool {
@@ -643,7 +679,7 @@ struct BenchmarkComparisonView: View {
                 .font(.system(size: 11, design: .monospaced))
                 .frame(width: 80, alignment: .trailing)
 
-            if viewModel.selectedTask == .stt {
+            if isSttMode {
                 Text(ms(row.sttTotalMs))
                     .font(.system(size: 11, design: .monospaced))
                     .frame(width: 90, alignment: .trailing)
@@ -703,6 +739,16 @@ struct BenchmarkGlobalModalOverlay: View {
                 ) {
                     BenchmarkPromptCandidateModal(viewModel: viewModel)
                 }
+            } else if viewModel.isPairwiseCaseDetailPresented {
+                BenchmarkOverlayModalCard(
+                    minWidth: 980,
+                    idealWidth: 1080,
+                    maxWidth: 1200,
+                    minHeight: 720,
+                    maxHeight: 820
+                ) {
+                    BenchmarkPairwiseCaseDetailModal(viewModel: viewModel)
+                }
             } else if viewModel.isCaseDetailPresented {
                 BenchmarkOverlayModalCard(
                     minWidth: 860,
@@ -720,6 +766,10 @@ struct BenchmarkGlobalModalOverlay: View {
     private func dismissOnBackgroundTap() {
         if viewModel.isPromptCandidateModalPresented {
             viewModel.dismissPromptCandidateModal()
+            return
+        }
+        if viewModel.isPairwiseCaseDetailPresented {
+            viewModel.dismissPairwiseCaseDetail()
             return
         }
         if viewModel.isCaseDetailPresented {
@@ -922,6 +972,173 @@ private struct BenchmarkPromptCandidateModal: View {
                 viewModel.appendPromptVariableToDraft(item.token)
             }
             .buttonStyle(.bordered)
+        }
+    }
+}
+
+private struct BenchmarkPairwiseCaseDetailModal: View {
+    @ObservedObject var viewModel: BenchmarkViewModel
+    @State private var selectedSection = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let detail = viewModel.generationPairwiseCaseDetail {
+                modalHeader(detail)
+                Divider()
+                Picker("表示", selection: $selectedSection) {
+                    Text("整形結果").tag(0)
+                    Text("判定結果").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 220)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if selectedSection == 0 {
+                            textBlock(
+                                title: "STT入力",
+                                text: detail.sttText.isEmpty ? "-" : detail.sttText
+                            )
+                            textBlock(
+                                title: "整形結果A",
+                                text: detail.outputA.isEmpty ? "-" : detail.outputA
+                            )
+                            textBlock(
+                                title: "整形結果B",
+                                text: detail.outputB.isEmpty ? "-" : detail.outputB
+                            )
+                            textBlock(
+                                title: "プロンプトA",
+                                text: detail.promptA.isEmpty ? "-" : detail.promptA
+                            )
+                            textBlock(
+                                title: "プロンプトB",
+                                text: detail.promptB.isEmpty ? "-" : detail.promptB
+                            )
+                            if let judgeError = detail.judgeError, !judgeError.isEmpty {
+                                textBlock(title: "judge_error", text: judgeError)
+                            }
+                        } else {
+                            textBlock(
+                                title: "比較プロンプト（round1）",
+                                text: detail.promptPairwiseRound1.isEmpty ? "-" : detail.promptPairwiseRound1
+                            )
+                            textBlock(
+                                title: "比較プロンプト（round2）",
+                                text: detail.promptPairwiseRound2.isEmpty ? "-" : detail.promptPairwiseRound2
+                            )
+                            textBlock(
+                                title: "judge 応答（round1）",
+                                text: detail.judgeResponseRound1.isEmpty ? "-" : detail.judgeResponseRound1
+                            )
+                            textBlock(
+                                title: "judge 応答（round2）",
+                                text: detail.judgeResponseRound2.isEmpty ? "-" : detail.judgeResponseRound2
+                            )
+                            textBlock(
+                                title: "judge決定JSON",
+                                text: detail.judgeDecisionJSON.isEmpty ? "-" : detail.judgeDecisionJSON
+                            )
+                        }
+                    }
+                    .padding(12)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("ケース詳細がありません。")
+                        .font(.system(size: 14, weight: .semibold))
+                    Text("ケース行を選択して再試行してください。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(16)
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("閉じる") {
+                    viewModel.dismissPairwiseCaseDetail()
+                }
+                .buttonStyle(.bordered)
+                .padding(.trailing, 16)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    private func modalHeader(_ detail: BenchmarkPairwiseCaseDetail) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Generation対戦 ケース詳細")
+                .font(.system(size: 15, weight: .semibold))
+            HStack(spacing: 6) {
+                Text("case_id: \(detail.caseID)")
+                    .font(.system(size: 11, design: .monospaced))
+                Text("status: \(detail.status.rawValue)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            HStack(spacing: 8) {
+                verdictChip("overall", winnerText(detail.overallWinner))
+                verdictChip("intent", winnerText(detail.intentWinner))
+                verdictChip("hallucination", winnerText(detail.hallucinationWinner))
+                verdictChip("style_context", winnerText(detail.styleContextWinner))
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private func verdictChip(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.controlBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func textBlock(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(text == "-" ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+            .frame(minHeight: 92)
+            .background(Color(NSColor.windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+            }
+        }
+    }
+
+    private func winnerText(_ winner: PairwiseWinner?) -> String {
+        guard let winner else { return "-" }
+        switch winner {
+        case .a:
+            return "A"
+        case .b:
+            return "B"
+        case .tie:
+            return "tie"
         }
     }
 }

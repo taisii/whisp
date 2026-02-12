@@ -6,7 +6,7 @@ public final class BenchmarkStore: @unchecked Sendable {
     let fileManager = FileManager.default
     let runsURL: URL
 
-    private let schemaMarkerFile = ".schema-v5"
+    private let schemaMarkerFile = ".schema-v7"
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let paths = try? WhispPaths(environment: environment, allowTemporaryFallback: true)
@@ -82,7 +82,7 @@ public final class BenchmarkStore: @unchecked Sendable {
             else {
                 continue
             }
-            guard run.schemaVersion == 5 else { continue }
+            guard run.schemaVersion == 7 else { continue }
             runs.append(run)
         }
 
@@ -334,16 +334,7 @@ public final class BenchmarkStore: @unchecked Sendable {
         if fileManager.fileExists(atPath: marker.path) {
             return
         }
-
-        let entries = try fileManager.contentsOfDirectory(at: runsURL, includingPropertiesForKeys: nil)
-        for entry in entries {
-            if entry.lastPathComponent == schemaMarkerFile {
-                continue
-            }
-            try fileManager.removeItem(at: entry)
-        }
-
-        try Data("5\n".utf8).write(to: marker, options: [.atomic])
+        try Data("7\n".utf8).write(to: marker, options: [.atomic])
     }
 
     private func ensureRunDirectoriesLocked(runID: String) throws {
@@ -420,15 +411,17 @@ public final class BenchmarkStore: @unchecked Sendable {
             let errorPath = caseArtifactsDirectory(runID: runID, caseID: log.base.caseID)
                 .appendingPathComponent("error.json", isDirectory: false)
             try fileManager.createDirectory(at: errorPath.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let payload: [String: Any] = [
-                "run_id": runID,
-                "case_id": log.base.caseID,
-                "error_type": log.errorType ?? "",
-                "origin_stage": log.originStage?.rawValue ?? "",
-                "message": log.message,
-                "recorded_at_ms": log.base.recordedAtMs,
-            ]
-            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            let payload = ErrorArtifactPayload(
+                runID: runID,
+                caseID: log.base.caseID,
+                errorType: log.errorType ?? "",
+                originStage: log.originStage?.rawValue ?? "",
+                message: log.message,
+                recordedAtMs: log.base.recordedAtMs
+            )
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try encoder.encode(payload)
             try data.write(to: errorPath, options: [.atomic])
         default:
             break
@@ -498,15 +491,28 @@ public final class BenchmarkStore: @unchecked Sendable {
     }
 
     private func timestampToken() -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
-        return formatter.string(from: Date())
+        WhispTime.timestampTokenWithMillis()
     }
 
     private func isoNow() -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: Date())
+        WhispTime.isoNow()
+    }
+}
+
+private struct ErrorArtifactPayload: Codable {
+    let runID: String
+    let caseID: String
+    let errorType: String
+    let originStage: String
+    let message: String
+    let recordedAtMs: Int64
+
+    enum CodingKeys: String, CodingKey {
+        case runID = "run_id"
+        case caseID = "case_id"
+        case errorType = "error_type"
+        case originStage = "origin_stage"
+        case message
+        case recordedAtMs = "recorded_at_ms"
     }
 }

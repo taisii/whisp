@@ -2,11 +2,11 @@ import Foundation
 import WhispCore
 
 private func epochMsString(_ date: Date = Date()) -> String {
-    String(format: "%.3f", date.timeIntervalSince1970 * 1000)
+    WhispTime.epochMsString(date)
 }
 
 private func epochMs(_ date: Date = Date()) -> Int64 {
-    Int64((date.timeIntervalSince1970 * 1000).rounded())
+    WhispTime.epochMs(date)
 }
 
 struct STTStreamingDrainStats {

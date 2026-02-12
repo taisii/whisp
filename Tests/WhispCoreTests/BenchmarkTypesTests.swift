@@ -45,15 +45,20 @@ final class BenchmarkTypesTests: XCTestCase {
             status: .completed,
             createdAt: "2026-02-11T10:00:00Z",
             updatedAt: "2026-02-11T10:01:00Z",
-            options: BenchmarkRunOptions(sourceCasesPath: "/tmp/cases.jsonl", llmModel: "gpt-5-nano"),
-            metrics: BenchmarkRunMetrics(
-                casesTotal: 2,
-                casesSelected: 2,
-                executedCases: 2,
-                skippedCases: 0,
-                failedCases: 0,
+            options: .generation(BenchmarkGenerationRunOptions(
+                common: BenchmarkRunCommonOptions(sourceCasesPath: "/tmp/cases.jsonl"),
+                llmModel: "gpt-5-nano"
+            )),
+            metrics: .generation(BenchmarkGenerationRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: 2,
+                    casesSelected: 2,
+                    executedCases: 2,
+                    skippedCases: 0,
+                    failedCases: 0
+                ),
                 avgCER: 0.1
-            ),
+            )),
             paths: BenchmarkRunPaths(
                 manifestPath: "/tmp/store/manifest.json",
                 orchestratorEventsPath: "/tmp/store/orchestrator_events.jsonl",
@@ -85,14 +90,15 @@ final class BenchmarkTypesTests: XCTestCase {
             status: .completed,
             createdAt: "2026-02-12T10:00:00.000Z",
             updatedAt: "2026-02-12T10:01:00.000Z",
-            options: BenchmarkRunOptions(
-                sourceCasesPath: "/tmp/cases.jsonl",
-                llmModel: "gpt-5-nano|gemini-2.5-flash-lite",
-                compareMode: .pairwise,
+            options: .generationPairwise(BenchmarkGenerationPairwiseRunOptions(
+                common: BenchmarkRunCommonOptions(
+                    sourceCasesPath: "/tmp/cases.jsonl"
+                ),
                 pairCandidateAID: "generation-a",
                 pairCandidateBID: "generation-b",
-                pairJudgeModel: "gpt-5-nano"
-            ),
+                pairJudgeModel: "gpt-5-nano",
+                llmModel: "gpt-5-nano|gemini-2.5-flash-lite"
+            )),
             benchmarkKey: BenchmarkKey(
                 task: .generation,
                 datasetPath: "/tmp/cases.jsonl",
@@ -102,12 +108,14 @@ final class BenchmarkTypesTests: XCTestCase {
                 evaluatorVersion: "pairwise-v1",
                 codeVersion: "dev"
             ),
-            metrics: BenchmarkRunMetrics(
-                casesTotal: 1,
-                casesSelected: 1,
-                executedCases: 1,
-                skippedCases: 0,
-                failedCases: 0,
+            metrics: .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: 1,
+                    casesSelected: 1,
+                    executedCases: 1,
+                    skippedCases: 0,
+                    failedCases: 0
+                ),
                 pairwiseSummary: PairwiseRunSummary(
                     judgedCases: 1,
                     judgeErrorCases: 0,
@@ -124,7 +132,7 @@ final class BenchmarkTypesTests: XCTestCase {
                     styleContextBWins: 0,
                     styleContextTies: 1
                 )
-            ),
+            )),
             paths: BenchmarkRunPaths(
                 manifestPath: "/tmp/store/manifest.json",
                 orchestratorEventsPath: "/tmp/store/orchestrator_events.jsonl",

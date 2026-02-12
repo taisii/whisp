@@ -373,8 +373,31 @@ struct GenerationBenchmarkOptions {
     let promptHash: String?
 }
 
+enum BenchmarkCompareFlow: String, Codable, CaseIterable, Sendable {
+    case stt
+    case generationSingle = "generation-single"
+    case generationBattle = "generation-battle"
+
+    var benchmarkKind: BenchmarkKind {
+        switch self {
+        case .stt:
+            return .stt
+        case .generationSingle, .generationBattle:
+            return .generation
+        }
+    }
+
+    var isGenerationSingle: Bool {
+        self == .generationSingle
+    }
+
+    var isGenerationBattle: Bool {
+        self == .generationBattle
+    }
+}
+
 struct BenchmarkCompareOptions {
-    let task: BenchmarkKind
+    let task: BenchmarkCompareFlow
     let casesPath: String
     let candidateIDs: [String]
     let force: Bool

@@ -22,23 +22,27 @@ final class BenchmarkStoreTests: XCTestCase {
             status: .completed,
             createdAt: "2026-02-11T12:00:00Z",
             updatedAt: "2026-02-11T12:01:00Z",
-            options: BenchmarkRunOptions(
-                sourceCasesPath: "/tmp/manual.jsonl",
+            options: .stt(BenchmarkSTTRunOptions(
+                common: BenchmarkRunCommonOptions(
+                    sourceCasesPath: "/tmp/manual.jsonl",
+                    useCache: true
+                ),
                 sttMode: "stream",
                 chunkMs: 120,
-                realtime: true,
-                useCache: true
-            ),
-            metrics: BenchmarkRunMetrics(
-                casesTotal: 10,
-                casesSelected: 10,
-                executedCases: 8,
-                skippedCases: 1,
-                failedCases: 1,
-                cachedHits: 3,
+                realtime: true
+            )),
+            metrics: .stt(BenchmarkSTTRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: 10,
+                    casesSelected: 10,
+                    executedCases: 8,
+                    skippedCases: 1,
+                    failedCases: 1,
+                    cachedHits: 3
+                ),
                 exactMatchRate: 0.75,
                 avgCER: 0.1
-            ),
+            )),
             paths: paths
         )
     }
@@ -237,5 +241,82 @@ final class BenchmarkStoreTests: XCTestCase {
 
         let found = try store.findLatestCompletedRun(matching: key)
         XCTAssertEqual(found?.id, newerID)
+    }
+
+    func testListRunsSkipsLegacySchemaRuns() throws {
+        let home = tempHome()
+        let store = makeStore(home: home)
+
+        let current = makeRun(store: store, runID: "bench-20260211-007-current")
+        try store.saveRun(current)
+
+        let legacy = BenchmarkRunRecord(
+            schemaVersion: 5,
+            id: "bench-20260211-007-legacy",
+            kind: .stt,
+            status: .completed,
+            createdAt: "2026-02-11T12:00:00Z",
+            updatedAt: "2026-02-11T12:01:00Z",
+            options: .stt(BenchmarkSTTRunOptions(
+                common: BenchmarkRunCommonOptions(sourceCasesPath: "/tmp/manual.jsonl"),
+                sttMode: "stream"
+            )),
+            metrics: .stt(BenchmarkSTTRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: 1,
+                    casesSelected: 1,
+                    executedCases: 1,
+                    skippedCases: 0,
+                    failedCases: 0
+                )
+            )),
+            paths: store.resolveRunPaths(runID: "bench-20260211-007-legacy")
+        )
+        try store.saveRun(legacy)
+
+        let listed = try store.listRuns(limit: 10)
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertEqual(listed.first?.id, current.id)
+        XCTAssertEqual(listed.first?.schemaVersion, 7)
+    }
+
+    func testMissingSchemaMarkerPreservesExistingRunDirectories() throws {
+        let home = tempHome()
+        let store = makeStore(home: home)
+        let legacyRunID = "bench-20260211-legacy"
+        let legacyRun = BenchmarkRunRecord(
+            schemaVersion: 5,
+            id: legacyRunID,
+            kind: .stt,
+            status: .completed,
+            createdAt: "2026-02-11T12:00:00Z",
+            updatedAt: "2026-02-11T12:01:00Z",
+            options: .stt(BenchmarkSTTRunOptions(
+                common: BenchmarkRunCommonOptions(sourceCasesPath: "/tmp/manual.jsonl"),
+                sttMode: "stream"
+            )),
+            metrics: .stt(BenchmarkSTTRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: 1,
+                    casesSelected: 1,
+                    executedCases: 1,
+                    skippedCases: 0,
+                    failedCases: 0
+                )
+            )),
+            paths: store.resolveRunPaths(runID: legacyRunID)
+        )
+
+        let runsURL = URL(fileURLWithPath: store.runsDirectoryPath, isDirectory: true)
+        let legacyRunDir = runsURL.appendingPathComponent(legacyRunID, isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyRunDir, withIntermediateDirectories: true)
+        let legacyManifest = legacyRunDir.appendingPathComponent("manifest.json", isDirectory: false)
+        let data = try JSONEncoder().encode(legacyRun)
+        try data.write(to: legacyManifest)
+
+        _ = try store.listRuns(limit: 10)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyRunDir.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: runsURL.appendingPathComponent(".schema-v7").path))
     }
 }

@@ -29,42 +29,46 @@ extension WhispCLI {
         print("")
         print("id\tstatus\tcached\texact_match\tcer\taudio_seconds\tstt_total_ms\tstt_after_stop_ms")
 
-        let runOptions = BenchmarkRunOptions(
-            sourceCasesPath: options.jsonlPath,
-            sttExecutionProfile: sttExecutionProfile,
-            datasetHash: options.datasetHash,
-            runtimeOptionsHash: options.runtimeOptionsHash,
-            evaluatorVersion: options.evaluatorVersion,
-            codeVersion: options.codeVersion,
+        let runOptions = BenchmarkRunOptions.stt(BenchmarkSTTRunOptions(
+            common: BenchmarkRunCommonOptions(
+                sourceCasesPath: options.jsonlPath,
+                datasetHash: options.datasetHash,
+                runtimeOptionsHash: options.runtimeOptionsHash,
+                evaluatorVersion: options.evaluatorVersion,
+                codeVersion: options.codeVersion,
+                caseLimit: options.limit,
+                useCache: options.useCache
+            ),
             candidateID: options.candidateID,
+            sttExecutionProfile: sttExecutionProfile,
             sttMode: options.sttMode.rawValue,
             chunkMs: options.chunkMs,
             realtime: options.realtime,
-            minAudioSeconds: options.minAudioSeconds,
-            useCache: options.useCache,
-            caseLimit: options.limit
-        )
+            minAudioSeconds: options.minAudioSeconds
+        ))
         let recorder = try BenchmarkRunRecorder(
             runID: runID,
             kind: .stt,
             options: runOptions,
             candidateID: options.candidateID,
             benchmarkKey: options.benchmarkKey,
-            initialMetrics: BenchmarkRunMetrics(
-                casesTotal: allCases.count,
-                casesSelected: selectedCases.count,
-                executedCases: 0,
-                skippedCases: 0,
-                failedCases: 0,
-                cachedHits: 0
-            )
+            initialMetrics: .stt(BenchmarkSTTRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: allCases.count,
+                    casesSelected: selectedCases.count,
+                    executedCases: 0,
+                    skippedCases: 0,
+                    failedCases: 0,
+                    cachedHits: 0
+                )
+            ))
         )
 
-        for item in selectedCases {
-            try recorder.markCaseQueued(caseID: item.id)
-        }
         let accumulator = STTOutcomeAccumulator()
-        do {
+        let lifecycle = try await executeBenchmarkRunLifecycle(
+            selectedCases: selectedCases,
+            recorder: recorder
+        ) {
             try await runSTTCaseBenchmarkWithWorkers(
                 runID: runID,
                 selectedCases: selectedCases,
@@ -76,25 +80,22 @@ extension WhispCLI {
             ) { outcome in
                 try await accumulator.consume(outcome, recorder: recorder)
             }
-        } catch {
-            let partial = await accumulator.snapshot()
-            let failedMetrics = makeSTTRunMetrics(
+        } snapshotSummary: {
+            await accumulator.snapshot()
+        } makeMetrics: { summary in
+            makeSTTRunMetrics(
                 allCasesCount: allCases.count,
                 selectedCasesCount: selectedCases.count,
-                summary: partial
+                summary: summary
             )
-            _ = try? recorder.finalize(metrics: failedMetrics, options: runOptions, status: .failed)
-            throw error
+        } makeRunOptions: { _ in
+            runOptions
         }
 
-        let summary = await accumulator.snapshot()
+        let summary = lifecycle.summary
         let exactRate = summary.executed > 0 ? Double(summary.exactCount) / Double(summary.executed) : 0
-        let metrics = makeSTTRunMetrics(
-            allCasesCount: allCases.count,
-            selectedCasesCount: selectedCases.count,
-            summary: summary
-        )
-        let run = try recorder.finalize(metrics: metrics, options: runOptions, status: .completed)
+        let metrics = lifecycle.metrics
+        let run = lifecycle.run
 
         print("")
         print("summary")
@@ -195,27 +196,21 @@ extension WhispCLI {
         let exactRate = summary.executed > 0 ? Double(summary.exactCount) / Double(summary.executed) : 0
         let totalLatencyDistribution = latencyDistribution(values: summary.totalLatencies)
         let afterStopDistribution = latencyDistribution(values: summary.afterStopLatencies)
-        return BenchmarkRunMetrics(
-            casesTotal: allCasesCount,
-            casesSelected: selectedCasesCount,
-            executedCases: summary.executed,
-            skippedCases: summary.skipped,
-            failedCases: summary.failed,
-            cachedHits: summary.cachedHits,
+        return .stt(BenchmarkSTTRunMetrics(
+            counts: BenchmarkRunCounts(
+                casesTotal: allCasesCount,
+                casesSelected: selectedCasesCount,
+                executedCases: summary.executed,
+                skippedCases: summary.skipped,
+                failedCases: summary.failed,
+                cachedHits: summary.cachedHits
+            ),
             exactMatchRate: exactRate,
             avgCER: summary.cerValues.isEmpty ? nil : summary.cerValues.reduce(0, +) / Double(summary.cerValues.count),
             weightedCER: summary.totalRefChars > 0 ? Double(summary.totalEdits) / Double(summary.totalRefChars) : nil,
-            avgTermsF1: nil,
-            intentMatchRate: nil,
-            intentAvgScore: nil,
-            intentPreservationScore: nil,
-            hallucinationScore: nil,
-            hallucinationRate: nil,
             latencyMs: toBenchmarkLatencyDistribution(totalLatencyDistribution),
-            afterStopLatencyMs: toBenchmarkLatencyDistribution(afterStopDistribution),
-            postLatencyMs: nil,
-            totalAfterStopLatencyMs: nil
-        )
+            afterStopLatencyMs: toBenchmarkLatencyDistribution(afterStopDistribution)
+        ))
     }
 
     private static func runSTTCaseBenchmarkWithWorkers(
@@ -257,59 +252,21 @@ extension WhispCLI {
         let caseStartedAtMs = nowEpochMs()
 
         guard let reference = item.resolvedSTTReferenceTranscript() else {
-            let status: BenchmarkCaseStatus = .skipped
-            let result = BenchmarkCaseResult(
-                id: item.id,
-                status: status,
+            let artifacts = makeSkippedCaseArtifacts(
+                runID: runID,
+                caseID: item.id,
+                caseStartedAtMs: caseStartedAtMs,
                 reason: "参照transcriptがありません",
-                cache: BenchmarkCacheRecord(hit: false, namespace: "stt"),
+                cacheNamespace: "stt",
                 sources: BenchmarkReferenceSources(),
-                contextUsed: item.context != nil,
-                visionImageAttached: item.visionImageFile != nil,
-                metrics: BenchmarkCaseMetrics()
+                contextPresent: item.context != nil,
+                visionImagePresent: item.visionImageFile != nil,
+                audioFilePath: item.audioFile
             )
-            let loadEndedAtMs = nowEpochMs()
-            let events: [BenchmarkCaseEvent] = [
-                .loadCase(BenchmarkLoadCaseLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    ),
-                    sources: BenchmarkReferenceSources(),
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )),
-                .aggregate(BenchmarkAggregateLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: eventStatus(from: status),
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    ),
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )),
-            ]
             return STTCaseWorkerOutcome(
                 displayLine: "\(item.id)\tskipped_missing_reference\tfalse\t-\t-\t-\t-\t-",
-                result: result,
-                events: events,
+                result: artifacts.result,
+                events: artifacts.events,
                 ioWrites: [],
                 executed: 0,
                 skipped: 1,
@@ -325,60 +282,22 @@ extension WhispCLI {
         }
 
         guard FileManager.default.fileExists(atPath: item.audioFile) else {
-            let status: BenchmarkCaseStatus = .skipped
             let sources = BenchmarkReferenceSources(transcript: reference.source)
-            let result = BenchmarkCaseResult(
-                id: item.id,
-                status: status,
+            let artifacts = makeSkippedCaseArtifacts(
+                runID: runID,
+                caseID: item.id,
+                caseStartedAtMs: caseStartedAtMs,
                 reason: "audio_file が見つかりません",
-                cache: BenchmarkCacheRecord(hit: false, namespace: "stt"),
+                cacheNamespace: "stt",
                 sources: sources,
-                contextUsed: item.context != nil,
-                visionImageAttached: item.visionImageFile != nil,
-                metrics: BenchmarkCaseMetrics()
+                contextPresent: item.context != nil,
+                visionImagePresent: item.visionImageFile != nil,
+                audioFilePath: item.audioFile
             )
-            let loadEndedAtMs = nowEpochMs()
-            let events: [BenchmarkCaseEvent] = [
-                .loadCase(BenchmarkLoadCaseLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    ),
-                    sources: sources,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )),
-                .aggregate(BenchmarkAggregateLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: eventStatus(from: status),
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    ),
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )),
-            ]
             return STTCaseWorkerOutcome(
                 displayLine: "\(item.id)\tskipped_missing_audio\tfalse\t-\t-\t-\t-\t-",
-                result: result,
-                events: events,
+                result: artifacts.result,
+                events: artifacts.events,
                 ioWrites: [],
                 executed: 0,
                 skipped: 1,
@@ -398,60 +317,23 @@ extension WhispCLI {
             let audio = try parsePCM16MonoWAV(wavData)
             let audioSeconds = audioDurationSeconds(audio: audio)
             if audioSeconds < options.minAudioSeconds {
-                let status: BenchmarkCaseStatus = .skipped
                 let sources = BenchmarkReferenceSources(transcript: reference.source)
-                let result = BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
+                let artifacts = makeSkippedCaseArtifacts(
+                    runID: runID,
+                    caseID: item.id,
+                    caseStartedAtMs: caseStartedAtMs,
                     reason: "audio_seconds(\(String(format: "%.2f", audioSeconds))) < min_audio_seconds(\(String(format: "%.2f", options.minAudioSeconds)))",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "stt"),
+                    cacheNamespace: "stt",
                     sources: sources,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
+                    contextPresent: item.context != nil,
+                    visionImagePresent: item.visionImageFile != nil,
+                    audioFilePath: item.audioFile,
                     metrics: BenchmarkCaseMetrics(audioSeconds: audioSeconds)
                 )
-                let loadEndedAtMs = nowEpochMs()
-                let events: [BenchmarkCaseEvent] = [
-                    .loadCase(BenchmarkLoadCaseLog(
-                        base: makeEventBase(
-                            runID: runID,
-                            caseID: item.id,
-                            stage: .loadCase,
-                            status: .ok,
-                            startedAtMs: caseStartedAtMs,
-                            endedAtMs: loadEndedAtMs
-                        ),
-                        sources: sources,
-                        contextPresent: item.context != nil,
-                        visionImagePresent: item.visionImageFile != nil,
-                        audioFilePath: item.audioFile,
-                        rawRowRef: nil
-                    )),
-                    .aggregate(BenchmarkAggregateLog(
-                        base: makeEventBase(
-                            runID: runID,
-                            caseID: item.id,
-                            stage: .aggregate,
-                            status: eventStatus(from: status),
-                            startedAtMs: loadEndedAtMs,
-                            endedAtMs: nowEpochMs()
-                        ),
-                        exactMatch: nil,
-                        cer: nil,
-                        intentMatch: nil,
-                        intentScore: nil,
-                        intentPreservationScore: nil,
-                        hallucinationScore: nil,
-                        hallucinationRate: nil,
-                        latencyMs: nil,
-                        totalAfterStopMs: nil,
-                        outputChars: nil
-                    )),
-                ]
                 return STTCaseWorkerOutcome(
                     displayLine: "\(item.id)\tskipped_too_short_audio\tfalse\t-\t-\t\(String(format: "%.2f", audioSeconds))\t-\t-",
-                    result: result,
-                    events: events,
+                    result: artifacts.result,
+                    events: artifacts.events,
                     ioWrites: [],
                     executed: 0,
                     skipped: 1,
@@ -537,7 +419,7 @@ extension WhispCLI {
                         transcript: result.transcript,
                         totalMs: result.totalMs,
                         afterStopMs: result.afterStopMs,
-                        createdAt: ISO8601DateFormatter().string(from: Date())
+                        createdAt: WhispTime.isoNow()
                     )
                     try saveCacheEntry(component: "stt", key: cacheKey, value: cache)
                 }

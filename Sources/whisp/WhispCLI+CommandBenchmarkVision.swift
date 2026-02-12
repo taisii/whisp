@@ -20,30 +20,34 @@ extension WhispCLI {
         print("")
         print("id\tstatus\tcached\tsummary_cer\tterms_f1\tlatency_ms")
 
-        let runOptions = BenchmarkRunOptions(
-            sourceCasesPath: options.jsonlPath,
-            useCache: options.useCache,
-            caseLimit: options.limit
-        )
+        let runOptions = BenchmarkRunOptions.vision(BenchmarkVisionRunOptions(
+            common: BenchmarkRunCommonOptions(
+                sourceCasesPath: options.jsonlPath,
+                caseLimit: options.limit,
+                useCache: options.useCache
+            )
+        ))
         let recorder = try BenchmarkRunRecorder(
             runID: runID,
             kind: .vision,
             options: runOptions,
-            initialMetrics: BenchmarkRunMetrics(
-                casesTotal: allCases.count,
-                casesSelected: selectedCases.count,
-                executedCases: 0,
-                skippedCases: 0,
-                failedCases: 0,
-                cachedHits: 0
-            )
+            initialMetrics: .vision(BenchmarkVisionRunMetrics(
+                counts: BenchmarkRunCounts(
+                    casesTotal: allCases.count,
+                    casesSelected: selectedCases.count,
+                    executedCases: 0,
+                    skippedCases: 0,
+                    failedCases: 0,
+                    cachedHits: 0
+                )
+            ))
         )
 
-        for item in selectedCases {
-            try recorder.markCaseQueued(caseID: item.id)
-        }
         let accumulator = VisionOutcomeAccumulator()
-        do {
+        let lifecycle = try await executeBenchmarkRunLifecycle(
+            selectedCases: selectedCases,
+            recorder: recorder
+        ) {
             try await runVisionCaseBenchmarkWithWorkers(
                 runID: runID,
                 modeLabel: modeLabel,
@@ -53,24 +57,21 @@ extension WhispCLI {
             ) { outcome in
                 try await accumulator.consume(outcome, recorder: recorder)
             }
-        } catch {
-            let partial = await accumulator.snapshot()
-            let failedMetrics = makeVisionRunMetrics(
+        } snapshotSummary: {
+            await accumulator.snapshot()
+        } makeMetrics: { summary in
+            makeVisionRunMetrics(
                 allCasesCount: allCases.count,
                 selectedCasesCount: selectedCases.count,
-                summary: partial
+                summary: summary
             )
-            _ = try? recorder.finalize(metrics: failedMetrics, options: runOptions, status: .failed)
-            throw error
+        } makeRunOptions: { _ in
+            runOptions
         }
 
-        let summary = await accumulator.snapshot()
-        let metrics = makeVisionRunMetrics(
-            allCasesCount: allCases.count,
-            selectedCasesCount: selectedCases.count,
-            summary: summary
-        )
-        let run = try recorder.finalize(metrics: metrics, options: runOptions, status: .completed)
+        let summary = lifecycle.summary
+        let metrics = lifecycle.metrics
+        let run = lifecycle.run
 
         print("")
         print("summary")
@@ -154,27 +155,19 @@ extension WhispCLI {
         selectedCasesCount: Int,
         summary: VisionOutcomeSummary
     ) -> BenchmarkRunMetrics {
-        BenchmarkRunMetrics(
-            casesTotal: allCasesCount,
-            casesSelected: selectedCasesCount,
-            executedCases: summary.executed,
-            skippedCases: summary.skipped,
-            failedCases: summary.failed,
-            cachedHits: summary.cachedHits,
-            exactMatchRate: nil,
+        .vision(BenchmarkVisionRunMetrics(
+            counts: BenchmarkRunCounts(
+                casesTotal: allCasesCount,
+                casesSelected: selectedCasesCount,
+                executedCases: summary.executed,
+                skippedCases: summary.skipped,
+                failedCases: summary.failed,
+                cachedHits: summary.cachedHits
+            ),
             avgCER: summary.summaryCERs.isEmpty ? nil : summary.summaryCERs.reduce(0, +) / Double(summary.summaryCERs.count),
-            weightedCER: nil,
             avgTermsF1: summary.termsF1s.isEmpty ? nil : summary.termsF1s.reduce(0, +) / Double(summary.termsF1s.count),
-            intentMatchRate: nil,
-            intentAvgScore: nil,
-            intentPreservationScore: nil,
-            hallucinationScore: nil,
-            hallucinationRate: nil,
-            latencyMs: toBenchmarkLatencyDistribution(latencyDistribution(values: summary.latencies)),
-            afterStopLatencyMs: nil,
-            postLatencyMs: nil,
-            totalAfterStopLatencyMs: nil
-        )
+            latencyMs: toBenchmarkLatencyDistribution(latencyDistribution(values: summary.latencies))
+        ))
     }
 
     private static func runVisionCaseBenchmarkWithWorkers(
@@ -211,59 +204,21 @@ extension WhispCLI {
         let caseStartedAtMs = nowEpochMs()
 
         guard let imagePath = item.visionImageFile, !imagePath.isEmpty else {
-            let status: BenchmarkCaseStatus = .skipped
-            let result = BenchmarkCaseResult(
-                id: item.id,
-                status: status,
+            let artifacts = makeSkippedCaseArtifacts(
+                runID: runID,
+                caseID: item.id,
+                caseStartedAtMs: caseStartedAtMs,
                 reason: "vision_image_file がありません",
-                cache: BenchmarkCacheRecord(hit: false, namespace: "vision"),
+                cacheNamespace: "vision",
                 sources: sourceInfo,
-                contextUsed: item.context != nil,
-                visionImageAttached: false,
-                metrics: BenchmarkCaseMetrics()
+                contextPresent: item.context != nil,
+                visionImagePresent: false,
+                audioFilePath: nil
             )
-            let loadEndedAtMs = nowEpochMs()
-            let events: [BenchmarkCaseEvent] = [
-                .loadCase(BenchmarkLoadCaseLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    ),
-                    sources: sourceInfo,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: false,
-                    audioFilePath: nil,
-                    rawRowRef: nil
-                )),
-                .aggregate(BenchmarkAggregateLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: .skipped,
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    ),
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )),
-            ]
             return VisionCaseWorkerOutcome(
                 displayLine: "\(item.id)\tskipped_missing_image\tfalse\t-\t-\t-",
-                result: result,
-                events: events,
+                result: artifacts.result,
+                events: artifacts.events,
                 ioWrites: [],
                 executed: 0,
                 skipped: 1,
@@ -276,59 +231,21 @@ extension WhispCLI {
         }
 
         guard FileManager.default.fileExists(atPath: imagePath) else {
-            let status: BenchmarkCaseStatus = .skipped
-            let result = BenchmarkCaseResult(
-                id: item.id,
-                status: status,
+            let artifacts = makeSkippedCaseArtifacts(
+                runID: runID,
+                caseID: item.id,
+                caseStartedAtMs: caseStartedAtMs,
                 reason: "画像ファイルが見つかりません: \(imagePath)",
-                cache: BenchmarkCacheRecord(hit: false, namespace: "vision"),
+                cacheNamespace: "vision",
                 sources: sourceInfo,
-                contextUsed: item.context != nil,
-                visionImageAttached: false,
-                metrics: BenchmarkCaseMetrics()
+                contextPresent: item.context != nil,
+                visionImagePresent: false,
+                audioFilePath: nil
             )
-            let loadEndedAtMs = nowEpochMs()
-            let events: [BenchmarkCaseEvent] = [
-                .loadCase(BenchmarkLoadCaseLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    ),
-                    sources: sourceInfo,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: false,
-                    audioFilePath: nil,
-                    rawRowRef: nil
-                )),
-                .aggregate(BenchmarkAggregateLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: .skipped,
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    ),
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )),
-            ]
             return VisionCaseWorkerOutcome(
                 displayLine: "\(item.id)\tskipped_image_not_found\tfalse\t-\t-\t-",
-                result: result,
-                events: events,
+                result: artifacts.result,
+                events: artifacts.events,
                 ioWrites: [],
                 executed: 0,
                 skipped: 1,
@@ -341,59 +258,21 @@ extension WhispCLI {
         }
 
         guard let ref = item.resolvedVisionReference() else {
-            let status: BenchmarkCaseStatus = .skipped
-            let result = BenchmarkCaseResult(
-                id: item.id,
-                status: status,
+            let artifacts = makeSkippedCaseArtifacts(
+                runID: runID,
+                caseID: item.id,
+                caseStartedAtMs: caseStartedAtMs,
                 reason: "context.visionSummary/visionTerms がありません",
-                cache: BenchmarkCacheRecord(hit: false, namespace: "vision"),
+                cacheNamespace: "vision",
                 sources: sourceInfo,
-                contextUsed: item.context != nil,
-                visionImageAttached: true,
-                metrics: BenchmarkCaseMetrics()
+                contextPresent: item.context != nil,
+                visionImagePresent: true,
+                audioFilePath: nil
             )
-            let loadEndedAtMs = nowEpochMs()
-            let events: [BenchmarkCaseEvent] = [
-                .loadCase(BenchmarkLoadCaseLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    ),
-                    sources: sourceInfo,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: true,
-                    audioFilePath: nil,
-                    rawRowRef: nil
-                )),
-                .aggregate(BenchmarkAggregateLog(
-                    base: makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: .skipped,
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    ),
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )),
-            ]
             return VisionCaseWorkerOutcome(
                 displayLine: "\(item.id)\tskipped_missing_reference_context\tfalse\t-\t-\t-",
-                result: result,
-                events: events,
+                result: artifacts.result,
+                events: artifacts.events,
                 ioWrites: [],
                 executed: 0,
                 skipped: 1,
@@ -445,7 +324,7 @@ extension WhispCLI {
                         summary: output.summary,
                         terms: output.terms,
                         latencyMs: output.latencyMs,
-                        createdAt: ISO8601DateFormatter().string(from: Date())
+                        createdAt: WhispTime.isoNow()
                     )
                     try saveCacheEntry(component: "vision", key: cacheKey, value: cache)
                 }

@@ -93,23 +93,31 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 summary_dst="$result_root/$summary_name"
-jq '{
-  runID: .id,
-  kind: .kind,
-  executedCases: (.metrics.executedCases // 0),
-  skippedCases: (.metrics.skippedCases // 0),
-  failedCases: (.metrics.failedCases // 0),
-  cachedHits: (.metrics.cachedHits // 0),
-  exactMatchRate: .metrics.exactMatchRate,
-  avgCER: .metrics.avgCER,
-  weightedCER: .metrics.weightedCER,
-  avgTermsF1: .metrics.avgTermsF1,
-  avgLatencyMs: .metrics.latencyMs.avg,
-  avgAfterStopMs: .metrics.afterStopLatencyMs.avg,
-  avgPostMs: .metrics.postLatencyMs.avg,
-  manifestPath: .paths.manifestPath,
-  casesIndexPath: .paths.casesIndexPath
-}' "$manifest_path" > "$summary_dst"
+jq 'def metrics_payload:
+      if .metrics.kind == "stt" then .metrics.stt
+      elif .metrics.kind == "generation" then .metrics.generation
+      elif .metrics.kind == "generation_pairwise" then .metrics.generationPairwise
+      elif .metrics.kind == "vision" then .metrics.vision
+      else {} end;
+    def counts: (metrics_payload.counts // {});
+    {
+      runID: .id,
+      kind: .kind,
+      metricsKind: .metrics.kind,
+      executedCases: (counts.executedCases // 0),
+      skippedCases: (counts.skippedCases // 0),
+      failedCases: (counts.failedCases // 0),
+      cachedHits: (counts.cachedHits // 0),
+      exactMatchRate: (metrics_payload.exactMatchRate // null),
+      avgCER: (metrics_payload.avgCER // null),
+      weightedCER: (metrics_payload.weightedCER // null),
+      avgTermsF1: (metrics_payload.avgTermsF1 // null),
+      avgLatencyMs: (metrics_payload.latencyMs.avg // null),
+      avgAfterStopMs: (metrics_payload.afterStopLatencyMs.avg // null),
+      avgPostMs: (metrics_payload.postLatencyMs.avg // null),
+      manifestPath: .paths.manifestPath,
+      casesIndexPath: .paths.casesIndexPath
+    }' "$manifest_path" > "$summary_dst"
 
 echo "result_root: $result_root"
 echo "summary_log: $summary_log"
