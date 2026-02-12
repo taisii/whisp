@@ -123,6 +123,52 @@ final class BenchmarkViewModelTests: XCTestCase {
         XCTAssertEqual(after.first?.excluded, true)
     }
 
+    func testIntegrityCaseRowsShowAllCasesAndMarkIssues() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"","ground_truth_text":"正解1"}
+        {"id":"case-2","audio_file":"/tmp/b.wav","stt_text":"入力2","ground_truth_text":"正解2"}
+
+        """
+        try Data(jsonl.utf8).write(to: casesPath, options: .atomic)
+
+        let issue = BenchmarkIntegrityIssue(
+            id: "issue-case-1",
+            caseID: "case-1",
+            task: .generation,
+            issueType: "missing_stt_text",
+            missingFields: ["stt_text"],
+            sourcePath: casesPath.path,
+            excluded: false,
+            detectedAt: "2026-02-12T00:00:00.000Z"
+        )
+        try integrityStore.saveIssues(task: .generation, issues: [issue])
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
+        viewModel.selectedTask = .generation
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.integrityCaseRows.count, 2)
+        let case1 = try XCTUnwrap(viewModel.integrityCaseRows.first(where: { $0.id == "case-1" }))
+        let case2 = try XCTUnwrap(viewModel.integrityCaseRows.first(where: { $0.id == "case-2" }))
+
+        XCTAssertTrue(case1.hasActiveIssues)
+        XCTAssertEqual(case1.issueCount, 1)
+        XCTAssertFalse(case2.hasActiveIssues)
+        XCTAssertEqual(case2.issueCount, 0)
+    }
+
     func testOpenCaseDetailLoadsTimelineAndAttempts() throws {
         let home = tempHome()
         let env = ["HOME": home.path]

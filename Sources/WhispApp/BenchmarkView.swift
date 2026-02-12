@@ -43,12 +43,6 @@ struct BenchmarkView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button {
-                viewModel.refresh()
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.bordered)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

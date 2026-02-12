@@ -70,6 +70,21 @@ struct BenchmarkCaseDetail: Identifiable, Equatable {
     var id: String { "\(runID):\(caseID)" }
 }
 
+struct BenchmarkIntegrityCaseRow: Identifiable, Equatable {
+    let id: String
+    let audioFile: String
+    let sttPreview: String
+    let referencePreview: String
+    let issueCount: Int
+    let activeIssueCount: Int
+    let excludedIssueCount: Int
+    let issueTypesSummary: String
+    let missingInDataset: Bool
+
+    var hasActiveIssues: Bool { activeIssueCount > 0 }
+    var hasOnlyExcludedIssues: Bool { issueCount > 0 && activeIssueCount == 0 }
+}
+
 @MainActor
 final class BenchmarkViewModel: ObservableObject {
     @Published var selectedTab: BenchmarkDashboardTab = .comparison
@@ -88,7 +103,9 @@ final class BenchmarkViewModel: ObservableObject {
     @Published var isCaseAudioPlaying = false
 
     @Published var integrityIssues: [BenchmarkIntegrityIssue] = []
+    @Published var integrityCaseRows: [BenchmarkIntegrityCaseRow] = []
     @Published var selectedIntegrityIssueID: String?
+    @Published var selectedIntegrityCaseID: String?
 
     @Published var statusMessage = ""
     @Published var statusIsError = false
@@ -129,6 +146,28 @@ final class BenchmarkViewModel: ObservableObject {
     var selectedIntegrityIssue: BenchmarkIntegrityIssue? {
         guard let selectedIntegrityIssueID else { return nil }
         return integrityIssues.first { $0.id == selectedIntegrityIssueID }
+    }
+
+    var selectedIntegrityCaseRow: BenchmarkIntegrityCaseRow? {
+        guard let selectedIntegrityCaseID else { return nil }
+        return integrityCaseRows.first { $0.id == selectedIntegrityCaseID }
+    }
+
+    var selectedIntegrityCaseIssues: [BenchmarkIntegrityIssue] {
+        guard let selectedIntegrityCaseID else { return [] }
+        return integrityIssues.filter { $0.caseID == selectedIntegrityCaseID }
+    }
+
+    var canToggleSelectedIntegrityCaseExclusion: Bool {
+        !selectedIntegrityCaseIssues.isEmpty
+    }
+
+    var selectedIntegrityCaseExclusionLabel: String {
+        guard !selectedIntegrityCaseIssues.isEmpty else {
+            return "Exclude"
+        }
+        let hasActive = selectedIntegrityCaseIssues.contains(where: { !$0.excluded })
+        return hasActive ? "Exclude" : "Unexclude"
     }
 
     var hasBenchmarkErrorLog: Bool {
@@ -201,6 +240,7 @@ final class BenchmarkViewModel: ObservableObject {
                     try Self.runIntegrityScanCommand(task: task, datasetPath: dataset)
                 }.value
                 try loadIntegrityIssues()
+                try loadIntegrityCaseRows()
                 setStatus("ケース不備スキャンが完了しました。", isError: false, clearErrorLog: true)
             } catch {
                 let log = normalizedErrorLog(error.localizedDescription)
@@ -294,12 +334,50 @@ final class BenchmarkViewModel: ObservableObject {
 
     func selectIntegrityIssue(_ issueID: String?) {
         selectedIntegrityIssueID = issueID
+        if let issueID,
+           let issue = integrityIssues.first(where: { $0.id == issueID })
+        {
+            selectedIntegrityCaseID = issue.caseID
+        }
+    }
+
+    func selectIntegrityCase(_ caseID: String?) {
+        selectedIntegrityCaseID = caseID
+        if let caseID {
+            selectedIntegrityIssueID = integrityIssues.first(where: { $0.caseID == caseID })?.id
+        } else {
+            selectedIntegrityIssueID = nil
+        }
+    }
+
+    func toggleSelectedIntegrityCaseExclusion() {
+        let issues = selectedIntegrityCaseIssues
+        guard !issues.isEmpty else {
+            setStatus("除外対象の不備がありません。", isError: true)
+            return
+        }
+        let shouldExclude = issues.contains(where: { !$0.excluded })
+        do {
+            for issue in issues {
+                try integrityStore.setExcluded(issueID: issue.id, task: issue.task, excluded: shouldExclude)
+            }
+            try loadIntegrityIssues()
+            try loadIntegrityCaseRows()
+            setStatus(
+                shouldExclude ? "ケース不備を除外しました。" : "ケース不備の除外を解除しました。",
+                isError: false,
+                clearErrorLog: true
+            )
+        } catch {
+            setStatus("除外更新に失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
+        }
     }
 
     func setIssueExcluded(_ issue: BenchmarkIntegrityIssue, excluded: Bool) {
         do {
             try integrityStore.setExcluded(issueID: issue.id, task: issue.task, excluded: excluded)
             try loadIntegrityIssues()
+            try loadIntegrityCaseRows()
             setStatus(
                 excluded ? "ケースを除外しました。" : "ケース除外を解除しました。",
                 isError: false,
@@ -311,23 +389,27 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     func copySelectedIssueCaseID() {
-        guard let issue = selectedIntegrityIssue else {
+        guard let caseID = selectedIntegrityCaseID ?? selectedIntegrityIssue?.caseID else {
             setStatus("case_id を選択してください。", isError: true)
             return
         }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(issue.caseID, forType: .string)
+        pasteboard.setString(caseID, forType: .string)
         setStatus("case_id をコピーしました。", isError: false)
     }
 
     func openRelatedRunDirectory() {
-        guard let issue = selectedIntegrityIssue else {
-            setStatus("ケース不備を選択してください。", isError: true)
+        guard let caseID = selectedIntegrityCaseID ?? selectedIntegrityIssue?.caseID else {
+            setStatus("case_id を選択してください。", isError: true)
             return
         }
         do {
-            guard let runID = try findRelatedRunID(issue: issue) else {
+            guard let runID = try findRelatedRunID(
+                task: selectedTask,
+                sourcePath: benchmarkDatasetPath,
+                caseID: caseID
+            ) else {
                 setStatus("関連runディレクトリが見つかりません。", isError: true)
                 return
             }
@@ -366,6 +448,7 @@ final class BenchmarkViewModel: ObservableObject {
         do {
             try loadComparisonRows()
             try loadIntegrityIssues()
+            try loadIntegrityCaseRows()
         } catch {
             setStatus("タスク切り替えに失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
         }
@@ -381,6 +464,7 @@ final class BenchmarkViewModel: ObservableObject {
         }
         try loadComparisonRows()
         try loadIntegrityIssues()
+        try loadIntegrityCaseRows()
     }
 
     private func ensureDefaultCandidatesIfNeeded() throws {
@@ -565,22 +649,132 @@ final class BenchmarkViewModel: ObservableObject {
     private func loadIntegrityIssues() throws {
         integrityIssues = try integrityStore.loadIssues(task: selectedTask)
         if let selectedIntegrityIssueID,
-           integrityIssues.contains(where: { $0.id == selectedIntegrityIssueID })
+           !integrityIssues.contains(where: { $0.id == selectedIntegrityIssueID })
         {
+            self.selectedIntegrityIssueID = nil
+        }
+
+        if let selectedIntegrityCaseID,
+           let issue = integrityIssues.first(where: { $0.caseID == selectedIntegrityCaseID })
+        {
+            selectedIntegrityIssueID = issue.id
             return
         }
-        selectedIntegrityIssueID = integrityIssues.first?.id
+
+        if selectedIntegrityIssueID == nil {
+            selectedIntegrityIssueID = integrityIssues.first?.id
+        }
     }
 
-    private func findRelatedRunID(issue: BenchmarkIntegrityIssue) throws -> String? {
-        let normalizedIssuePath = normalizePath(issue.sourcePath)
+    private func loadIntegrityCaseRows() throws {
+        let cases = try loadIntegrityDatasetCases(path: benchmarkDatasetPath)
+        let issuesByCase = Dictionary(grouping: integrityIssues, by: \.caseID)
+        let knownCaseIDs = Set(cases.map(\.id))
+
+        var rows: [BenchmarkIntegrityCaseRow] = cases.map { item in
+            let caseIssues = issuesByCase[item.id] ?? []
+            let activeIssueCount = caseIssues.filter { !$0.excluded }.count
+            let excludedIssueCount = caseIssues.count - activeIssueCount
+            let issueTypes = caseIssues
+                .filter { !$0.excluded }
+                .map(\.issueType)
+            let issueTypesFallback = caseIssues.map(\.issueType)
+            let summary = (issueTypes.isEmpty ? issueTypesFallback : issueTypes)
+                .sorted()
+                .joined(separator: ", ")
+
+            return BenchmarkIntegrityCaseRow(
+                id: item.id,
+                audioFile: shortFileName(item.audioFile),
+                sttPreview: preview(item.sttText),
+                referencePreview: preview(item.referenceText),
+                issueCount: caseIssues.count,
+                activeIssueCount: activeIssueCount,
+                excludedIssueCount: excludedIssueCount,
+                issueTypesSummary: summary.isEmpty ? "-" : summary,
+                missingInDataset: false
+            )
+        }
+
+        for (caseID, caseIssues) in issuesByCase where !knownCaseIDs.contains(caseID) {
+            let activeIssueCount = caseIssues.filter { !$0.excluded }.count
+            let excludedIssueCount = caseIssues.count - activeIssueCount
+            let issueTypes = caseIssues
+                .filter { !$0.excluded }
+                .map(\.issueType)
+            let issueTypesFallback = caseIssues.map(\.issueType)
+            let summary = (issueTypes.isEmpty ? issueTypesFallback : issueTypes)
+                .sorted()
+                .joined(separator: ", ")
+
+            rows.append(
+                BenchmarkIntegrityCaseRow(
+                    id: caseID,
+                    audioFile: "-",
+                    sttPreview: "-",
+                    referencePreview: "-",
+                    issueCount: caseIssues.count,
+                    activeIssueCount: activeIssueCount,
+                    excludedIssueCount: excludedIssueCount,
+                    issueTypesSummary: summary.isEmpty ? "-" : summary,
+                    missingInDataset: true
+                )
+            )
+        }
+
+        integrityCaseRows = rows.sorted(by: integrityCaseSort)
+
+        if let selectedIntegrityCaseID,
+           integrityCaseRows.contains(where: { $0.id == selectedIntegrityCaseID })
+        {
+            if let issue = integrityIssues.first(where: { $0.caseID == selectedIntegrityCaseID }) {
+                selectedIntegrityIssueID = issue.id
+            }
+            return
+        }
+
+        selectedIntegrityCaseID = integrityCaseRows.first?.id
+        if let selectedIntegrityCaseID {
+            selectedIntegrityIssueID = integrityIssues.first(where: { $0.caseID == selectedIntegrityCaseID })?.id
+        } else {
+            selectedIntegrityIssueID = nil
+        }
+    }
+
+    private func integrityCaseSort(_ lhs: BenchmarkIntegrityCaseRow, _ rhs: BenchmarkIntegrityCaseRow) -> Bool {
+        let lhsRank: Int
+        if lhs.hasActiveIssues {
+            lhsRank = 0
+        } else if lhs.hasOnlyExcludedIssues {
+            lhsRank = 1
+        } else {
+            lhsRank = 2
+        }
+
+        let rhsRank: Int
+        if rhs.hasActiveIssues {
+            rhsRank = 0
+        } else if rhs.hasOnlyExcludedIssues {
+            rhsRank = 1
+        } else {
+            rhsRank = 2
+        }
+
+        if lhsRank != rhsRank {
+            return lhsRank < rhsRank
+        }
+        return lhs.id < rhs.id
+    }
+
+    private func findRelatedRunID(task: BenchmarkKind, sourcePath: String, caseID: String) throws -> String? {
+        let normalizedIssuePath = normalizePath(sourcePath)
         let runs = try store.listRuns(limit: 500)
-        for run in runs where run.kind == issue.task {
+        for run in runs where run.kind == task {
             if normalizePath(run.options.sourceCasesPath) != normalizedIssuePath {
                 continue
             }
             let rows = try store.loadCaseResults(runID: run.id)
-            if rows.contains(where: { $0.id == issue.caseID }) {
+            if rows.contains(where: { $0.id == caseID }) {
                 return run.id
             }
         }
@@ -690,6 +884,107 @@ final class BenchmarkViewModel: ObservableObject {
             return firstLine
         }
         return "\(firstLine.prefix(maxChars - 3))..."
+    }
+
+    private struct IntegrityCaseLabels: Decodable {
+        let transcriptGold: String?
+        let transcriptSilver: String?
+
+        enum CodingKeys: String, CodingKey {
+            case transcriptGold = "transcript_gold"
+            case transcriptSilver = "transcript_silver"
+        }
+    }
+
+    private struct IntegrityDatasetCase: Decodable {
+        let id: String
+        let audioFile: String?
+        let sttText: String?
+        let groundTruthText: String?
+        let createdAt: String?
+        let labels: IntegrityCaseLabels?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case audioFile = "audio_file"
+            case sttText = "stt_text"
+            case groundTruthText = "ground_truth_text"
+            case createdAt = "created_at"
+            case labels
+        }
+
+        var referenceText: String? {
+            let direct = (groundTruthText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !direct.isEmpty {
+                return direct
+            }
+            let gold = (labels?.transcriptGold ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !gold.isEmpty {
+                return gold
+            }
+            let silver = (labels?.transcriptSilver ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !silver.isEmpty {
+                return silver
+            }
+            return nil
+        }
+    }
+
+    private func loadIntegrityDatasetCases(path: String) throws -> [IntegrityDatasetCase] {
+        let normalizedPath = normalizePath(path)
+        guard !normalizedPath.isEmpty else {
+            return []
+        }
+        guard FileManager.default.fileExists(atPath: normalizedPath) else {
+            return []
+        }
+
+        let content = try String(contentsOfFile: normalizedPath, encoding: .utf8)
+        let decoder = JSONDecoder()
+        var uniqueByID: [String: IntegrityDatasetCase] = [:]
+        var order: [String] = []
+
+        for (index, rawLine) in content.components(separatedBy: .newlines).enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty {
+                continue
+            }
+            guard let data = line.data(using: .utf8) else {
+                throw AppError.invalidArgument("ケース一覧の読み込みに失敗しました(line=\(index + 1))")
+            }
+            do {
+                let item = try decoder.decode(IntegrityDatasetCase.self, from: data)
+                if uniqueByID[item.id] == nil {
+                    order.append(item.id)
+                }
+                uniqueByID[item.id] = item
+            } catch {
+                throw AppError.invalidArgument("ケース一覧JSONLのデコードに失敗しました(line=\(index + 1)): \(error.localizedDescription)")
+            }
+        }
+
+        return order.compactMap { uniqueByID[$0] }
+    }
+
+    private func shortFileName(_ path: String?) -> String {
+        let trimmed = (path ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "-"
+        }
+        return URL(fileURLWithPath: trimmed).lastPathComponent
+    }
+
+    private func preview(_ text: String?, maxLength: Int = 56) -> String {
+        let normalized = (text ?? "")
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            return "-"
+        }
+        if normalized.count <= maxLength {
+            return normalized
+        }
+        return "\(normalized.prefix(maxLength - 3))..."
     }
 
     private func datasetHashIfExists(path: String) -> String? {

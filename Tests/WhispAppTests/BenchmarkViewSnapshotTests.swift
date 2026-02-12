@@ -191,6 +191,52 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
     }
 
+    func testRenderBenchmarkIntegrityAllCasesAfter() throws {
+        let artifactDir = try makeArtifactDirectory()
+        let dataHome = try makeTempHome()
+        let env = ["HOME": dataHome.path]
+        let dataStore = BenchmarkStore(environment: env)
+        let dataCandidateStore = BenchmarkCandidateStore(environment: env)
+        let dataIntegrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let casesPath = dataHome.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"","ground_truth_text":"正解1"}
+        {"id":"case-2","audio_file":"/tmp/b.wav","stt_text":"入力2","ground_truth_text":"正解2"}
+        {"id":"case-3","audio_file":"/tmp/c.wav","stt_text":"入力3","ground_truth_text":"正解3"}
+
+        """
+        try Data(jsonl.utf8).write(to: casesPath, options: .atomic)
+
+        let issue = BenchmarkIntegrityIssue(
+            id: "issue-case-1",
+            caseID: "case-1",
+            task: .generation,
+            issueType: "missing_stt_text",
+            missingFields: ["stt_text"],
+            sourcePath: casesPath.path,
+            excluded: false,
+            detectedAt: "2026-02-12T00:00:00.000Z"
+        )
+        try dataIntegrityStore.saveIssues(task: .generation, issues: [issue])
+
+        let viewModel = BenchmarkViewModel(
+            store: dataStore,
+            candidateStore: dataCandidateStore,
+            integrityStore: dataIntegrityStore,
+            datasetPathOverride: casesPath.path
+        )
+        viewModel.selectedTask = .generation
+        viewModel.selectedTab = .integrity
+        viewModel.refresh()
+
+        let after = try renderSnapshot(viewModel: viewModel)
+        let afterURL = artifactDir.appendingPathComponent("benchmark_integrity_all_cases_after.png")
+        try pngData(from: after).write(to: afterURL, options: .atomic)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
     private func renderSnapshot(viewModel: BenchmarkViewModel) throws -> NSBitmapImageRep {
         let root = BenchmarkView(viewModel: viewModel, autoRefreshOnAppear: false)
             .frame(width: CGFloat(width), height: CGFloat(height))

@@ -72,10 +72,6 @@ struct BenchmarkComparisonView: View {
             .pickerStyle(.segmented)
             .frame(width: 220)
 
-            Text("データセット: Debug Cases（固定）")
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-
             Menu {
                 if viewModel.taskCandidates.isEmpty {
                     Text("No candidates")
@@ -121,7 +117,7 @@ struct BenchmarkComparisonView: View {
             Button {
                 viewModel.scanIntegrity()
             } label: {
-                Label("Scan integrity", systemImage: "magnifyingglass")
+                Label("不備を再計算", systemImage: "magnifyingglass")
             }
             .buttonStyle(.bordered)
             .disabled(viewModel.isExecutingBenchmark)
@@ -326,24 +322,25 @@ struct BenchmarkComparisonView: View {
     private var comparisonColumns: [ComparisonColumn] {
         switch viewModel.selectedTask {
         case .stt:
-            return [
+            var columns = [
                 ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 220),
                 ComparisonColumn(id: "model", label: "model", width: 120),
-                ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110),
-                ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90),
                 ComparisonColumn(id: "avg_cer", label: "avg_cer", width: 90),
                 ComparisonColumn(id: "weighted_cer", label: "weighted_cer", width: 100),
                 ComparisonColumn(id: "stt_after_stop_p50", label: "stt_after_stop_p50", width: 140),
                 ComparisonColumn(id: "stt_after_stop_p95", label: "stt_after_stop_p95", width: 140),
                 ComparisonColumn(id: "last_run_at", label: "last_run_at", width: 180),
             ]
+            if shouldShowCaseCountColumns {
+                columns.insert(ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110), at: 2)
+                columns.insert(ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90), at: 3)
+            }
+            return columns
         case .generation:
-            return [
+            var columns = [
                 ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 210),
                 ComparisonColumn(id: "model", label: "model", width: 120),
                 ComparisonColumn(id: "prompt_profile", label: "prompt_profile", width: 120),
-                ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110),
-                ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90),
                 ComparisonColumn(id: "avg_cer", label: "avg_cer", width: 90),
                 ComparisonColumn(id: "weighted_cer", label: "weighted_cer", width: 100),
                 ComparisonColumn(id: "post_ms_p95", label: "post_ms_p95", width: 100),
@@ -351,15 +348,28 @@ struct BenchmarkComparisonView: View {
                 ComparisonColumn(id: "hallucination_rate", label: "hallucination_rate", width: 130),
                 ComparisonColumn(id: "last_run_at", label: "last_run_at", width: 180),
             ]
+            if shouldShowCaseCountColumns {
+                columns.insert(ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110), at: 3)
+                columns.insert(ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90), at: 4)
+            }
+            return columns
         case .vision:
-            return [
+            var columns = [
                 ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 220),
                 ComparisonColumn(id: "model", label: "model", width: 140),
-                ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110),
-                ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90),
                 ComparisonColumn(id: "last_run_at", label: "last_run_at", width: 180),
             ]
+            if shouldShowCaseCountColumns {
+                columns.insert(ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110), at: 2)
+                columns.insert(ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90), at: 3)
+            }
+            return columns
         }
+    }
+
+    private var shouldShowCaseCountColumns: Bool {
+        let pairs = Set(viewModel.comparisonRows.map { "\($0.executedCases)-\($0.skipCases)" })
+        return pairs.count > 1
     }
 
     private func renderedValue(columnID: String, row: BenchmarkComparisonRow) -> (text: String, color: Color) {
