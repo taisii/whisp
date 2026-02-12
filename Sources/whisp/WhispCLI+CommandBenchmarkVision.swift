@@ -39,516 +39,45 @@ extension WhispCLI {
             )
         )
 
-        var caseResults: [BenchmarkCaseResult] = []
-        var events: [BenchmarkCaseEvent] = []
-        var persistenceError: Error?
-
-        var executed = 0
-        var skipped = 0
-        var failed = 0
-        var cachedHits = 0
-        var summaryCERs: [Double] = []
-        var termsF1s: [Double] = []
-        var latencies: [Double] = []
-
         for item in selectedCases {
             try recorder.markCaseQueued(caseID: item.id)
         }
-
-        if benchmarkWorkers > 1 {
-            let outcomes = try await runVisionCaseBenchmarkWithWorkers(
+        let accumulator = VisionOutcomeAccumulator()
+        do {
+            try await runVisionCaseBenchmarkWithWorkers(
                 runID: runID,
                 modeLabel: modeLabel,
                 selectedCases: selectedCases,
                 options: options,
                 recorder: recorder
+            ) { outcome in
+                try await accumulator.consume(outcome, recorder: recorder)
+            }
+        } catch {
+            let partial = await accumulator.snapshot()
+            let failedMetrics = makeVisionRunMetrics(
+                allCasesCount: allCases.count,
+                selectedCasesCount: selectedCases.count,
+                summary: partial
             )
-            for outcome in outcomes {
-                print(outcome.displayLine)
-                executed += outcome.executed
-                skipped += outcome.skipped
-                failed += outcome.failed
-                cachedHits += outcome.cachedHits
-                if let summaryCER = outcome.summaryCER {
-                    summaryCERs.append(summaryCER)
-                }
-                if let termsF1 = outcome.termsF1 {
-                    termsF1s.append(termsF1)
-                }
-                if let latencyMs = outcome.latencyMs {
-                    latencies.append(latencyMs)
-                }
-                try recorder.appendCaseResult(outcome.result)
-                try recorder.appendEvents(outcome.events)
-                for write in outcome.ioWrites {
-                    try recorder.writeCaseIOText(caseID: outcome.result.id, fileName: write.fileName, text: write.text)
-                }
-            }
-        } else {
-            for item in selectedCases {
-            try recorder.markCaseStarted(caseID: item.id)
-            let caseStartedAtMs = nowEpochMs()
-            let caseStartIndex = caseResults.count
-            let eventStartIndex = events.count
-            defer {
-                defer {
-                    caseResults.removeSubrange(caseStartIndex..<caseResults.count)
-                    events.removeSubrange(eventStartIndex..<events.count)
-                }
-                if persistenceError == nil {
-                    do {
-                        if caseResults.count > caseStartIndex {
-                            for result in caseResults[caseStartIndex...] {
-                                try recorder.appendCaseResult(result)
-                            }
-                        }
-                        if events.count > eventStartIndex {
-                            try recorder.appendEvents(Array(events[eventStartIndex...]))
-                        }
-                    } catch {
-                        persistenceError = error
-                    }
-                }
-            }
-            let sourceInfo = BenchmarkReferenceSources(reference: "context.vision")
-
-            guard let imagePath = item.visionImageFile, !imagePath.isEmpty else {
-                skipped += 1
-                print("\(item.id)\tskipped_missing_image\tfalse\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .skipped
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: "vision_image_file がありません",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "vision"),
-                    sources: sourceInfo,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: false,
-                    metrics: BenchmarkCaseMetrics()
-                ))
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sourceInfo,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: false,
-                    audioFilePath: nil,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .skipped,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-                continue
-            }
-            guard FileManager.default.fileExists(atPath: imagePath) else {
-                skipped += 1
-                print("\(item.id)\tskipped_image_not_found\tfalse\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .skipped
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: "画像ファイルが見つかりません: \(imagePath)",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "vision"),
-                    sources: sourceInfo,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: false,
-                    metrics: BenchmarkCaseMetrics()
-                ))
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sourceInfo,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: false,
-                    audioFilePath: nil,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .skipped,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-                continue
-            }
-            guard let ref = item.resolvedVisionReference() else {
-                skipped += 1
-                print("\(item.id)\tskipped_missing_reference_context\tfalse\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .skipped
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: "context.visionSummary/visionTerms がありません",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "vision"),
-                    sources: sourceInfo,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: true,
-                    metrics: BenchmarkCaseMetrics()
-                ))
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sourceInfo,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: true,
-                    audioFilePath: nil,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .skipped,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-                continue
-            }
-
-            do {
-                let imageData = try Data(contentsOf: URL(fileURLWithPath: imagePath))
-                let imageHash = sha256Hex(data: imageData)
-                let cacheKey = sha256Hex(text: "vision-v2|\(modeLabel)|\(imageHash)")
-                let loadEndedAtMs = nowEpochMs()
-                let cacheStartedAtMs = nowEpochMs()
-                var cacheEndedAtMs = cacheStartedAtMs
-                var contextStartedAtMs = cacheStartedAtMs
-                var contextEndedAtMs = cacheStartedAtMs
-
-                let output: (summary: String, terms: [String], latencyMs: Double, cached: Bool)
-                if options.useCache,
-                   let cached: CachedVisionResult = loadCacheEntry(component: "vision", key: cacheKey)
-                {
-                    cacheEndedAtMs = nowEpochMs()
-                    contextStartedAtMs = cacheEndedAtMs
-                    contextEndedAtMs = nowEpochMs()
-                    output = (cached.summary, cached.terms, cached.latencyMs, true)
-                    cachedHits += 1
-                } else {
-                    cacheEndedAtMs = nowEpochMs()
-                    contextStartedAtMs = nowEpochMs()
-                    let startedAt = DispatchTime.now()
-                    let context = try analyzeVisionContextOCR(imageData: imageData)
-                    let latency = elapsedMs(since: startedAt)
-                    contextEndedAtMs = nowEpochMs()
-                    output = (
-                        (context?.visionSummary ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
-                        context?.visionTerms ?? [],
-                        latency,
-                        false
-                    )
-                    if options.useCache {
-                        let cache = CachedVisionResult(
-                            key: cacheKey,
-                            model: modeLabel,
-                            summary: output.summary,
-                            terms: output.terms,
-                            latencyMs: output.latencyMs,
-                            createdAt: ISO8601DateFormatter().string(from: Date())
-                        )
-                        try saveCacheEntry(component: "vision", key: cacheKey, value: cache)
-                    }
-                }
-
-                let summaryCER: Double
-                if ref.summary.isEmpty, output.summary.isEmpty {
-                    summaryCER = 0
-                } else {
-                    let left = Array(normalizedEvalText(ref.summary))
-                    let right = Array(normalizedEvalText(output.summary))
-                    let edit = levenshteinDistance(left, right)
-                    summaryCER = Double(edit) / Double(max(1, left.count))
-                }
-                let termScore = termSetScore(reference: ref.terms, hypothesis: output.terms)
-
-                executed += 1
-                summaryCERs.append(summaryCER)
-                termsF1s.append(termScore.f1)
-                latencies.append(output.latencyMs)
-
-                print("\(item.id)\tok\t\(output.cached)\t\(String(format: "%.3f", summaryCER))\t\(String(format: "%.3f", termScore.f1))\t\(msString(output.latencyMs))")
-
-                let status: BenchmarkCaseStatus = .ok
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: nil,
-                    cache: BenchmarkCacheRecord(hit: output.cached, key: cacheKey, namespace: "vision"),
-                    sources: sourceInfo,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: true,
-                    metrics: BenchmarkCaseMetrics(
-                        cer: summaryCER,
-                        termPrecision: termScore.precision,
-                        termRecall: termScore.recall,
-                        termF1: termScore.f1,
-                        latencyMs: output.latencyMs
-                    )
-                ))
-                try recorder.writeCaseIOText(caseID: item.id, fileName: "output_vision_summary.txt", text: output.summary)
-                try recorder.writeCaseIOText(caseID: item.id, fileName: "reference.txt", text: ref.summary)
-
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sourceInfo,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: true,
-                    audioFilePath: nil,
-                    rawRowRef: nil
-                )))
-
-                let cacheBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .cache,
-                    status: .ok,
-                    startedAtMs: cacheStartedAtMs,
-                    endedAtMs: cacheEndedAtMs
-                )
-                events.append(.cache(BenchmarkCacheLog(
-                    base: cacheBase,
-                    namespace: "vision",
-                    key: cacheKey,
-                    hit: output.cached,
-                    keyMaterialRef: nil,
-                    error: nil
-                )))
-
-                let contextBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .context,
-                    status: .ok,
-                    startedAtMs: contextStartedAtMs,
-                    endedAtMs: contextEndedAtMs
-                )
-                events.append(.context(BenchmarkContextLog(
-                    base: contextBase,
-                    contextPresent: true,
-                    sourceChars: nil,
-                    summaryChars: output.summary.count,
-                    termsCount: output.terms.count,
-                    rawContextRef: nil,
-                    error: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .ok,
-                    startedAtMs: contextEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: summaryCER,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: output.latencyMs,
-                    totalAfterStopMs: nil,
-                    outputChars: output.summary.count
-                )))
-            } catch {
-                failed += 1
-                print("\(item.id)\terror\tfalse\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .error
-                let message = error.localizedDescription
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: message,
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "vision"),
-                    sources: sourceInfo,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: true,
-                    metrics: BenchmarkCaseMetrics()
-                ))
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sourceInfo,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: true,
-                    audioFilePath: nil,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .error,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-
-                let errorBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .error,
-                    status: .error,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.error(BenchmarkErrorLog(
-                    base: errorBase,
-                    originStage: nil,
-                    errorType: "vision_case_error",
-                    message: message
-                )))
-            }
-        }
+            _ = try? recorder.finalize(metrics: failedMetrics, options: runOptions, status: .failed)
+            throw error
         }
 
-        let metrics = BenchmarkRunMetrics(
-            casesTotal: allCases.count,
-            casesSelected: selectedCases.count,
-            executedCases: executed,
-            skippedCases: skipped,
-            failedCases: failed,
-            cachedHits: cachedHits,
-            exactMatchRate: nil,
-            avgCER: summaryCERs.isEmpty ? nil : summaryCERs.reduce(0, +) / Double(summaryCERs.count),
-            weightedCER: nil,
-            avgTermsF1: termsF1s.isEmpty ? nil : termsF1s.reduce(0, +) / Double(termsF1s.count),
-            intentMatchRate: nil,
-            intentAvgScore: nil,
-            intentPreservationScore: nil,
-            hallucinationScore: nil,
-            hallucinationRate: nil,
-            latencyMs: toBenchmarkLatencyDistribution(latencyDistribution(values: latencies)),
-            afterStopLatencyMs: nil,
-            postLatencyMs: nil,
-            totalAfterStopLatencyMs: nil
+        let summary = await accumulator.snapshot()
+        let metrics = makeVisionRunMetrics(
+            allCasesCount: allCases.count,
+            selectedCasesCount: selectedCases.count,
+            summary: summary
         )
-
-        if let persistenceError {
-            _ = try? recorder.finalize(metrics: metrics, options: runOptions, status: .failed)
-            throw persistenceError
-        }
         let run = try recorder.finalize(metrics: metrics, options: runOptions, status: .completed)
 
         print("")
         print("summary")
-        print("executed_cases: \(executed)")
-        print("skipped_cases: \(skipped)")
-        print("failed_cases: \(failed)")
-        print("cached_hits: \(cachedHits)")
+        print("executed_cases: \(summary.executed)")
+        print("skipped_cases: \(summary.skipped)")
+        print("failed_cases: \(summary.failed)")
+        print("cached_hits: \(summary.cachedHits)")
         print("avg_summary_cer: \(metrics.avgCER.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("avg_terms_f1: \(metrics.avgTermsF1.map { String(format: "%.3f", $0) } ?? "n/a")")
         if let latency = metrics.latencyMs {
@@ -579,14 +108,87 @@ extension WhispCLI {
         let latencyMs: Double?
     }
 
+    private struct VisionOutcomeSummary: Sendable {
+        var executed = 0
+        var skipped = 0
+        var failed = 0
+        var cachedHits = 0
+        var summaryCERs: [Double] = []
+        var termsF1s: [Double] = []
+        var latencies: [Double] = []
+    }
+
+    private actor VisionOutcomeAccumulator {
+        private var summary = VisionOutcomeSummary()
+
+        func consume(_ outcome: VisionCaseWorkerOutcome, recorder: BenchmarkRunRecorder) throws {
+            print(outcome.displayLine)
+            summary.executed += outcome.executed
+            summary.skipped += outcome.skipped
+            summary.failed += outcome.failed
+            summary.cachedHits += outcome.cachedHits
+            if let value = outcome.summaryCER {
+                summary.summaryCERs.append(value)
+            }
+            if let value = outcome.termsF1 {
+                summary.termsF1s.append(value)
+            }
+            if let value = outcome.latencyMs {
+                summary.latencies.append(value)
+            }
+
+            try recorder.appendCaseResult(outcome.result)
+            try recorder.appendEvents(outcome.events)
+            for write in outcome.ioWrites {
+                try recorder.writeCaseIOText(caseID: outcome.result.id, fileName: write.fileName, text: write.text)
+            }
+        }
+
+        func snapshot() -> VisionOutcomeSummary {
+            summary
+        }
+    }
+
+    private static func makeVisionRunMetrics(
+        allCasesCount: Int,
+        selectedCasesCount: Int,
+        summary: VisionOutcomeSummary
+    ) -> BenchmarkRunMetrics {
+        BenchmarkRunMetrics(
+            casesTotal: allCasesCount,
+            casesSelected: selectedCasesCount,
+            executedCases: summary.executed,
+            skippedCases: summary.skipped,
+            failedCases: summary.failed,
+            cachedHits: summary.cachedHits,
+            exactMatchRate: nil,
+            avgCER: summary.summaryCERs.isEmpty ? nil : summary.summaryCERs.reduce(0, +) / Double(summary.summaryCERs.count),
+            weightedCER: nil,
+            avgTermsF1: summary.termsF1s.isEmpty ? nil : summary.termsF1s.reduce(0, +) / Double(summary.termsF1s.count),
+            intentMatchRate: nil,
+            intentAvgScore: nil,
+            intentPreservationScore: nil,
+            hallucinationScore: nil,
+            hallucinationRate: nil,
+            latencyMs: toBenchmarkLatencyDistribution(latencyDistribution(values: summary.latencies)),
+            afterStopLatencyMs: nil,
+            postLatencyMs: nil,
+            totalAfterStopLatencyMs: nil
+        )
+    }
+
     private static func runVisionCaseBenchmarkWithWorkers(
         runID: String,
         modeLabel: String,
         selectedCases: [ManualBenchmarkCase],
         options: VisionBenchmarkOptions,
-        recorder: BenchmarkRunRecorder
-    ) async throws -> [VisionCaseWorkerOutcome] {
-        try await runBenchmarkCaseWorkers(cases: selectedCases, workers: options.benchmarkWorkers) { _, item in
+        recorder: BenchmarkRunRecorder,
+        onOutcome: @escaping @Sendable (VisionCaseWorkerOutcome) async throws -> Void
+    ) async throws {
+        try await runBenchmarkCaseWorkers(
+            cases: selectedCases,
+            workers: options.benchmarkWorkers
+        ) { _, item in
             try recorder.markCaseStarted(caseID: item.id)
             return await executeVisionCaseBenchmarkWorker(
                 runID: runID,
@@ -594,6 +196,8 @@ extension WhispCLI {
                 item: item,
                 options: options
             )
+        } onResult: { outcome in
+            try await onOutcome(outcome)
         }
     }
 

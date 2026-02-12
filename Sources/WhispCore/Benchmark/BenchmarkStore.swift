@@ -416,53 +416,6 @@ public final class BenchmarkStore: @unchecked Sendable {
 
     private func applyCaseEventSideEffectsLocked(runID: String, event: BenchmarkCaseEvent) throws {
         switch event {
-        case let .loadCase(log):
-            let manifestPath = caseManifestPath(runID: runID, caseID: log.base.caseID)
-            let current: BenchmarkCaseManifest
-            if fileManager.fileExists(atPath: manifestPath.path),
-               let data = try? Data(contentsOf: manifestPath),
-               let decoded = try? JSONDecoder().decode(BenchmarkCaseManifest.self, from: data)
-            {
-                current = decoded
-            } else {
-                let now = isoNow()
-                current = BenchmarkCaseManifest(
-                    runID: runID,
-                    caseID: log.base.caseID,
-                    status: .ok,
-                    startedAt: now,
-                    endedAt: now,
-                    contextUsed: log.contextPresent,
-                    visionImageAttached: log.visionImagePresent
-                )
-            }
-
-            let updated = BenchmarkCaseManifest(
-                runID: current.runID,
-                caseID: current.caseID,
-                status: current.status,
-                reason: current.reason,
-                startedAt: current.startedAt,
-                endedAt: current.endedAt,
-                audioFilePath: log.audioFilePath,
-                contextUsed: log.contextPresent,
-                visionImageAttached: log.visionImagePresent,
-                transcriptSource: log.sources.transcript,
-                inputSource: log.sources.input,
-                referenceSource: log.sources.reference
-            )
-            try writePrettyJSON(updated, to: manifestPath)
-        case let .stt(log):
-            if let transcriptText = log.transcriptText, !transcriptText.isEmpty {
-                let outputPath = caseIODirectory(runID: runID, caseID: log.base.caseID)
-                    .appendingPathComponent("output_stt.txt", isDirectory: false)
-                try transcriptText.data(using: .utf8)?.write(to: outputPath, options: [.atomic])
-            }
-            if let referenceText = log.referenceText, !referenceText.isEmpty {
-                let referencePath = caseIODirectory(runID: runID, caseID: log.base.caseID)
-                    .appendingPathComponent("reference.txt", isDirectory: false)
-                try referenceText.data(using: .utf8)?.write(to: referencePath, options: [.atomic])
-            }
         case let .error(log):
             let errorPath = caseArtifactsDirectory(runID: runID, caseID: log.base.caseID)
                 .appendingPathComponent("error.json", isDirectory: false)

@@ -253,29 +253,23 @@ extension WhispCLI {
     static func runBenchmarkCaseWorkers<Result: Sendable>(
         cases: [ManualBenchmarkCase],
         workers requestedWorkers: Int?,
-        operation: @escaping @Sendable (_ index: Int, _ item: ManualBenchmarkCase) async throws -> Result
-    ) async throws -> [Result] {
+        operation: @escaping @Sendable (_ index: Int, _ item: ManualBenchmarkCase) async throws -> Result,
+        onResult: @escaping @Sendable (_ result: Result) async throws -> Void
+    ) async throws {
         let workers = resolveBenchmarkWorkers(requestedWorkers)
-        guard !cases.isEmpty else { return [] }
+        guard !cases.isEmpty else { return }
         let queue = BenchmarkCaseWorkQueue(items: cases)
 
-        return try await withThrowingTaskGroup(of: [(Int, Result)].self, returning: [Result].self) { group in
+        try await withThrowingTaskGroup(of: Void.self, returning: Void.self) { group in
             for _ in 0..<workers {
                 group.addTask {
-                    var bucket: [(Int, Result)] = []
                     while let payload = await queue.pop() {
-                        bucket.append((payload.index, try await operation(payload.index, payload.item)))
+                        let result = try await operation(payload.index, payload.item)
+                        try await onResult(result)
                     }
-                    return bucket
                 }
             }
-
-            var rows: [(Int, Result)] = []
-            for try await chunk in group {
-                rows.append(contentsOf: chunk)
-            }
-            rows.sort { $0.0 < $1.0 }
-            return rows.map(\.1)
+            try await group.waitForAll()
         }
     }
 

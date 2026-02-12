@@ -64,13 +64,54 @@ while [[ $# -gt 0 ]]; do
 done
 
 mkdir -p "$result_root"
+summary_log="$result_root/summary.txt"
 
 echo "building..."
 swift build >/dev/null
 
 echo "running ${label} benchmark..."
-./.build/debug/whisp "$bench_flag" "$jsonl_path" "${extra_args[@]}" | tee "$result_root/summary.txt"
+./.build/debug/whisp "$bench_flag" "$jsonl_path" "${extra_args[@]}" | tee "$summary_log"
+
+manifest_path="$(awk -F': ' '/^benchmark_manifest: /{print $2}' "$summary_log" | tail -n 1 | tr -d '\r')"
+if [[ -z "$manifest_path" || ! -f "$manifest_path" ]]; then
+  echo "benchmark manifest not found in output. see: $summary_log"
+  exit 1
+fi
+
+run_dir="$(dirname "$manifest_path")"
+rows_src="$run_dir/cases_index.jsonl"
+rows_dst="$result_root/$rows_name"
+if [[ -f "$rows_src" ]]; then
+  cp "$rows_src" "$rows_dst"
+else
+  : > "$rows_dst"
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "jq is required to build $summary_name"
+  exit 1
+fi
+
+summary_dst="$result_root/$summary_name"
+jq '{
+  runID: .id,
+  kind: .kind,
+  executedCases: (.metrics.executedCases // 0),
+  skippedCases: (.metrics.skippedCases // 0),
+  failedCases: (.metrics.failedCases // 0),
+  cachedHits: (.metrics.cachedHits // 0),
+  exactMatchRate: .metrics.exactMatchRate,
+  avgCER: .metrics.avgCER,
+  weightedCER: .metrics.weightedCER,
+  avgTermsF1: .metrics.avgTermsF1,
+  avgLatencyMs: .metrics.latencyMs.avg,
+  avgAfterStopMs: .metrics.afterStopLatencyMs.avg,
+  avgPostMs: .metrics.postLatencyMs.avg,
+  manifestPath: .paths.manifestPath,
+  casesIndexPath: .paths.casesIndexPath
+}' "$manifest_path" > "$summary_dst"
 
 echo "result_root: $result_root"
-echo "summary_log: $result_root/$summary_name"
-echo "case_rows_log: $result_root/$rows_name"
+echo "summary_log: $summary_log"
+echo "summary_json: $summary_dst"
+echo "case_rows_log: $rows_dst"

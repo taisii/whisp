@@ -23,18 +23,14 @@ if ! [[ "$min_audio_seconds" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
 fi
 
 mkdir -p "$result_root"
-manual_root="$result_root/manual"
+component_root="$result_root/components"
 stt_root="$result_root/stt"
 full_root="$result_root/full"
 
-mkdir -p "$manual_root" "$stt_root" "$full_root"
+mkdir -p "$component_root" "$stt_root" "$full_root"
 
-echo "[1/4] manual-case benchmark"
-scripts/benchmark_manual_cases.sh "$manual_jsonl" \
-  --result-root "$manual_root" \
-  --min-audio-seconds "$min_audio_seconds" \
-  --intent-source auto \
-  --intent-judge
+echo "[1/4] component benchmarks (vision/stt/generation)"
+scripts/run_component_eval_loop.sh "$manual_jsonl" "$component_root" "$min_audio_seconds" | tee "$component_root/summary.txt"
 
 echo "[2/4] stt latency benchmark"
 scripts/benchmark_stt_latency.sh "$input_wav" 3 "$stt_root" | tee "$stt_root/summary.txt"
@@ -56,14 +52,16 @@ fi
 
 {
   echo "result_root: $result_root"
-  echo "manual_summary_json: $manual_root/manual_summary.json"
-  echo "manual_rows_jsonl: $manual_root/manual_case_rows.jsonl"
+  echo "component_overview_text: $component_root/overview.txt"
+  echo "vision_summary_json: $component_root/1_vision/vision_summary.json"
+  echo "stt_summary_json: $component_root/2_stt/stt_summary.json"
+  echo "generation_summary_json: $component_root/3_generation/generation_summary.json"
   echo "stt_summary_text: $stt_root/summary.txt"
   echo "full_summary_text: $full_root/summary.txt"
   echo "pipeline_analysis_text: $result_root/pipeline_analysis.txt"
   echo ""
-  echo "[manual key metrics]"
-  grep -E '^(executed_cases|skipped_too_short_audio|failed_runs|exact_match_rate|weighted_cer|intent_match_rate|avg_total_after_stop_ms):' "$manual_root/summary.txt" || true
+  echo "[component key metrics]"
+  cat "$component_root/overview.txt" || true
   echo ""
   echo "[stt key metrics]"
   grep -E '^(post_stop_latency_rest_ms|post_stop_latency_stream_ms|post_stop_delta_ms|post_stop_ratio)' "$stt_root/summary.txt" || true

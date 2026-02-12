@@ -13,16 +13,22 @@ enum BenchmarkDashboardTab: String, CaseIterable, Identifiable {
 
 struct BenchmarkComparisonRow: Identifiable, Equatable {
     let candidate: BenchmarkCandidate
-    let runs: Int
+    let runCount: Int
     let executedCases: Int
     let skipCases: Int
     let avgCER: Double?
     let weightedCER: Double?
+    let sttAfterStopP50: Double?
     let sttAfterStopP95: Double?
     let postMsP95: Double?
     let totalAfterStopP95: Double?
+    let intentPreservationScore: Double?
+    let hallucinationRate: Double?
     let lastRunAt: String?
     let datasetHashMismatch: Bool
+    let currentDatasetHash: String?
+    let latestRunDatasetHash: String?
+    let latestRuntimeOptionsHash: String?
     let latestRunID: String?
 
     var id: String { candidate.id }
@@ -37,6 +43,8 @@ struct BenchmarkCaseBreakdownRow: Identifiable, Equatable {
     let sttAfterStopMs: Double?
     let postMs: Double?
     let totalAfterStopMs: Double?
+    let intentPreservationScore: Double?
+    let hallucinationRate: Double?
 }
 
 struct BenchmarkCaseDetail: Identifiable, Equatable {
@@ -68,7 +76,6 @@ final class BenchmarkViewModel: ObservableObject {
     @Published var selectedTask: BenchmarkKind = .stt {
         didSet { handleTaskChanged() }
     }
-    @Published var datasetPath: String
     @Published var forceRerun = false
 
     @Published var candidates: [BenchmarkCandidate] = []
@@ -91,6 +98,7 @@ final class BenchmarkViewModel: ObservableObject {
     private let store: BenchmarkStore
     private let candidateStore: BenchmarkCandidateStore
     private let integrityStore: BenchmarkIntegrityStore
+    private let benchmarkDatasetPath: String
     private let caseEventAnalyzer = BenchmarkCaseEventAnalyzer()
     private var caseAudioPlayer: AVAudioPlayer?
     private var caseAudioPollingTimer: Timer?
@@ -98,16 +106,13 @@ final class BenchmarkViewModel: ObservableObject {
     init(
         store: BenchmarkStore,
         candidateStore: BenchmarkCandidateStore = BenchmarkCandidateStore(),
-        integrityStore: BenchmarkIntegrityStore = BenchmarkIntegrityStore()
+        integrityStore: BenchmarkIntegrityStore = BenchmarkIntegrityStore(),
+        datasetPathOverride: String? = nil
     ) {
         self.store = store
         self.candidateStore = candidateStore
         self.integrityStore = integrityStore
-        if let paths = try? WhispPaths() {
-            datasetPath = paths.manualCasesFile.path
-        } else {
-            datasetPath = "~/.config/whisp/debug/manual_test_cases.jsonl"
-        }
+        benchmarkDatasetPath = Self.resolveDatasetPath(pathOverride: datasetPathOverride)
     }
 
     var taskCandidates: [BenchmarkCandidate] {
@@ -146,7 +151,7 @@ final class BenchmarkViewModel: ObservableObject {
     func runCompare() {
         guard !isExecutingBenchmark else { return }
         let task = selectedTask
-        let dataset = datasetPath
+        let dataset = benchmarkDatasetPath
         let force = forceRerun
         let candidateIDs = taskCandidates
             .map(\.id)
@@ -185,7 +190,7 @@ final class BenchmarkViewModel: ObservableObject {
     func scanIntegrity() {
         guard !isExecutingBenchmark else { return }
         let task = selectedTask
-        let dataset = datasetPath
+        let dataset = benchmarkDatasetPath
         isExecutingBenchmark = true
         setStatus("ケース不備スキャンを開始しました。", isError: false, clearErrorLog: true)
 
@@ -303,15 +308,6 @@ final class BenchmarkViewModel: ObservableObject {
         } catch {
             setStatus("除外更新に失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
         }
-    }
-
-    func openDatasetFile() {
-        let path = normalizePath(datasetPath)
-        guard FileManager.default.fileExists(atPath: path) else {
-            setStatus("dataset file が見つかりません: \(path)", isError: true)
-            return
-        }
-        NSWorkspace.shared.open(URL(fileURLWithPath: path, isDirectory: false))
     }
 
     func copySelectedIssueCaseID() {
@@ -454,7 +450,7 @@ final class BenchmarkViewModel: ObservableObject {
 
     private func loadComparisonRows() throws {
         let allRuns = try store.listRuns(limit: 2_000)
-        let normalizedDatasetPath = normalizePath(datasetPath)
+        let normalizedDatasetPath = benchmarkDatasetPath
         let currentDatasetHash = datasetHashIfExists(path: normalizedDatasetPath)
 
         comparisonRows = taskCandidates.map { candidate in
@@ -476,16 +472,22 @@ final class BenchmarkViewModel: ObservableObject {
 
             return BenchmarkComparisonRow(
                 candidate: candidate,
-                runs: runsForCandidate.count,
+                runCount: runsForCandidate.count,
                 executedCases: latest?.metrics.executedCases ?? 0,
                 skipCases: latest?.metrics.skippedCases ?? 0,
                 avgCER: latest?.metrics.avgCER,
                 weightedCER: latest?.metrics.weightedCER,
+                sttAfterStopP50: latest?.metrics.afterStopLatencyMs?.p50,
                 sttAfterStopP95: latest?.metrics.afterStopLatencyMs?.p95,
                 postMsP95: latest?.metrics.postLatencyMs?.p95,
                 totalAfterStopP95: latest?.metrics.totalAfterStopLatencyMs?.p95,
+                intentPreservationScore: latest?.metrics.intentPreservationScore,
+                hallucinationRate: latest?.metrics.hallucinationRate,
                 lastRunAt: latest?.updatedAt,
                 datasetHashMismatch: datasetHashMismatch,
+                currentDatasetHash: currentDatasetHash,
+                latestRunDatasetHash: runDatasetHash,
+                latestRuntimeOptionsHash: latest?.benchmarkKey?.runtimeOptionsHash ?? latest?.options.runtimeOptionsHash,
                 latestRunID: latest?.id
             )
         }
@@ -529,7 +531,9 @@ final class BenchmarkViewModel: ObservableObject {
                         sttTotalMs: result.metrics.sttTotalMs,
                         sttAfterStopMs: result.metrics.sttAfterStopMs,
                         postMs: result.metrics.postMs,
-                        totalAfterStopMs: result.metrics.totalAfterStopMs
+                        totalAfterStopMs: result.metrics.totalAfterStopMs,
+                        intentPreservationScore: result.metrics.intentPreservationScore,
+                        hallucinationRate: result.metrics.hallucinationRate
                     )
                 }
                 .sorted(by: caseBreakdownSort)
@@ -699,6 +703,28 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     private func normalizePath(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return trimmed }
+        if trimmed.hasPrefix("~/") {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            return home + "/" + trimmed.dropFirst(2)
+        }
+        return URL(fileURLWithPath: trimmed).standardizedFileURL.path
+    }
+
+    nonisolated private static func resolveDatasetPath(pathOverride: String?) -> String {
+        if let override = pathOverride?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty
+        {
+            return normalizePathForStorage(override)
+        }
+        if let paths = try? WhispPaths() {
+            return normalizePathForStorage(paths.manualCasesFile.path)
+        }
+        return normalizePathForStorage("~/.config/whisp/debug/manual_test_cases.jsonl")
+    }
+
+    nonisolated private static func normalizePathForStorage(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return trimmed }
         if trimmed.hasPrefix("~/") {

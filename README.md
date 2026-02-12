@@ -124,19 +124,18 @@ scripts/benchmark_stt_latency.sh Tests/Fixtures/benchmark_ja_10s.wav 3 /tmp/whis
 
 今回の最適化目標は、この `post_stop_latency_*` を下げることです。
 
-### Manual case benchmark (音声 + 人手正解)
+### STT case benchmark (音声 + 人手正解)
 
 `manual_test_cases.jsonl` を使って、実録音データに対する精度を定量評価できます。
 この評価は **ベンチマーク（モデル/処理性能）** 用で、運用件数統計は別の統計ストアに分離されています。
 
 ```bash
-scripts/benchmark_manual_cases.sh
+# 既定ケースファイルでSTT評価
+scripts/benchmark_cases.sh stt
 # パスや件数を指定する例
-scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --limit 20
-# context保存済みケースのみで比較する例
-scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --require-context
+scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --limit 20
 # 音声長2.5秒未満を除外し、結果を保存する例
-scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl --result-root /tmp/whisp-manualbench --min-audio-seconds 2.5
+scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --result-root /tmp/whisp-sttbench --min-audio-seconds 2.5
 ```
 
 主指標:
@@ -154,7 +153,7 @@ scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl 
 - この更新以前に保存されたケースには `context` / `vision_image_file` が無い場合があります。
 - `--require-context` を付けると、同条件比較に必要な `context` 付きケースだけを評価します。
 - `--min-audio-seconds` 未満の短い音声は `skipped_too_short_audio` として自動除外されます。
-- ケース別ログは `manual_case_rows.jsonl`、集計ログは `manual_summary.json` に保存されます。
+- ケース別ログは `stt_case_rows.jsonl`、集計ログは `stt_summary.json` に保存されます。
 - intent評価は `intent_gold` / `intent_silver`（または `labels.intent_gold` / `labels.intent_silver`）を参照します。
 - 生成品質のLLM評価は `--llm-eval` / `--no-llm-eval` / `--llm-eval-model` で制御できます（デフォルトOFF）。
 
@@ -261,12 +260,12 @@ scripts/benchmark_full_pipeline.sh Tests/Fixtures/benchmark_ja_10s.wav 3 discard
 
 この結果を基準に、改善優先度を決めます。
 
-### End-to-end eval loop (manual + stt + full)
+### End-to-end eval loop (components + stt + full)
 
 評価ループをまとめて回す場合:
 
 ```bash
-# 1) manualケース評価（短音声除外、intent judge含む）
+# 1) component benchmarks (vision / stt / generation)
 # 2) STT latency
 # 3) full pipeline
 # 4) events.jsonl解析
@@ -275,7 +274,7 @@ scripts/run_eval_loop.sh ~/.config/whisp/debug/manual_test_cases.jsonl Tests/Fix
 
 出力:
 - `overview.txt`: 主要指標の要約
-- `manual/`: ケース別評価ログと集計JSON
+- `components/`: component別のケース評価ログと集計JSON
 - `stt/`: STT latencyログ
 - `full/`: full pipelineログ
 

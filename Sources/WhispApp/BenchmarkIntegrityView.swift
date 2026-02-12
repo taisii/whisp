@@ -22,6 +22,7 @@ struct BenchmarkIntegrityView: View {
             }
             .listStyle(.plain)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var controls: some View {
@@ -33,9 +34,9 @@ struct BenchmarkIntegrityView: View {
             .pickerStyle(.segmented)
             .frame(width: 220)
 
-            TextField("Dataset path", text: $viewModel.datasetPath)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12, design: .monospaced))
+            Text("データセット: Debug Cases（固定）")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
 
             Button {
                 viewModel.scanIntegrity()
@@ -44,11 +45,6 @@ struct BenchmarkIntegrityView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.isExecutingBenchmark)
-
-            Button("Open dataset file") {
-                viewModel.openDatasetFile()
-            }
-            .buttonStyle(.bordered)
 
             Button("Copy case_id") {
                 viewModel.copySelectedIssueCaseID()

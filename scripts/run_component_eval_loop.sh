@@ -42,7 +42,7 @@ scripts/benchmark_generation_cases.sh "$manual_jsonl" --result-root "$generation
   echo "[stt]"
   jq -r '"executed_cases=\(.executedCases) exact_match_rate=\(.exactMatchRate // "n/a") weighted_cer=\(.weightedCER // "n/a") avg_total_ms=\(.avgLatencyMs // "n/a") avg_after_stop_ms=\(.avgAfterStopMs // "n/a") cached_hits=\(.cachedHits)"' "$stt_root/stt_summary.json"
   echo "[generation]"
-  jq -r '"executed_cases=\(.executedCases) exact_match_rate=\(.exactMatchRate // "n/a") weighted_cer=\(.weightedCER // "n/a") avg_post_ms=\(.avgLatencyMs // "n/a") cached_hits=\(.cachedHits)"' "$generation_root/generation_summary.json"
+  jq -r '"executed_cases=\(.executedCases) exact_match_rate=\(.exactMatchRate // "n/a") weighted_cer=\(.weightedCER // "n/a") avg_post_ms=\(.avgPostMs // .avgLatencyMs // "n/a") cached_hits=\(.cachedHits)"' "$generation_root/generation_summary.json"
 } > "$result_root/overview.txt"
 
 echo "completed: $result_root"

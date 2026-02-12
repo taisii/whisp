@@ -60,27 +60,12 @@ extension WhispCLI {
             )
         )
 
-        var caseResults: [BenchmarkCaseResult] = []
-        var events: [BenchmarkCaseEvent] = []
-        var persistenceError: Error?
-
-        var executed = 0
-        var skipped = 0
-        var failed = 0
-        var cachedHits = 0
-        var exactCount = 0
-        var cerValues: [Double] = []
-        var totalEdits = 0
-        var totalRefChars = 0
-        var totalLatencies: [Double] = []
-        var afterStopLatencies: [Double] = []
-
         for item in selectedCases {
             try recorder.markCaseQueued(caseID: item.id)
         }
-
-        if benchmarkWorkers > 1 {
-            let outcomes = try await runSTTCaseBenchmarkWithWorkers(
+        let accumulator = STTOutcomeAccumulator()
+        do {
+            try await runSTTCaseBenchmarkWithWorkers(
                 runID: runID,
                 selectedCases: selectedCases,
                 options: options,
@@ -88,564 +73,35 @@ extension WhispCLI {
                 apiKey: key,
                 sttExecutionProfile: sttExecutionProfile,
                 recorder: recorder
+            ) { outcome in
+                try await accumulator.consume(outcome, recorder: recorder)
+            }
+        } catch {
+            let partial = await accumulator.snapshot()
+            let failedMetrics = makeSTTRunMetrics(
+                allCasesCount: allCases.count,
+                selectedCasesCount: selectedCases.count,
+                summary: partial
             )
-            for outcome in outcomes {
-                print(outcome.displayLine)
-                executed += outcome.executed
-                skipped += outcome.skipped
-                failed += outcome.failed
-                cachedHits += outcome.cachedHits
-                exactCount += outcome.exactCount
-                if let cer = outcome.cer {
-                    cerValues.append(cer)
-                }
-                totalEdits += outcome.totalEdits
-                totalRefChars += outcome.totalRefChars
-                if let totalMs = outcome.totalLatencyMs {
-                    totalLatencies.append(totalMs)
-                }
-                if let afterStopMs = outcome.afterStopLatencyMs {
-                    afterStopLatencies.append(afterStopMs)
-                }
-                try recorder.appendCaseResult(outcome.result)
-                try recorder.appendEvents(outcome.events)
-                for write in outcome.ioWrites {
-                    try recorder.writeCaseIOText(caseID: outcome.result.id, fileName: write.fileName, text: write.text)
-                }
-            }
-        } else {
-            for item in selectedCases {
-            try recorder.markCaseStarted(caseID: item.id)
-            let caseStartedAtMs = nowEpochMs()
-            let caseStartIndex = caseResults.count
-            let eventStartIndex = events.count
-            defer {
-                defer {
-                    caseResults.removeSubrange(caseStartIndex..<caseResults.count)
-                    events.removeSubrange(eventStartIndex..<events.count)
-                }
-                if persistenceError == nil {
-                    do {
-                        if caseResults.count > caseStartIndex {
-                            for result in caseResults[caseStartIndex...] {
-                                try recorder.appendCaseResult(result)
-                            }
-                        }
-                        if events.count > eventStartIndex {
-                            try recorder.appendEvents(Array(events[eventStartIndex...]))
-                        }
-                    } catch {
-                        persistenceError = error
-                    }
-                }
-            }
-
-            guard let reference = item.resolvedSTTReferenceTranscript() else {
-                skipped += 1
-                print("\(item.id)\tskipped_missing_reference\tfalse\t-\t-\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .skipped
-                let caseResult = BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: "参照transcriptがありません",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "stt"),
-                    sources: BenchmarkReferenceSources(),
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics()
-                )
-                caseResults.append(caseResult)
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: BenchmarkReferenceSources(),
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: eventStatus(from: status),
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-                continue
-            }
-
-            guard FileManager.default.fileExists(atPath: item.audioFile) else {
-                skipped += 1
-                print("\(item.id)\tskipped_missing_audio\tfalse\t-\t-\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .skipped
-                let caseResult = BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: "audio_file が見つかりません",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "stt"),
-                    sources: BenchmarkReferenceSources(transcript: reference.source),
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics()
-                )
-                caseResults.append(caseResult)
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: BenchmarkReferenceSources(transcript: reference.source),
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: eventStatus(from: status),
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-                continue
-            }
-
-            do {
-                let wavData = try Data(contentsOf: URL(fileURLWithPath: item.audioFile))
-                let audio = try parsePCM16MonoWAV(wavData)
-                let audioSeconds = audioDurationSeconds(audio: audio)
-                if audioSeconds < options.minAudioSeconds {
-                    skipped += 1
-                    print("\(item.id)\tskipped_too_short_audio\tfalse\t-\t-\t\(String(format: "%.2f", audioSeconds))\t-\t-")
-
-                    let status: BenchmarkCaseStatus = .skipped
-                    let caseResult = BenchmarkCaseResult(
-                        id: item.id,
-                        status: status,
-                        reason: "audio_seconds(\(String(format: "%.2f", audioSeconds))) < min_audio_seconds(\(String(format: "%.2f", options.minAudioSeconds)))",
-                        cache: BenchmarkCacheRecord(hit: false, namespace: "stt"),
-                        sources: BenchmarkReferenceSources(transcript: reference.source),
-                        contextUsed: item.context != nil,
-                        visionImageAttached: item.visionImageFile != nil,
-                        metrics: BenchmarkCaseMetrics(audioSeconds: audioSeconds)
-                    )
-                    caseResults.append(caseResult)
-
-                    let loadEndedAtMs = nowEpochMs()
-                    let loadBase = makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .loadCase,
-                        status: .ok,
-                        startedAtMs: caseStartedAtMs,
-                        endedAtMs: loadEndedAtMs
-                    )
-                    events.append(.loadCase(BenchmarkLoadCaseLog(
-                        base: loadBase,
-                        sources: BenchmarkReferenceSources(transcript: reference.source),
-                        contextPresent: item.context != nil,
-                        visionImagePresent: item.visionImageFile != nil,
-                        audioFilePath: item.audioFile,
-                        rawRowRef: nil
-                    )))
-
-                    let aggregateBase = makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .aggregate,
-                        status: eventStatus(from: status),
-                        startedAtMs: loadEndedAtMs,
-                        endedAtMs: nowEpochMs()
-                    )
-                    events.append(.aggregate(BenchmarkAggregateLog(
-                        base: aggregateBase,
-                        exactMatch: nil,
-                        cer: nil,
-                        intentMatch: nil,
-                        intentScore: nil,
-                        intentPreservationScore: nil,
-                        hallucinationScore: nil,
-                        hallucinationRate: nil,
-                        latencyMs: nil,
-                        totalAfterStopMs: nil,
-                        outputChars: nil
-                    )))
-                    continue
-                }
-
-                let audioHash = sha256Hex(data: wavData)
-                let cacheKey = sha256Hex(
-                    text: "stt-v2|\(options.sttProvider.rawValue)|\(options.sttMode.rawValue)|\(options.chunkMs)|\(options.realtime)|\(config.inputLanguage)|\(audioHash)"
-                )
-                let loadEndedAtMs = nowEpochMs()
-                let cacheStartedAtMs = nowEpochMs()
-                var cacheEndedAtMs = cacheStartedAtMs
-                var sttStartedAtMs = cacheStartedAtMs
-                var sttEndedAtMs = cacheStartedAtMs
-                let sttOutput: (
-                    transcript: String,
-                    totalMs: Double,
-                    afterStopMs: Double,
-                    replayStartedAtMs: Int64?,
-                    replayEndedAtMs: Int64?,
-                    attempts: [BenchmarkSTTAttempt],
-                    cached: Bool
-                )
-                if options.useCache,
-                   let cached: CachedSTTResult = loadCacheEntry(component: "stt", key: cacheKey)
-                {
-                    cacheEndedAtMs = nowEpochMs()
-                    let cachedOutput = await buildCachedSTTOutput(
-                        cached: cached,
-                        audio: audio,
-                        realtime: options.realtime
-                    )
-                    sttStartedAtMs = cachedOutput.sttStartedAtMs
-                    sttEndedAtMs = cachedOutput.sttEndedAtMs
-                    sttOutput = (
-                        cachedOutput.transcript,
-                        cachedOutput.totalMs,
-                        cachedOutput.afterStopMs,
-                        cachedOutput.replayStartedAtMs,
-                        cachedOutput.replayEndedAtMs,
-                        cachedOutput.attempts,
-                        true
-                    )
-                    cachedHits += 1
-                } else {
-                    cacheEndedAtMs = nowEpochMs()
-                    let result = try await runSTTInference(
-                        provider: options.sttProvider,
-                        apiKey: key,
-                        audio: audio,
-                        languageHint: config.inputLanguage,
-                        mode: options.sttMode,
-                        chunkMs: options.chunkMs,
-                        realtime: options.realtime
-                    )
-                    sttOutput = (
-                        result.transcript,
-                        result.totalMs,
-                        result.afterStopMs,
-                        result.replayStartedAtMs,
-                        result.replayEndedAtMs,
-                        result.attempts,
-                        false
-                    )
-                    sttStartedAtMs = result.attempts.map(\.startedAtMs).min() ?? nowEpochMs()
-                    sttEndedAtMs = result.attempts.map(\.endedAtMs).max() ?? nowEpochMs()
-                    if options.useCache {
-                        let cache = CachedSTTResult(
-                            key: cacheKey,
-                            mode: options.sttMode.rawValue,
-                            transcript: result.transcript,
-                            totalMs: result.totalMs,
-                            afterStopMs: result.afterStopMs,
-                            createdAt: ISO8601DateFormatter().string(from: Date())
-                        )
-                        try saveCacheEntry(component: "stt", key: cacheKey, value: cache)
-                    }
-                }
-
-                let refChars = Array(normalizedEvalText(reference.text))
-                let hypChars = Array(normalizedEvalText(sttOutput.transcript))
-                let edit = levenshteinDistance(refChars, hypChars)
-                let cer = Double(edit) / Double(max(1, refChars.count))
-                let exact = normalizedEvalText(reference.text) == normalizedEvalText(sttOutput.transcript)
-
-                executed += 1
-                if exact { exactCount += 1 }
-                cerValues.append(cer)
-                totalEdits += edit
-                totalRefChars += refChars.count
-                totalLatencies.append(sttOutput.totalMs)
-                afterStopLatencies.append(sttOutput.afterStopMs)
-
-                print("\(item.id)\tok\t\(sttOutput.cached)\t\(exact)\t\(String(format: "%.3f", cer))\t\(String(format: "%.2f", audioSeconds))\t\(msString(sttOutput.totalMs))\t\(msString(sttOutput.afterStopMs))")
-
-                let status: BenchmarkCaseStatus = .ok
-                let sources = BenchmarkReferenceSources(transcript: reference.source)
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: nil,
-                    cache: BenchmarkCacheRecord(hit: sttOutput.cached, key: cacheKey, namespace: "stt"),
-                    sources: sources,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics(
-                        exactMatch: exact,
-                        cer: cer,
-                        sttTotalMs: sttOutput.totalMs,
-                        sttAfterStopMs: sttOutput.afterStopMs,
-                        latencyMs: sttOutput.totalMs,
-                        audioSeconds: audioSeconds,
-                        outputChars: hypChars.count
-                    )
-                ))
-                try recorder.writeCaseIOText(caseID: item.id, fileName: "output_stt.txt", text: sttOutput.transcript)
-                try recorder.writeCaseIOText(caseID: item.id, fileName: "reference.txt", text: reference.text)
-
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sources,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let cacheBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .cache,
-                    status: .ok,
-                    startedAtMs: cacheStartedAtMs,
-                    endedAtMs: cacheEndedAtMs
-                )
-                events.append(.cache(BenchmarkCacheLog(
-                    base: cacheBase,
-                    namespace: "stt",
-                    key: cacheKey,
-                    hit: sttOutput.cached,
-                    keyMaterialRef: nil,
-                    error: nil
-                )))
-
-                if let replayStartedAtMs = sttOutput.replayStartedAtMs,
-                   let replayEndedAtMs = sttOutput.replayEndedAtMs,
-                   replayEndedAtMs >= replayStartedAtMs
-                {
-                    let replayBase = makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .audioReplay,
-                        status: .ok,
-                        startedAtMs: replayStartedAtMs,
-                        endedAtMs: replayEndedAtMs
-                    )
-                    events.append(.audioReplay(BenchmarkAudioReplayLog(
-                        base: replayBase,
-                        profile: sttExecutionProfile,
-                        chunkMs: options.chunkMs,
-                        realtime: options.realtime
-                    )))
-                }
-
-                let sttBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .stt,
-                    status: .ok,
-                    startedAtMs: sttStartedAtMs,
-                    endedAtMs: sttEndedAtMs
-                )
-                events.append(.stt(BenchmarkSTTLog(
-                    base: sttBase,
-                    provider: options.sttProvider.rawValue,
-                    mode: options.sttMode.rawValue,
-                    transcriptText: sttOutput.transcript,
-                    referenceText: reference.text,
-                    transcriptChars: hypChars.count,
-                    cer: cer,
-                    sttTotalMs: sttOutput.totalMs,
-                    sttAfterStopMs: sttOutput.afterStopMs,
-                    attempts: sttOutput.attempts,
-                    rawResponseRef: nil,
-                    error: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: eventStatus(from: status),
-                    startedAtMs: sttEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: exact,
-                    cer: cer,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: sttOutput.totalMs,
-                    totalAfterStopMs: sttOutput.afterStopMs,
-                    outputChars: hypChars.count
-                )))
-            } catch {
-                failed += 1
-                print("\(item.id)\terror\tfalse\t-\t-\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .error
-                let message = error.localizedDescription
-                let sources = BenchmarkReferenceSources(transcript: reference.source)
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: message,
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "stt"),
-                    sources: sources,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics()
-                ))
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sources,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: eventStatus(from: status),
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-
-                let errorBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .error,
-                    status: .error,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.error(BenchmarkErrorLog(
-                    base: errorBase,
-                    originStage: nil,
-                    errorType: "stt_case_error",
-                    message: message
-                )))
-            }
-        }
+            _ = try? recorder.finalize(metrics: failedMetrics, options: runOptions, status: .failed)
+            throw error
         }
 
-        let exactRate = executed > 0 ? Double(exactCount) / Double(executed) : 0
-        let totalLatencyDistribution = latencyDistribution(values: totalLatencies)
-        let afterStopDistribution = latencyDistribution(values: afterStopLatencies)
-
-        let metrics = BenchmarkRunMetrics(
-            casesTotal: allCases.count,
-            casesSelected: selectedCases.count,
-            executedCases: executed,
-            skippedCases: skipped,
-            failedCases: failed,
-            cachedHits: cachedHits,
-            exactMatchRate: exactRate,
-            avgCER: cerValues.isEmpty ? nil : cerValues.reduce(0, +) / Double(cerValues.count),
-            weightedCER: totalRefChars > 0 ? Double(totalEdits) / Double(totalRefChars) : nil,
-            avgTermsF1: nil,
-            intentMatchRate: nil,
-            intentAvgScore: nil,
-            intentPreservationScore: nil,
-            hallucinationScore: nil,
-            hallucinationRate: nil,
-            latencyMs: toBenchmarkLatencyDistribution(totalLatencyDistribution),
-            afterStopLatencyMs: toBenchmarkLatencyDistribution(afterStopDistribution),
-            postLatencyMs: nil,
-            totalAfterStopLatencyMs: nil
+        let summary = await accumulator.snapshot()
+        let exactRate = summary.executed > 0 ? Double(summary.exactCount) / Double(summary.executed) : 0
+        let metrics = makeSTTRunMetrics(
+            allCasesCount: allCases.count,
+            selectedCasesCount: selectedCases.count,
+            summary: summary
         )
-
-        if let persistenceError {
-            _ = try? recorder.finalize(metrics: metrics, options: runOptions, status: .failed)
-            throw persistenceError
-        }
         let run = try recorder.finalize(metrics: metrics, options: runOptions, status: .completed)
 
         print("")
         print("summary")
-        print("executed_cases: \(executed)")
-        print("skipped_cases: \(skipped)")
-        print("failed_cases: \(failed)")
-        print("cached_hits: \(cachedHits)")
+        print("executed_cases: \(summary.executed)")
+        print("skipped_cases: \(summary.skipped)")
+        print("failed_cases: \(summary.failed)")
+        print("cached_hits: \(summary.cachedHits)")
         print("exact_match_rate: \(String(format: "%.3f", exactRate))")
         print("avg_cer: \(metrics.avgCER.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("weighted_cer: \(metrics.weightedCER.map { String(format: "%.3f", $0) } ?? "n/a")")
@@ -685,6 +141,83 @@ extension WhispCLI {
         let afterStopLatencyMs: Double?
     }
 
+    private struct STTOutcomeSummary: Sendable {
+        var executed = 0
+        var skipped = 0
+        var failed = 0
+        var cachedHits = 0
+        var exactCount = 0
+        var cerValues: [Double] = []
+        var totalEdits = 0
+        var totalRefChars = 0
+        var totalLatencies: [Double] = []
+        var afterStopLatencies: [Double] = []
+    }
+
+    private actor STTOutcomeAccumulator {
+        private var summary = STTOutcomeSummary()
+
+        func consume(_ outcome: STTCaseWorkerOutcome, recorder: BenchmarkRunRecorder) throws {
+            print(outcome.displayLine)
+            summary.executed += outcome.executed
+            summary.skipped += outcome.skipped
+            summary.failed += outcome.failed
+            summary.cachedHits += outcome.cachedHits
+            summary.exactCount += outcome.exactCount
+            if let cer = outcome.cer {
+                summary.cerValues.append(cer)
+            }
+            summary.totalEdits += outcome.totalEdits
+            summary.totalRefChars += outcome.totalRefChars
+            if let totalMs = outcome.totalLatencyMs {
+                summary.totalLatencies.append(totalMs)
+            }
+            if let afterStopMs = outcome.afterStopLatencyMs {
+                summary.afterStopLatencies.append(afterStopMs)
+            }
+            try recorder.appendCaseResult(outcome.result)
+            try recorder.appendEvents(outcome.events)
+            for write in outcome.ioWrites {
+                try recorder.writeCaseIOText(caseID: outcome.result.id, fileName: write.fileName, text: write.text)
+            }
+        }
+
+        func snapshot() -> STTOutcomeSummary {
+            summary
+        }
+    }
+
+    private static func makeSTTRunMetrics(
+        allCasesCount: Int,
+        selectedCasesCount: Int,
+        summary: STTOutcomeSummary
+    ) -> BenchmarkRunMetrics {
+        let exactRate = summary.executed > 0 ? Double(summary.exactCount) / Double(summary.executed) : 0
+        let totalLatencyDistribution = latencyDistribution(values: summary.totalLatencies)
+        let afterStopDistribution = latencyDistribution(values: summary.afterStopLatencies)
+        return BenchmarkRunMetrics(
+            casesTotal: allCasesCount,
+            casesSelected: selectedCasesCount,
+            executedCases: summary.executed,
+            skippedCases: summary.skipped,
+            failedCases: summary.failed,
+            cachedHits: summary.cachedHits,
+            exactMatchRate: exactRate,
+            avgCER: summary.cerValues.isEmpty ? nil : summary.cerValues.reduce(0, +) / Double(summary.cerValues.count),
+            weightedCER: summary.totalRefChars > 0 ? Double(summary.totalEdits) / Double(summary.totalRefChars) : nil,
+            avgTermsF1: nil,
+            intentMatchRate: nil,
+            intentAvgScore: nil,
+            intentPreservationScore: nil,
+            hallucinationScore: nil,
+            hallucinationRate: nil,
+            latencyMs: toBenchmarkLatencyDistribution(totalLatencyDistribution),
+            afterStopLatencyMs: toBenchmarkLatencyDistribution(afterStopDistribution),
+            postLatencyMs: nil,
+            totalAfterStopLatencyMs: nil
+        )
+    }
+
     private static func runSTTCaseBenchmarkWithWorkers(
         runID: String,
         selectedCases: [ManualBenchmarkCase],
@@ -692,9 +225,13 @@ extension WhispCLI {
         config: Config,
         apiKey: String,
         sttExecutionProfile: String,
-        recorder: BenchmarkRunRecorder
-    ) async throws -> [STTCaseWorkerOutcome] {
-        try await runBenchmarkCaseWorkers(cases: selectedCases, workers: options.benchmarkWorkers) { _, item in
+        recorder: BenchmarkRunRecorder,
+        onOutcome: @escaping @Sendable (STTCaseWorkerOutcome) async throws -> Void
+    ) async throws {
+        try await runBenchmarkCaseWorkers(
+            cases: selectedCases,
+            workers: options.benchmarkWorkers
+        ) { _, item in
             try recorder.markCaseStarted(caseID: item.id)
             return await executeSTTCaseBenchmarkWorker(
                 runID: runID,
@@ -704,6 +241,8 @@ extension WhispCLI {
                 apiKey: apiKey,
                 sttExecutionProfile: sttExecutionProfile
             )
+        } onResult: { outcome in
+            try await onOutcome(outcome)
         }
     }
 

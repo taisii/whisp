@@ -19,6 +19,8 @@ struct BenchmarkView: View {
                     BenchmarkIntegrityView(viewModel: viewModel)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .id(viewModel.selectedTab)
 
             Divider()
             statusBar

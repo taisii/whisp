@@ -55,34 +55,12 @@ extension WhispCLI {
             )
         )
 
-        var caseResults: [BenchmarkCaseResult] = []
-        var events: [BenchmarkCaseEvent] = []
-        var persistenceError: Error?
-
-        var executed = 0
-        var skipped = 0
-        var failed = 0
-        var cachedHits = 0
-        var exactCount = 0
-        var cerValues: [Double] = []
-        var totalEdits = 0
-        var totalRefChars = 0
-        var postLatencies: [Double] = []
-        var llmEvalContext: (model: LLMModel, apiKey: String)?
-        var llmEvalUnavailableReason: String?
-        var resolvedLLMEvalModel: String?
-        var llmEvalEvaluatedCases = 0
-        var llmEvalErrorCases = 0
-        var intentPreservationValues: [Double] = []
-        var hallucinationScoreValues: [Double] = []
-        var hallucinationRateValues: [Double] = []
-
         for item in selectedCases {
             try recorder.markCaseQueued(caseID: item.id)
         }
-
-        if benchmarkWorkers > 1 {
-            let outcomes = try await runGenerationCaseBenchmarkWithWorkers(
+        let accumulator = GenerationOutcomeAccumulator()
+        do {
+            try await runGenerationCaseBenchmarkWithWorkers(
                 runID: runID,
                 selectedCases: selectedCases,
                 options: options,
@@ -90,577 +68,41 @@ extension WhispCLI {
                 model: model,
                 apiKey: apiKey,
                 recorder: recorder
+            ) { outcome in
+                try await accumulator.consume(outcome, recorder: recorder)
+            }
+        } catch {
+            let partial = await accumulator.snapshot()
+            let failedMetrics = makeGenerationRunMetrics(
+                allCasesCount: allCases.count,
+                selectedCasesCount: selectedCases.count,
+                summary: partial
             )
-            for outcome in outcomes {
-                print(outcome.displayLine)
-                executed += outcome.executed
-                skipped += outcome.skipped
-                failed += outcome.failed
-                cachedHits += outcome.cachedHits
-                exactCount += outcome.exactCount
-                if let cer = outcome.cer {
-                    cerValues.append(cer)
-                }
-                totalEdits += outcome.totalEdits
-                totalRefChars += outcome.totalRefChars
-                if let postMs = outcome.postMs {
-                    postLatencies.append(postMs)
-                }
-                if let ips = outcome.intentPreservationScore {
-                    intentPreservationValues.append(ips)
-                }
-                if let hs = outcome.hallucinationScore {
-                    hallucinationScoreValues.append(hs)
-                }
-                if let hr = outcome.hallucinationRate {
-                    hallucinationRateValues.append(hr)
-                }
-                llmEvalEvaluatedCases += outcome.llmEvalEvaluatedCases
-                llmEvalErrorCases += outcome.llmEvalErrorCases
-                if llmEvalUnavailableReason == nil, let note = outcome.llmEvalUnavailableReason {
-                    llmEvalUnavailableReason = note
-                }
-                if resolvedLLMEvalModel == nil, let used = outcome.resolvedLLMEvalModel {
-                    resolvedLLMEvalModel = used
-                }
-                try recorder.appendCaseResult(outcome.result)
-                try recorder.appendEvents(outcome.events)
-                for write in outcome.ioWrites {
-                    try recorder.writeCaseIOText(caseID: outcome.result.id, fileName: write.fileName, text: write.text)
-                }
-            }
-        } else {
-            for item in selectedCases {
-            try recorder.markCaseStarted(caseID: item.id)
-            let caseStartedAtMs = nowEpochMs()
-            let caseStartIndex = caseResults.count
-            let eventStartIndex = events.count
-            defer {
-                defer {
-                    caseResults.removeSubrange(caseStartIndex..<caseResults.count)
-                    events.removeSubrange(eventStartIndex..<events.count)
-                }
-                if persistenceError == nil {
-                    do {
-                        if caseResults.count > caseStartIndex {
-                            for result in caseResults[caseStartIndex...] {
-                                try recorder.appendCaseResult(result)
-                            }
-                        }
-                        if events.count > eventStartIndex {
-                            try recorder.appendEvents(Array(events[eventStartIndex...]))
-                        }
-                    } catch {
-                        persistenceError = error
-                    }
-                }
-            }
-
-            guard let input = item.resolvedGenerationInputSTT() else {
-                skipped += 1
-                print("\(item.id)\tskipped_missing_input_stt\tfalse\t-\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .skipped
-                let caseResult = BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: "stt入力がありません",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "generation"),
-                    sources: BenchmarkReferenceSources(),
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics()
-                )
-                caseResults.append(caseResult)
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: BenchmarkReferenceSources(),
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .skipped,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-                continue
-            }
-            guard let reference = item.resolvedGenerationReferenceText() else {
-                skipped += 1
-                print("\(item.id)\tskipped_missing_reference\tfalse\t-\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .skipped
-                let sources = BenchmarkReferenceSources(input: input.source)
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: "参照テキストがありません",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "generation"),
-                    sources: sources,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics()
-                ))
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sources,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .skipped,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-                continue
-            }
-            if options.requireContext, item.context == nil {
-                skipped += 1
-                print("\(item.id)\tskipped_missing_context\tfalse\t-\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .skipped
-                let sources = BenchmarkReferenceSources(input: input.source, reference: reference.source)
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: "--require-context が指定されています",
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "generation"),
-                    sources: sources,
-                    contextUsed: false,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics()
-                ))
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sources,
-                    contextPresent: false,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .skipped,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-                continue
-            }
-
-            let sources = BenchmarkReferenceSources(input: input.source, reference: reference.source)
-
-            do {
-                let contextHash = sha256Hex(text: canonicalContextString(item.context))
-                let inputHash = sha256Hex(text: input.text)
-                let cacheKey = sha256Hex(text: "generation-v1|\(model.rawValue)|\(config.inputLanguage)|\(inputHash)|\(contextHash)")
-                let loadEndedAtMs = nowEpochMs()
-                let cacheStartedAtMs = nowEpochMs()
-                var cacheEndedAtMs = cacheStartedAtMs
-                var generationStartedAtMs = cacheStartedAtMs
-                var generationEndedAtMs = cacheStartedAtMs
-                let generation: (output: String, postMs: Double, cached: Bool)
-                if options.useCache,
-                   let cached: CachedGenerationResult = loadCacheEntry(component: "generation", key: cacheKey)
-                {
-                    cacheEndedAtMs = nowEpochMs()
-                    generationStartedAtMs = cacheEndedAtMs
-                    generationEndedAtMs = nowEpochMs()
-                    generation = (cached.output, cached.postMs, true)
-                    cachedHits += 1
-                } else {
-                    cacheEndedAtMs = nowEpochMs()
-                    generationStartedAtMs = nowEpochMs()
-                    let startedAt = DispatchTime.now()
-                    let result = try await postProcessText(
-                        model: model,
-                        apiKey: apiKey,
-                        config: config,
-                        sttText: input.text,
-                        context: item.context,
-                        sttMode: "generation_benchmark"
-                    )
-                    let postMs = elapsedMs(since: startedAt)
-                    generationEndedAtMs = nowEpochMs()
-                    generation = (result.text, postMs, false)
-                    if options.useCache {
-                        let cache = CachedGenerationResult(
-                            key: cacheKey,
-                            model: model.rawValue,
-                            output: result.text,
-                            postMs: postMs,
-                            createdAt: ISO8601DateFormatter().string(from: Date())
-                        )
-                        try saveCacheEntry(component: "generation", key: cacheKey, value: cache)
-                    }
-                }
-
-                let refChars = Array(normalizedEvalText(reference.text))
-                let outChars = Array(normalizedEvalText(generation.output))
-                let edit = levenshteinDistance(refChars, outChars)
-                let cer = Double(edit) / Double(max(1, refChars.count))
-                let exact = normalizedEvalText(reference.text) == normalizedEvalText(generation.output)
-                var intentPreservationScore: Double?
-                var hallucinationScore: Double?
-                var hallucinationRate: Double?
-                var llmEvalError: String?
-                var judgeStartedAtMs: Int64?
-                var judgeEndedAtMs: Int64?
-
-                if options.llmEvalEnabled {
-                    if llmEvalContext == nil, llmEvalUnavailableReason == nil {
-                        do {
-                            llmEvalContext = try APIKeyResolver.resolveIntentJudgeContext(
-                                config: config,
-                                preferredModel: options.llmEvalModel
-                            )
-                        } catch {
-                            llmEvalUnavailableReason = error.localizedDescription
-                        }
-                    }
-                    if let llmEvalContext {
-                        judgeStartedAtMs = nowEpochMs()
-                        do {
-                            let evaluation = try await runLLMEvaluation(
-                                model: llmEvalContext.model,
-                                apiKey: llmEvalContext.apiKey,
-                                referenceText: reference.text,
-                                hypothesisText: generation.output,
-                                context: item.context
-                            )
-                            intentPreservationScore = evaluation.intentPreservationScore
-                            hallucinationScore = evaluation.hallucinationScore
-                            hallucinationRate = evaluation.hallucinationRate
-                            llmEvalEvaluatedCases += 1
-                            intentPreservationValues.append(evaluation.intentPreservationScore)
-                            hallucinationScoreValues.append(evaluation.hallucinationScore)
-                            hallucinationRateValues.append(evaluation.hallucinationRate)
-                        } catch {
-                            llmEvalError = error.localizedDescription
-                            llmEvalErrorCases += 1
-                        }
-                        judgeEndedAtMs = nowEpochMs()
-                    } else if let reason = llmEvalUnavailableReason {
-                        judgeStartedAtMs = nowEpochMs()
-                        llmEvalError = reason
-                        llmEvalErrorCases += 1
-                        judgeEndedAtMs = nowEpochMs()
-                    }
-                }
-
-                executed += 1
-                if exact { exactCount += 1 }
-                cerValues.append(cer)
-                totalEdits += edit
-                totalRefChars += refChars.count
-                postLatencies.append(generation.postMs)
-
-                print("\(item.id)\tok\t\(generation.cached)\t\(exact)\t\(String(format: "%.3f", cer))\t\(msString(generation.postMs))\t\(outChars.count)\t\(intentPreservationScore.map { String(format: "%.3f", $0) } ?? "-")\t\(hallucinationRate.map { String(format: "%.3f", $0) } ?? "-")")
-
-                let status: BenchmarkCaseStatus = .ok
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: nil,
-                    cache: BenchmarkCacheRecord(hit: generation.cached, key: cacheKey, namespace: "generation"),
-                    sources: sources,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics(
-                        exactMatch: exact,
-                        cer: cer,
-                        intentPreservationScore: intentPreservationScore,
-                        hallucinationScore: hallucinationScore,
-                        hallucinationRate: hallucinationRate,
-                        postMs: generation.postMs,
-                        outputChars: outChars.count
-                    )
-                ))
-                try recorder.writeCaseIOText(caseID: item.id, fileName: "input_stt.txt", text: input.text)
-                try recorder.writeCaseIOText(caseID: item.id, fileName: "output_generation.txt", text: generation.output)
-                try recorder.writeCaseIOText(caseID: item.id, fileName: "reference.txt", text: reference.text)
-
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sources,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let cacheBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .cache,
-                    status: .ok,
-                    startedAtMs: cacheStartedAtMs,
-                    endedAtMs: cacheEndedAtMs
-                )
-                events.append(.cache(BenchmarkCacheLog(
-                    base: cacheBase,
-                    namespace: "generation",
-                    key: cacheKey,
-                    hit: generation.cached,
-                    keyMaterialRef: nil,
-                    error: nil
-                )))
-
-                let generationBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .generation,
-                    status: .ok,
-                    startedAtMs: generationStartedAtMs,
-                    endedAtMs: generationEndedAtMs
-                )
-                events.append(.generation(BenchmarkGenerationLog(
-                    base: generationBase,
-                    model: model.rawValue,
-                    inputChars: input.text.count,
-                    outputChars: outChars.count,
-                    postMs: generation.postMs,
-                    promptRef: nil,
-                    responseRef: nil,
-                    error: nil
-                )))
-
-                if intentPreservationScore != nil || hallucinationScore != nil || hallucinationRate != nil || llmEvalError != nil {
-                    let judgeStatus: BenchmarkEventStatus = llmEvalError == nil ? .ok : .error
-                    let judgeBase = makeEventBase(
-                        runID: runID,
-                        caseID: item.id,
-                        stage: .judge,
-                        status: judgeStatus,
-                        startedAtMs: judgeStartedAtMs ?? generationEndedAtMs,
-                        endedAtMs: judgeEndedAtMs ?? nowEpochMs()
-                    )
-                    events.append(.judge(BenchmarkJudgeLog(
-                        base: judgeBase,
-                        model: llmEvalContext?.model.rawValue ?? options.llmEvalModel?.rawValue,
-                        match: nil,
-                        score: nil,
-                        intentPreservationScore: intentPreservationScore,
-                        hallucinationScore: hallucinationScore,
-                        hallucinationRate: hallucinationRate,
-                        requestRef: nil,
-                        responseRef: nil,
-                        error: llmEvalError
-                    )))
-                }
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .ok,
-                    startedAtMs: judgeEndedAtMs ?? generationEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: exact,
-                    cer: cer,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: intentPreservationScore,
-                    hallucinationScore: hallucinationScore,
-                    hallucinationRate: hallucinationRate,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: outChars.count
-                )))
-            } catch {
-                failed += 1
-                print("\(item.id)\terror\tfalse\t-\t-\t-\t-")
-
-                let status: BenchmarkCaseStatus = .error
-                let message = error.localizedDescription
-                caseResults.append(BenchmarkCaseResult(
-                    id: item.id,
-                    status: status,
-                    reason: message,
-                    cache: BenchmarkCacheRecord(hit: false, namespace: "generation"),
-                    sources: sources,
-                    contextUsed: item.context != nil,
-                    visionImageAttached: item.visionImageFile != nil,
-                    metrics: BenchmarkCaseMetrics()
-                ))
-
-                let loadEndedAtMs = nowEpochMs()
-                let loadBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .loadCase,
-                    status: .ok,
-                    startedAtMs: caseStartedAtMs,
-                    endedAtMs: loadEndedAtMs
-                )
-                events.append(.loadCase(BenchmarkLoadCaseLog(
-                    base: loadBase,
-                    sources: sources,
-                    contextPresent: item.context != nil,
-                    visionImagePresent: item.visionImageFile != nil,
-                    audioFilePath: item.audioFile,
-                    rawRowRef: nil
-                )))
-
-                let aggregateBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .aggregate,
-                    status: .error,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.aggregate(BenchmarkAggregateLog(
-                    base: aggregateBase,
-                    exactMatch: nil,
-                    cer: nil,
-                    intentMatch: nil,
-                    intentScore: nil,
-                    intentPreservationScore: nil,
-                    hallucinationScore: nil,
-                    hallucinationRate: nil,
-                    latencyMs: nil,
-                    totalAfterStopMs: nil,
-                    outputChars: nil
-                )))
-
-                let errorBase = makeEventBase(
-                    runID: runID,
-                    caseID: item.id,
-                    stage: .error,
-                    status: .error,
-                    startedAtMs: loadEndedAtMs,
-                    endedAtMs: nowEpochMs()
-                )
-                events.append(.error(BenchmarkErrorLog(
-                    base: errorBase,
-                    originStage: .generation,
-                    errorType: "generation_case_error",
-                    message: message
-                )))
-            }
-        }
+            let failedRunOptions = BenchmarkRunOptions(
+                sourceCasesPath: options.jsonlPath,
+                datasetHash: options.datasetHash,
+                runtimeOptionsHash: options.runtimeOptionsHash,
+                evaluatorVersion: options.evaluatorVersion,
+                codeVersion: options.codeVersion,
+                candidateID: options.candidateID,
+                requireContext: options.requireContext,
+                useCache: options.useCache,
+                llmEvalEnabled: options.llmEvalEnabled,
+                llmEvalModel: partial.resolvedLLMEvalModel ?? options.llmEvalModel?.rawValue,
+                llmModel: model.rawValue,
+                caseLimit: options.limit
+            )
+            _ = try? recorder.finalize(metrics: failedMetrics, options: failedRunOptions, status: .failed)
+            throw error
         }
 
-        let exactRate = executed > 0 ? Double(exactCount) / Double(executed) : 0
-        let postDistribution = latencyDistribution(values: postLatencies)
-
-        let metrics = BenchmarkRunMetrics(
-            casesTotal: allCases.count,
-            casesSelected: selectedCases.count,
-            executedCases: executed,
-            skippedCases: skipped,
-            failedCases: failed,
-            cachedHits: cachedHits,
-            exactMatchRate: exactRate,
-            avgCER: cerValues.isEmpty ? nil : cerValues.reduce(0, +) / Double(cerValues.count),
-            weightedCER: totalRefChars > 0 ? Double(totalEdits) / Double(totalRefChars) : nil,
-            avgTermsF1: nil,
-            intentMatchRate: nil,
-            intentAvgScore: nil,
-            intentPreservationScore: intentPreservationValues.isEmpty ? nil : intentPreservationValues.reduce(0, +) / Double(intentPreservationValues.count),
-            hallucinationScore: hallucinationScoreValues.isEmpty ? nil : hallucinationScoreValues.reduce(0, +) / Double(hallucinationScoreValues.count),
-            hallucinationRate: hallucinationRateValues.isEmpty ? nil : hallucinationRateValues.reduce(0, +) / Double(hallucinationRateValues.count),
-            latencyMs: nil,
-            afterStopLatencyMs: nil,
-            postLatencyMs: toBenchmarkLatencyDistribution(postDistribution),
-            totalAfterStopLatencyMs: nil
+        let summary = await accumulator.snapshot()
+        let exactRate = summary.executed > 0 ? Double(summary.exactCount) / Double(summary.executed) : 0
+        let metrics = makeGenerationRunMetrics(
+            allCasesCount: allCases.count,
+            selectedCasesCount: selectedCases.count,
+            summary: summary
         )
-
         let finalRunOptions = BenchmarkRunOptions(
             sourceCasesPath: options.jsonlPath,
             datasetHash: options.datasetHash,
@@ -671,22 +113,18 @@ extension WhispCLI {
             requireContext: options.requireContext,
             useCache: options.useCache,
             llmEvalEnabled: options.llmEvalEnabled,
-            llmEvalModel: resolvedLLMEvalModel ?? llmEvalContext?.model.rawValue ?? options.llmEvalModel?.rawValue,
+            llmEvalModel: summary.resolvedLLMEvalModel ?? options.llmEvalModel?.rawValue,
             llmModel: model.rawValue,
             caseLimit: options.limit
         )
-        if let persistenceError {
-            _ = try? recorder.finalize(metrics: metrics, options: finalRunOptions, status: .failed)
-            throw persistenceError
-        }
         let run = try recorder.finalize(metrics: metrics, options: finalRunOptions, status: .completed)
 
         print("")
         print("summary")
-        print("executed_cases: \(executed)")
-        print("skipped_cases: \(skipped)")
-        print("failed_cases: \(failed)")
-        print("cached_hits: \(cachedHits)")
+        print("executed_cases: \(summary.executed)")
+        print("skipped_cases: \(summary.skipped)")
+        print("failed_cases: \(summary.failed)")
+        print("cached_hits: \(summary.cachedHits)")
         print("exact_match_rate: \(String(format: "%.3f", exactRate))")
         print("avg_cer: \(metrics.avgCER.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("weighted_cer: \(metrics.weightedCER.map { String(format: "%.3f", $0) } ?? "n/a")")
@@ -695,12 +133,12 @@ extension WhispCLI {
         } else {
             print("post_ms: n/a")
         }
-        print("llm_eval_evaluated_cases: \(llmEvalEvaluatedCases)")
-        print("llm_eval_error_cases: \(llmEvalErrorCases)")
+        print("llm_eval_evaluated_cases: \(summary.llmEvalEvaluatedCases)")
+        print("llm_eval_error_cases: \(summary.llmEvalErrorCases)")
         print("intent_preservation_score: \(metrics.intentPreservationScore.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("hallucination_score: \(metrics.hallucinationScore.map { String(format: "%.3f", $0) } ?? "n/a")")
         print("hallucination_rate: \(metrics.hallucinationRate.map { String(format: "%.3f", $0) } ?? "n/a")")
-        if let llmEvalUnavailableReason {
+        if let llmEvalUnavailableReason = summary.llmEvalUnavailableReason {
             print("llm_eval_note: \(llmEvalUnavailableReason)")
         }
         print("benchmark_run_id: \(run.id)")
@@ -735,6 +173,103 @@ extension WhispCLI {
         let resolvedLLMEvalModel: String?
     }
 
+    private struct GenerationOutcomeSummary: Sendable {
+        var executed = 0
+        var skipped = 0
+        var failed = 0
+        var cachedHits = 0
+        var exactCount = 0
+        var cerValues: [Double] = []
+        var totalEdits = 0
+        var totalRefChars = 0
+        var postLatencies: [Double] = []
+        var intentPreservationValues: [Double] = []
+        var hallucinationScoreValues: [Double] = []
+        var hallucinationRateValues: [Double] = []
+        var llmEvalEvaluatedCases = 0
+        var llmEvalErrorCases = 0
+        var llmEvalUnavailableReason: String?
+        var resolvedLLMEvalModel: String?
+    }
+
+    private actor GenerationOutcomeAccumulator {
+        private var summary = GenerationOutcomeSummary()
+
+        func consume(_ outcome: GenerationCaseWorkerOutcome, recorder: BenchmarkRunRecorder) throws {
+            print(outcome.displayLine)
+            summary.executed += outcome.executed
+            summary.skipped += outcome.skipped
+            summary.failed += outcome.failed
+            summary.cachedHits += outcome.cachedHits
+            summary.exactCount += outcome.exactCount
+            if let cer = outcome.cer {
+                summary.cerValues.append(cer)
+            }
+            summary.totalEdits += outcome.totalEdits
+            summary.totalRefChars += outcome.totalRefChars
+            if let postMs = outcome.postMs {
+                summary.postLatencies.append(postMs)
+            }
+            if let score = outcome.intentPreservationScore {
+                summary.intentPreservationValues.append(score)
+            }
+            if let score = outcome.hallucinationScore {
+                summary.hallucinationScoreValues.append(score)
+            }
+            if let rate = outcome.hallucinationRate {
+                summary.hallucinationRateValues.append(rate)
+            }
+            summary.llmEvalEvaluatedCases += outcome.llmEvalEvaluatedCases
+            summary.llmEvalErrorCases += outcome.llmEvalErrorCases
+            if summary.llmEvalUnavailableReason == nil, let note = outcome.llmEvalUnavailableReason {
+                summary.llmEvalUnavailableReason = note
+            }
+            if summary.resolvedLLMEvalModel == nil, let model = outcome.resolvedLLMEvalModel {
+                summary.resolvedLLMEvalModel = model
+            }
+
+            try recorder.appendCaseResult(outcome.result)
+            try recorder.appendEvents(outcome.events)
+            for write in outcome.ioWrites {
+                try recorder.writeCaseIOText(caseID: outcome.result.id, fileName: write.fileName, text: write.text)
+            }
+        }
+
+        func snapshot() -> GenerationOutcomeSummary {
+            summary
+        }
+    }
+
+    private static func makeGenerationRunMetrics(
+        allCasesCount: Int,
+        selectedCasesCount: Int,
+        summary: GenerationOutcomeSummary
+    ) -> BenchmarkRunMetrics {
+        let exactRate = summary.executed > 0 ? Double(summary.exactCount) / Double(summary.executed) : 0
+        let postDistribution = latencyDistribution(values: summary.postLatencies)
+        return BenchmarkRunMetrics(
+            casesTotal: allCasesCount,
+            casesSelected: selectedCasesCount,
+            executedCases: summary.executed,
+            skippedCases: summary.skipped,
+            failedCases: summary.failed,
+            cachedHits: summary.cachedHits,
+            exactMatchRate: exactRate,
+            avgCER: summary.cerValues.isEmpty ? nil : summary.cerValues.reduce(0, +) / Double(summary.cerValues.count),
+            weightedCER: summary.totalRefChars > 0 ? Double(summary.totalEdits) / Double(summary.totalRefChars) : nil,
+            avgTermsF1: nil,
+            intentMatchRate: nil,
+            intentAvgScore: nil,
+            intentPreservationScore: summary.intentPreservationValues.isEmpty ? nil : summary.intentPreservationValues.reduce(0, +) / Double(summary.intentPreservationValues.count),
+            hallucinationScore: summary.hallucinationScoreValues.isEmpty ? nil : summary.hallucinationScoreValues.reduce(0, +) / Double(summary.hallucinationScoreValues.count),
+            hallucinationRate: summary.hallucinationRateValues.isEmpty ? nil : summary.hallucinationRateValues.reduce(0, +) / Double(summary.hallucinationRateValues.count),
+            latencyMs: nil,
+            afterStopLatencyMs: nil,
+            postLatencyMs: toBenchmarkLatencyDistribution(postDistribution),
+            totalAfterStopLatencyMs: nil
+        )
+    }
+
     private static func runGenerationCaseBenchmarkWithWorkers(
         runID: String,
         selectedCases: [ManualBenchmarkCase],
@@ -742,9 +277,13 @@ extension WhispCLI {
         config: Config,
         model: LLMModel,
         apiKey: String,
-        recorder: BenchmarkRunRecorder
-    ) async throws -> [GenerationCaseWorkerOutcome] {
-        try await runBenchmarkCaseWorkers(cases: selectedCases, workers: options.benchmarkWorkers) { _, item in
+        recorder: BenchmarkRunRecorder,
+        onOutcome: @escaping @Sendable (GenerationCaseWorkerOutcome) async throws -> Void
+    ) async throws {
+        try await runBenchmarkCaseWorkers(
+            cases: selectedCases,
+            workers: options.benchmarkWorkers
+        ) { _, item in
             try recorder.markCaseStarted(caseID: item.id)
             return await executeGenerationCaseBenchmarkWorker(
                 runID: runID,
@@ -754,6 +293,8 @@ extension WhispCLI {
                 model: model,
                 apiKey: apiKey
             )
+        } onResult: { outcome in
+            try await onOutcome(outcome)
         }
     }
 

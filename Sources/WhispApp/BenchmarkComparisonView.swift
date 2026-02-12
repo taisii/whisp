@@ -4,7 +4,11 @@ import WhispCore
 struct BenchmarkComparisonView: View {
     @ObservedObject var viewModel: BenchmarkViewModel
 
-    private let columnWidths: [CGFloat] = [220, 70, 110, 90, 90, 110, 110, 100, 150, 180, 110]
+    private struct ComparisonColumn: Identifiable {
+        let id: String
+        let label: String
+        let width: CGFloat
+    }
 
     var body: some View {
         ZStack {
@@ -31,6 +35,7 @@ struct BenchmarkComparisonView: View {
             }
         }
         .animation(.easeInOut(duration: 0.15), value: viewModel.isCaseDetailPresented)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var caseDetailOverlay: some View {
@@ -67,9 +72,9 @@ struct BenchmarkComparisonView: View {
             .pickerStyle(.segmented)
             .frame(width: 220)
 
-            TextField("Dataset path", text: $viewModel.datasetPath)
-                .textFieldStyle(.roundedBorder)
-                .font(.system(size: 12, design: .monospaced))
+            Text("データセット: Debug Cases（固定）")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
 
             Menu {
                 if viewModel.taskCandidates.isEmpty {
@@ -155,17 +160,9 @@ struct BenchmarkComparisonView: View {
 
     private var headerRow: some View {
         HStack(spacing: 8) {
-            headerText("candidate_id", width: columnWidths[0])
-            headerText("runs", width: columnWidths[1])
-            headerText("executed_cases", width: columnWidths[2])
-            headerText("skip_cases", width: columnWidths[3])
-            headerText("avg_cer", width: columnWidths[4])
-            headerText("weighted_cer", width: columnWidths[5])
-            headerText("stt_after_stop_p95", width: columnWidths[6])
-            headerText("post_ms_p95", width: columnWidths[7])
-            headerText("total_after_stop_p95", width: columnWidths[8])
-            headerText("last_run_at", width: columnWidths[9])
-            headerText("dataset_hash_mismatch", width: columnWidths[10])
+            ForEach(comparisonColumns) { column in
+                headerText(column.label, width: column.width)
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -174,17 +171,10 @@ struct BenchmarkComparisonView: View {
 
     private func comparisonRow(_ row: BenchmarkComparisonRow) -> some View {
         HStack(spacing: 8) {
-            cellText(row.candidate.id, width: columnWidths[0])
-            cellText("\(row.runs)", width: columnWidths[1])
-            cellText("\(row.executedCases)", width: columnWidths[2])
-            cellText("\(row.skipCases)", width: columnWidths[3])
-            cellText(decimal(row.avgCER), width: columnWidths[4])
-            cellText(decimal(row.weightedCER), width: columnWidths[5])
-            cellText(ms(row.sttAfterStopP95), width: columnWidths[6])
-            cellText(ms(row.postMsP95), width: columnWidths[7])
-            cellText(ms(row.totalAfterStopP95), width: columnWidths[8])
-            cellText(row.lastRunAt ?? "-", width: columnWidths[9])
-            cellText(row.datasetHashMismatch ? "yes" : "no", width: columnWidths[10], color: row.datasetHashMismatch ? .orange : .secondary)
+            ForEach(comparisonColumns) { column in
+                let rendered = renderedValue(columnID: column.id, row: row)
+                cellText(rendered.text, width: column.width, color: rendered.color)
+            }
         }
         .font(.system(size: 11, design: .monospaced))
         .padding(.vertical, 2)
@@ -246,34 +236,15 @@ struct BenchmarkComparisonView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
 
+            caseBreakdownHeader
+                .padding(.horizontal, 12)
+
             List {
                 ForEach(viewModel.caseBreakdownRows) { row in
                     Button {
                         viewModel.openCaseDetail(caseID: row.id)
                     } label: {
-                        HStack(spacing: 10) {
-                            Text(row.id)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .frame(width: 180, alignment: .leading)
-                            statusChip(row.status)
-                            Text(decimal(row.cer))
-                                .font(.system(size: 11, design: .monospaced))
-                                .frame(width: 80, alignment: .trailing)
-                            Text(ms(row.sttTotalMs))
-                                .font(.system(size: 11, design: .monospaced))
-                                .frame(width: 90, alignment: .trailing)
-                            Text(ms(row.postMs))
-                                .font(.system(size: 11, design: .monospaced))
-                                .frame(width: 90, alignment: .trailing)
-                            Text(ms(row.totalAfterStopMs))
-                                .font(.system(size: 11, design: .monospaced))
-                                .frame(width: 120, alignment: .trailing)
-                            Text(row.reason ?? "-")
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                        }
+                        caseBreakdownRow(row)
                     }
                     .buttonStyle(.plain)
                     .contentShape(Rectangle())
@@ -282,6 +253,27 @@ struct BenchmarkComparisonView: View {
             .listStyle(.plain)
         }
         .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var caseBreakdownHeader: some View {
+        HStack(spacing: 10) {
+            headerText("case_id", width: 180)
+            headerText("status", width: 74)
+            headerText("cer", width: 80)
+            if viewModel.selectedTask == .stt {
+                headerText("stt_total_ms", width: 90)
+                headerText("stt_after_stop_ms", width: 120)
+            } else {
+                headerText("post_ms", width: 90)
+                headerText("intent_preservation", width: 110)
+                headerText("hallucination_rate", width: 110)
+            }
+            Text("reason")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
     }
 
     private func headerText(_ value: String, width: CGFloat) -> some View {
@@ -329,6 +321,117 @@ struct BenchmarkComparisonView: View {
             .background(color.opacity(0.16))
             .foregroundStyle(color)
             .clipShape(Capsule())
+    }
+
+    private var comparisonColumns: [ComparisonColumn] {
+        switch viewModel.selectedTask {
+        case .stt:
+            return [
+                ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 220),
+                ComparisonColumn(id: "model", label: "model", width: 120),
+                ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110),
+                ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90),
+                ComparisonColumn(id: "avg_cer", label: "avg_cer", width: 90),
+                ComparisonColumn(id: "weighted_cer", label: "weighted_cer", width: 100),
+                ComparisonColumn(id: "stt_after_stop_p50", label: "stt_after_stop_p50", width: 140),
+                ComparisonColumn(id: "stt_after_stop_p95", label: "stt_after_stop_p95", width: 140),
+                ComparisonColumn(id: "last_run_at", label: "last_run_at", width: 180),
+            ]
+        case .generation:
+            return [
+                ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 210),
+                ComparisonColumn(id: "model", label: "model", width: 120),
+                ComparisonColumn(id: "prompt_profile", label: "prompt_profile", width: 120),
+                ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110),
+                ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90),
+                ComparisonColumn(id: "avg_cer", label: "avg_cer", width: 90),
+                ComparisonColumn(id: "weighted_cer", label: "weighted_cer", width: 100),
+                ComparisonColumn(id: "post_ms_p95", label: "post_ms_p95", width: 100),
+                ComparisonColumn(id: "intent_preservation", label: "intent_preservation", width: 140),
+                ComparisonColumn(id: "hallucination_rate", label: "hallucination_rate", width: 130),
+                ComparisonColumn(id: "last_run_at", label: "last_run_at", width: 180),
+            ]
+        case .vision:
+            return [
+                ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 220),
+                ComparisonColumn(id: "model", label: "model", width: 140),
+                ComparisonColumn(id: "executed_cases", label: "executed_cases", width: 110),
+                ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90),
+                ComparisonColumn(id: "last_run_at", label: "last_run_at", width: 180),
+            ]
+        }
+    }
+
+    private func renderedValue(columnID: String, row: BenchmarkComparisonRow) -> (text: String, color: Color) {
+        switch columnID {
+        case "candidate_id":
+            return (row.candidate.id, .primary)
+        case "model":
+            return (row.candidate.model, .primary)
+        case "prompt_profile":
+            return (row.candidate.promptProfileID ?? "-", .primary)
+        case "executed_cases":
+            return ("\(row.executedCases)", .primary)
+        case "skip_cases":
+            return ("\(row.skipCases)", .primary)
+        case "avg_cer":
+            return (decimal(row.avgCER), .primary)
+        case "weighted_cer":
+            return (decimal(row.weightedCER), .primary)
+        case "stt_after_stop_p50":
+            return (ms(row.sttAfterStopP50), .primary)
+        case "stt_after_stop_p95":
+            return (ms(row.sttAfterStopP95), .primary)
+        case "post_ms_p95":
+            return (ms(row.postMsP95), .primary)
+        case "intent_preservation":
+            return (decimal(row.intentPreservationScore), .primary)
+        case "hallucination_rate":
+            return (decimal(row.hallucinationRate), .primary)
+        case "last_run_at":
+            return (row.lastRunAt ?? "-", .primary)
+        default:
+            return ("-", .secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func caseBreakdownRow(_ row: BenchmarkCaseBreakdownRow) -> some View {
+        HStack(spacing: 10) {
+            Text(row.id)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .frame(width: 180, alignment: .leading)
+            statusChip(row.status)
+                .frame(width: 74, alignment: .leading)
+            Text(decimal(row.cer))
+                .font(.system(size: 11, design: .monospaced))
+                .frame(width: 80, alignment: .trailing)
+
+            if viewModel.selectedTask == .stt {
+                Text(ms(row.sttTotalMs))
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(width: 90, alignment: .trailing)
+                Text(ms(row.sttAfterStopMs))
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(width: 120, alignment: .trailing)
+            } else {
+                Text(ms(row.postMs))
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(width: 90, alignment: .trailing)
+                Text(decimal(row.intentPreservationScore))
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(width: 110, alignment: .trailing)
+                Text(decimal(row.hallucinationRate))
+                    .font(.system(size: 11, design: .monospaced))
+                    .frame(width: 110, alignment: .trailing)
+            }
+
+            Text(row.reason ?? "-")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
     }
 
     private func decimal(_ value: Double?) -> String {

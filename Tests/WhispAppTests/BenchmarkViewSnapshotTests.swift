@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import SwiftUI
 import XCTest
 import WhispCore
@@ -114,10 +115,10 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         let dataViewModel = BenchmarkViewModel(
             store: dataStore,
             candidateStore: dataCandidateStore,
-            integrityStore: dataIntegrityStore
+            integrityStore: dataIntegrityStore,
+            datasetPathOverride: casesPath.path
         )
         dataViewModel.selectedTask = .generation
-        dataViewModel.datasetPath = casesPath.path
         dataViewModel.refresh()
         let after = try renderSnapshot(viewModel: dataViewModel)
         let afterURL = artifactDir.appendingPathComponent("benchmark_view_after.png")
@@ -158,6 +159,38 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
     }
 
+    func testRenderBenchmarkViewRoundTripTabSwitchKeepsLayout() throws {
+        let artifactDir = try makeArtifactDirectory()
+        let home = try makeTempHome()
+        let env = ["HOME": home.path]
+        let viewModel = BenchmarkViewModel(
+            store: BenchmarkStore(environment: env),
+            candidateStore: BenchmarkCandidateStore(environment: env),
+            integrityStore: BenchmarkIntegrityStore(environment: env)
+        )
+        viewModel.refresh()
+
+        viewModel.selectedTab = .comparison
+        let before = try renderSnapshot(viewModel: viewModel)
+        let beforeURL = artifactDir.appendingPathComponent("benchmark_roundtrip_comparison_before.png")
+        try pngData(from: before).write(to: beforeURL, options: .atomic)
+
+        viewModel.selectedTab = .integrity
+        let integrity = try renderSnapshot(viewModel: viewModel)
+        let integrityURL = artifactDir.appendingPathComponent("benchmark_roundtrip_integrity.png")
+        try pngData(from: integrity).write(to: integrityURL, options: .atomic)
+
+        viewModel.selectedTab = .comparison
+        let after = try renderSnapshot(viewModel: viewModel)
+        let afterURL = artifactDir.appendingPathComponent("benchmark_roundtrip_comparison_after.png")
+        try pngData(from: after).write(to: afterURL, options: .atomic)
+
+        XCTAssertEqual(imageDigest(before), imageDigest(after))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: integrityURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
     private func renderSnapshot(viewModel: BenchmarkViewModel) throws -> NSBitmapImageRep {
         let root = BenchmarkView(viewModel: viewModel, autoRefreshOnAppear: false)
             .frame(width: CGFloat(width), height: CGFloat(height))
@@ -177,6 +210,11 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
             throw AppError.io("failed to encode png")
         }
         return png
+    }
+
+    private func imageDigest(_ bitmap: NSBitmapImageRep) -> String {
+        let data = bitmap.tiffRepresentation ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private func makeArtifactDirectory() throws -> URL {

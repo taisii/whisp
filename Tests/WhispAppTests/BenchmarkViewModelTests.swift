@@ -73,8 +73,12 @@ final class BenchmarkViewModelTests: XCTestCase {
         )
         try store.saveRun(run)
 
-        let viewModel = BenchmarkViewModel(store: store, candidateStore: candidateStore, integrityStore: integrityStore)
-        viewModel.datasetPath = casesPath.path
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
         viewModel.refresh()
 
         XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.id == candidate.id }))
@@ -222,8 +226,12 @@ final class BenchmarkViewModelTests: XCTestCase {
             error: nil
         )))
 
-        let viewModel = BenchmarkViewModel(store: store, candidateStore: candidateStore, integrityStore: integrityStore)
-        viewModel.datasetPath = casesPath.path
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
         viewModel.refresh()
         viewModel.openCaseDetail(caseID: "case-1")
 
@@ -324,8 +332,12 @@ final class BenchmarkViewModelTests: XCTestCase {
             error: nil
         )))
 
-        let viewModel = BenchmarkViewModel(store: store, candidateStore: candidateStore, integrityStore: integrityStore)
-        viewModel.datasetPath = casesPath.path
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
         viewModel.refresh()
         viewModel.openCaseDetail(caseID: "case-old")
 
@@ -357,8 +369,12 @@ final class BenchmarkViewModelTests: XCTestCase {
             ),
         ])
 
-        let viewModel = BenchmarkViewModel(store: store, candidateStore: candidateStore, integrityStore: integrityStore)
-        viewModel.datasetPath = casesPath.path
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
         viewModel.refresh()
 
         XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.model == STTProvider.appleSpeech.rawValue }))
