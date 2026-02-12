@@ -14,35 +14,60 @@
 │   ├── exclusions.json
 │   ├── issues_stt.json
 │   └── issues_generation.json
-├── runs/
-│   └── <run_id>/
-│       ├── manifest.json
-│       ├── orchestrator_events.jsonl
-│       ├── cases_index.jsonl
-│       └── cases/
-│           └── <case_id>/
-│               ├── manifest.json
-│               ├── metrics.json
-│               ├── events.jsonl
-│               ├── io/
-│               │   ├── input_stt.txt
-│               │   ├── output_stt.txt
-│               │   ├── output_generation.txt
-│               │   └── reference.txt
-│               └── artifacts/
-│                   └── error.json (必要時のみ)
+└── runs/
+    └── <run_id>/
+        ├── manifest.json
+        ├── orchestrator_events.jsonl
+        ├── cases_index.jsonl
+        └── cases/
+            └── <case_id>/
+                ├── manifest.json
+                ├── metrics.json
+                ├── events.jsonl
+                ├── io/
+                │   ├── input_stt.txt
+                │   ├── prompt_generation.txt                 (single candidate generation)
+                │   ├── output_generation.txt                 (single candidate generation)
+                │   ├── prompt_generation_a.txt               (pairwise generation)
+                │   ├── output_generation_a.txt               (pairwise generation)
+                │   ├── prompt_generation_b.txt               (pairwise generation)
+                │   ├── output_generation_b.txt               (pairwise generation)
+                │   ├── prompt_pairwise_round1.txt            (pairwise generation)
+                │   ├── prompt_pairwise_round2.txt            (pairwise generation)
+                │   ├── pairwise_round1_response.json         (pairwise generation)
+                │   ├── pairwise_round2_response.json         (pairwise generation)
+                │   ├── pairwise_decision.json                (pairwise generation)
+                │   └── reference.txt
+                └── artifacts/
+                    └── error.json (必要時のみ)
 ```
 
 ## Candidate (`BenchmarkCandidate`)
 
-比較対象の定義。1 candidate は「モデル + 設定 + prompt profile」を表す。
+比較対象の定義。1 candidate は「モデル + 設定 + generation prompt」を表す。
 
 - `id`: candidate_id
 - `task`: `stt|generation|vision`（比較UI phase1 は `stt|generation`）
 - `model`: 例 `deepgram`, `apple_speech`, `gemini-2.5-flash-lite`, `gpt-5-nano`
-- `promptProfileID`: generation 用（任意）
+- `promptName`: generation 用の表示名（任意）
+- `generationPromptTemplate`: generation 用のプロンプト本文（generation では必須）
+- `generationPromptHash`: `sha256("prompt-v1|<canonical_prompt>")`
 - `options`: 実行オプション文字列辞書（`chunk_ms`, `realtime`, `require_context` など）
   - STT では `whisper` / `apple_speech` は `stt_mode=rest` のみ対応
+
+### Generation プロンプト変数（candidate内包テンプレート）
+
+`generationPromptTemplate` では次の変数を使用できる。
+
+- `{STT結果}`: `stt_text`
+- `{選択テキスト}`: `context.accessibilityText`
+- `{画面テキスト}`: `context.windowText`
+- `{画面要約}`: `context.visionSummary`
+- `{専門用語候補}`: `context.visionTerms` を `", "` で連結
+
+欠損値は空文字で置換する。case 実行は失敗させない。
+`{STT結果}` がテンプレートに無い場合は互換のため末尾に `入力: <stt_text>` を追記する。
+テンプレート内に context 系変数（`{選択テキスト}` など）が含まれる場合、重複防止のため `画面コンテキスト:` の自動追記は行わない。
 
 ## BenchmarkKey (`BenchmarkKey`)
 
@@ -60,13 +85,14 @@
 
 ## Run (`BenchmarkRunRecord`)
 
-- `schemaVersion`: `4`
+- `schemaVersion`: `5`
 - `id`, `kind`, `status`, `createdAt`, `updatedAt`
 - `options`: 実行条件（`sourceCasesPath`, `sttMode`, `chunkMs`, `useCache`, `llmEval...` など）
-  - 比較メタも保持: `datasetHash`, `runtimeOptionsHash`, `candidateID`, `evaluatorVersion`, `codeVersion`
+  - 比較メタも保持: `datasetHash`, `runtimeOptionsHash`, `candidateID`, `promptName`, `generationPromptHash`, `evaluatorVersion`, `codeVersion`
+  - generation pairwise 時は `compareMode=pairwise`, `pairCandidateAID`, `pairCandidateBID`, `pairJudgeModel` を保持
 - `candidateID`: run が属する candidate
 - `benchmarkKey`: 比較キー
-- `metrics`: 品質・レイテンシ集計の正本
+- `metrics`: 品質・レイテンシ集計の正本（generation pairwise 時は `pairwiseSummary` を保持）
 - `paths`: `manifest/orchestrator_events/cases_index/cases_directory` のパス
 
 ## Run配下ファイル
@@ -89,6 +115,7 @@
 - `cache`: `hit`, `key`, `namespace`
 - `sources`: 参照元（`transcript/input/reference/intent`）
 - `metrics`: `cer`, `exactMatch`, `sttTotalMs`, `postMs`, `totalAfterStopMs` など
+  - generation pairwise 時は `metrics.pairwise` に `overall/intent/hallucination/style_context` の winner と理由を保存
 
 ## Event (`BenchmarkCaseEvent`)
 
@@ -126,9 +153,21 @@ run全体イベントは `orchestrator_events.jsonl` に保存する。
 - `stt_text` が空/欠落: `skipped_missing_input_stt`
 - `labels.transcript_gold/silver` へのフォールバックは行わない
 
+`manual_test_cases.jsonl` の `accessibility`（`AccessibilitySnapshot`）は保存されるが、現時点では generation プロンプト変数の入力には利用しない（将来拡張予定）。
+
+## Generation compare モード
+
+- `--benchmark-compare --task generation` は pairwise 専用。
+- `--candidate-id` は常に2件（A/B）必須。
+- judge モデルは `--judge-model` で指定し、未指定時は `Config.llmModel` を使用。
+- 判定軸は `intent` / `hallucination` / `style_context` の3軸。
+- 判定は A→B と B→A の2回を実行し、軸ごとに一致した winner を採用。不一致は `tie`。
+- `overall_winner` は3軸多数決。同数は `tie`。
+
 ## CLI 主要コマンド
 
-- `--benchmark-compare --task <stt|generation> --cases <path> --candidate-id <id> [--force]`
+- `--benchmark-compare --task stt --cases <path> --candidate-id <id> [--candidate-id <id> ...] [--force]`
+- `--benchmark-compare --task generation --cases <path> --candidate-id <A> --candidate-id <B> [--judge-model <model>] [--force]`
 - `--benchmark-list-candidates`
 - `--benchmark-scan-integrity --task <stt|generation> --cases <path>`
 - `--benchmark-workers <N>`（case並列数。未指定は `min(4, CPUコア数)`）

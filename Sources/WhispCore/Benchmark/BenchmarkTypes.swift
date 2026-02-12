@@ -10,7 +10,9 @@ public struct BenchmarkCandidate: Codable, Equatable, Identifiable, Sendable {
     public let id: String
     public let task: BenchmarkKind
     public let model: String
-    public let promptProfileID: String?
+    public let promptName: String?
+    public let generationPromptTemplate: String?
+    public let generationPromptHash: String?
     public let options: [String: String]
     public let createdAt: String
     public let updatedAt: String
@@ -19,7 +21,9 @@ public struct BenchmarkCandidate: Codable, Equatable, Identifiable, Sendable {
         id: String,
         task: BenchmarkKind,
         model: String,
-        promptProfileID: String? = nil,
+        promptName: String? = nil,
+        generationPromptTemplate: String? = nil,
+        generationPromptHash: String? = nil,
         options: [String: String] = [:],
         createdAt: String,
         updatedAt: String
@@ -27,7 +31,9 @@ public struct BenchmarkCandidate: Codable, Equatable, Identifiable, Sendable {
         self.id = id
         self.task = task
         self.model = model
-        self.promptProfileID = promptProfileID
+        self.promptName = promptName
+        self.generationPromptTemplate = generationPromptTemplate
+        self.generationPromptHash = generationPromptHash
         self.options = options
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -185,6 +191,100 @@ public struct BenchmarkCacheRecord: Codable, Equatable, Sendable {
     }
 }
 
+public enum BenchmarkCompareMode: String, Codable, Sendable {
+    case standard
+    case pairwise
+}
+
+public enum PairwiseWinner: String, Codable, Sendable {
+    case a
+    case b
+    case tie
+}
+
+public struct PairwiseCaseJudgement: Codable, Equatable, Sendable {
+    public var overallWinner: PairwiseWinner
+    public var intentWinner: PairwiseWinner
+    public var hallucinationWinner: PairwiseWinner
+    public var styleContextWinner: PairwiseWinner
+    public var overallReason: String?
+    public var intentReason: String?
+    public var hallucinationReason: String?
+    public var styleContextReason: String?
+    public var confidence: String?
+
+    public init(
+        overallWinner: PairwiseWinner,
+        intentWinner: PairwiseWinner,
+        hallucinationWinner: PairwiseWinner,
+        styleContextWinner: PairwiseWinner,
+        overallReason: String? = nil,
+        intentReason: String? = nil,
+        hallucinationReason: String? = nil,
+        styleContextReason: String? = nil,
+        confidence: String? = nil
+    ) {
+        self.overallWinner = overallWinner
+        self.intentWinner = intentWinner
+        self.hallucinationWinner = hallucinationWinner
+        self.styleContextWinner = styleContextWinner
+        self.overallReason = overallReason
+        self.intentReason = intentReason
+        self.hallucinationReason = hallucinationReason
+        self.styleContextReason = styleContextReason
+        self.confidence = confidence
+    }
+}
+
+public struct PairwiseRunSummary: Codable, Equatable, Sendable {
+    public var judgedCases: Int
+    public var judgeErrorCases: Int
+    public var overallAWins: Int
+    public var overallBWins: Int
+    public var overallTies: Int
+    public var intentAWins: Int
+    public var intentBWins: Int
+    public var intentTies: Int
+    public var hallucinationAWins: Int
+    public var hallucinationBWins: Int
+    public var hallucinationTies: Int
+    public var styleContextAWins: Int
+    public var styleContextBWins: Int
+    public var styleContextTies: Int
+
+    public init(
+        judgedCases: Int = 0,
+        judgeErrorCases: Int = 0,
+        overallAWins: Int = 0,
+        overallBWins: Int = 0,
+        overallTies: Int = 0,
+        intentAWins: Int = 0,
+        intentBWins: Int = 0,
+        intentTies: Int = 0,
+        hallucinationAWins: Int = 0,
+        hallucinationBWins: Int = 0,
+        hallucinationTies: Int = 0,
+        styleContextAWins: Int = 0,
+        styleContextBWins: Int = 0,
+        styleContextTies: Int = 0
+    ) {
+        self.judgedCases = judgedCases
+        self.judgeErrorCases = judgeErrorCases
+        self.overallAWins = overallAWins
+        self.overallBWins = overallBWins
+        self.overallTies = overallTies
+        self.intentAWins = intentAWins
+        self.intentBWins = intentBWins
+        self.intentTies = intentTies
+        self.hallucinationAWins = hallucinationAWins
+        self.hallucinationBWins = hallucinationBWins
+        self.hallucinationTies = hallucinationTies
+        self.styleContextAWins = styleContextAWins
+        self.styleContextBWins = styleContextBWins
+        self.styleContextTies = styleContextTies
+    }
+}
+
 public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
     public var exactMatch: Bool?
     public var cer: Double?
@@ -203,6 +303,7 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
     public var latencyMs: Double?
     public var audioSeconds: Double?
     public var outputChars: Int?
+    public var pairwise: PairwiseCaseJudgement?
 
     public init(
         exactMatch: Bool? = nil,
@@ -221,7 +322,8 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
         totalAfterStopMs: Double? = nil,
         latencyMs: Double? = nil,
         audioSeconds: Double? = nil,
-        outputChars: Int? = nil
+        outputChars: Int? = nil,
+        pairwise: PairwiseCaseJudgement? = nil
     ) {
         self.exactMatch = exactMatch
         self.cer = cer
@@ -240,6 +342,7 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
         self.latencyMs = latencyMs
         self.audioSeconds = audioSeconds
         self.outputChars = outputChars
+        self.pairwise = pairwise
     }
 }
 
@@ -317,7 +420,8 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
     public var evaluatorVersion: String?
     public var codeVersion: String?
     public var candidateID: String?
-    public var promptProfileID: String?
+    public var promptName: String?
+    public var generationPromptHash: String?
     public var sttMode: String?
     public var chunkMs: Int?
     public var realtime: Bool?
@@ -332,6 +436,10 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
     public var llmEvalModel: String?
     public var llmModel: String?
     public var caseLimit: Int?
+    public var compareMode: BenchmarkCompareMode?
+    public var pairCandidateAID: String?
+    public var pairCandidateBID: String?
+    public var pairJudgeModel: String?
 
     public init(
         sourceCasesPath: String,
@@ -341,7 +449,8 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
         evaluatorVersion: String? = nil,
         codeVersion: String? = nil,
         candidateID: String? = nil,
-        promptProfileID: String? = nil,
+        promptName: String? = nil,
+        generationPromptHash: String? = nil,
         sttMode: String? = nil,
         chunkMs: Int? = nil,
         realtime: Bool? = nil,
@@ -355,7 +464,11 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
         llmEvalEnabled: Bool? = nil,
         llmEvalModel: String? = nil,
         llmModel: String? = nil,
-        caseLimit: Int? = nil
+        caseLimit: Int? = nil,
+        compareMode: BenchmarkCompareMode? = nil,
+        pairCandidateAID: String? = nil,
+        pairCandidateBID: String? = nil,
+        pairJudgeModel: String? = nil
     ) {
         self.sourceCasesPath = sourceCasesPath
         self.sttExecutionProfile = sttExecutionProfile
@@ -364,7 +477,8 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
         self.evaluatorVersion = evaluatorVersion
         self.codeVersion = codeVersion
         self.candidateID = candidateID
-        self.promptProfileID = promptProfileID
+        self.promptName = promptName
+        self.generationPromptHash = generationPromptHash
         self.sttMode = sttMode
         self.chunkMs = chunkMs
         self.realtime = realtime
@@ -379,6 +493,10 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
         self.llmEvalModel = llmEvalModel
         self.llmModel = llmModel
         self.caseLimit = caseLimit
+        self.compareMode = compareMode
+        self.pairCandidateAID = pairCandidateAID
+        self.pairCandidateBID = pairCandidateBID
+        self.pairJudgeModel = pairJudgeModel
     }
 }
 
@@ -405,6 +523,7 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
     public var postLatencyMs: BenchmarkLatencyDistribution?
     public var totalAfterStopLatencyMs: BenchmarkLatencyDistribution?
     public var cost: BenchmarkCostBreakdown?
+    public var pairwiseSummary: PairwiseRunSummary?
 
     public init(
         casesTotal: Int,
@@ -426,7 +545,8 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
         afterStopLatencyMs: BenchmarkLatencyDistribution? = nil,
         postLatencyMs: BenchmarkLatencyDistribution? = nil,
         totalAfterStopLatencyMs: BenchmarkLatencyDistribution? = nil,
-        cost: BenchmarkCostBreakdown? = nil
+        cost: BenchmarkCostBreakdown? = nil,
+        pairwiseSummary: PairwiseRunSummary? = nil
     ) {
         self.casesTotal = casesTotal
         self.casesSelected = casesSelected
@@ -448,6 +568,7 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
         self.postLatencyMs = postLatencyMs
         self.totalAfterStopLatencyMs = totalAfterStopLatencyMs
         self.cost = cost
+        self.pairwiseSummary = pairwiseSummary
     }
 }
 
@@ -485,7 +606,7 @@ public struct BenchmarkRunRecord: Codable, Equatable, Identifiable, Sendable {
     public var paths: BenchmarkRunPaths
 
     public init(
-        schemaVersion: Int = 4,
+        schemaVersion: Int = 5,
         id: String,
         kind: BenchmarkKind,
         status: BenchmarkRunStatus = .completed,

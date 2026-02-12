@@ -1,4 +1,5 @@
 import XCTest
+import WhispCore
 @testable import whisp
 
 final class CLICommandTests: XCTestCase {
@@ -242,17 +243,48 @@ final class CLICommandTests: XCTestCase {
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",
+            "--judge-model", "gpt-5-nano",
             "--force",
         ])
         XCTAssertEqual(options.task, .generation)
         XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
         XCTAssertEqual(options.candidateIDs, ["gen-a", "gen-b"])
+        XCTAssertEqual(options.judgeModel, .gpt5Nano)
         XCTAssertTrue(options.force)
 
         XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
             "--task", "vision",
             "--candidate-id", "x",
+        ]))
+    }
+
+    func testParseBenchmarkCompareOptionsRequiresTwoGenerationCandidates() {
+        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
+            "--benchmark-compare",
+            "--task", "generation",
+            "--cases", "/tmp/manual.jsonl",
+            "--candidate-id", "gen-a",
+        ]))
+
+        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
+            "--benchmark-compare",
+            "--task", "generation",
+            "--cases", "/tmp/manual.jsonl",
+            "--candidate-id", "gen-a",
+            "--candidate-id", "gen-b",
+            "--candidate-id", "gen-c",
+        ]))
+    }
+
+    func testParseBenchmarkCompareOptionsRejectsInvalidJudgeModel() {
+        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
+            "--benchmark-compare",
+            "--task", "generation",
+            "--cases", "/tmp/manual.jsonl",
+            "--candidate-id", "gen-a",
+            "--candidate-id", "gen-b",
+            "--judge-model", "invalid-model",
         ]))
     }
 
@@ -282,5 +314,44 @@ final class CLICommandTests: XCTestCase {
         """.utf8)
         let item = try decoder.decode(ManualBenchmarkCase.self, from: data)
         XCTAssertNil(item.resolvedGenerationInputSTT())
+    }
+
+    func testMakePostProcessPromptSupportsContextVariables() {
+        var config = Config()
+        config.inputLanguage = "ja"
+        let context = ContextInfo(
+            accessibilityText: "選択中",
+            windowText: "議事録本文",
+            visionSummary: "会議メモを編集中",
+            visionTerms: ["Whisp", "Swift"]
+        )
+        let prompt = WhispCLI.makePostProcessPrompt(
+            config: config,
+            sttText: "今日は定例です",
+            context: context,
+            templateOverride: """
+            入力={STT結果}
+            選択={選択テキスト}
+            画面={画面テキスト}
+            要約={画面要約}
+            用語={専門用語候補}
+            """
+        )
+
+        XCTAssertTrue(prompt.contains("入力=今日は定例です"))
+        XCTAssertTrue(prompt.contains("選択=選択中"))
+        XCTAssertTrue(prompt.contains("画面=議事録本文"))
+        XCTAssertTrue(prompt.contains("要約=会議メモを編集中"))
+        XCTAssertTrue(prompt.contains("用語=Whisp, Swift"))
+    }
+
+    func testParseCandidateBoolOptionRejectsInvalidValue() {
+        XCTAssertThrowsError(
+            try WhispCLI.parseCandidateBoolOption(
+                ["require_context": "invalid-value"],
+                key: "require_context",
+                defaultValue: false
+            )
+        )
     }
 }

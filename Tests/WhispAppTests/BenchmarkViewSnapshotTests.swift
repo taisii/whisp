@@ -36,16 +36,29 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         let casesPath = dataHome.appendingPathComponent("cases.jsonl", isDirectory: false)
         try Data("{}\n".utf8).write(to: casesPath, options: .atomic)
 
-        let candidate = BenchmarkCandidate(
+        let candidateA = BenchmarkCandidate(
             id: "generation-gpt-5-nano-a",
             task: .generation,
             model: "gpt-5-nano",
-            promptProfileID: "business",
-            options: ["require_context": "true", "llm_eval": "true"],
+            promptName: "business",
+            generationPromptTemplate: "入力: {STT結果}",
+            generationPromptHash: promptTemplateHash("入力: {STT結果}"),
+            options: ["require_context": "true", "use_cache": "true"],
             createdAt: "2026-02-12T00:00:00.000Z",
             updatedAt: "2026-02-12T00:00:00.000Z"
         )
-        try dataCandidateStore.saveCandidates([candidate])
+        let candidateB = BenchmarkCandidate(
+            id: "generation-gemini-2.5-flash-lite-b",
+            task: .generation,
+            model: "gemini-2.5-flash-lite",
+            promptName: "formal",
+            generationPromptTemplate: "丁寧に整形: {STT結果}",
+            generationPromptHash: promptTemplateHash("丁寧に整形: {STT結果}"),
+            options: ["require_context": "false", "use_cache": "true"],
+            createdAt: "2026-02-12T00:00:00.000Z",
+            updatedAt: "2026-02-12T00:00:00.000Z"
+        )
+        try dataCandidateStore.saveCandidates([candidateA, candidateB])
 
         let runID = "generation-20260212-000000-aaaa1111"
         let paths = dataStore.resolveRunPaths(runID: runID)
@@ -59,17 +72,21 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                 options: BenchmarkRunOptions(
                     sourceCasesPath: casesPath.path,
                     datasetHash: "hash-a",
-                    candidateID: candidate.id,
-                    llmModel: "gpt-5-nano"
+                    runtimeOptionsHash: "runtime-a",
+                    evaluatorVersion: "pairwise-v1",
+                    codeVersion: "dev",
+                    compareMode: .pairwise,
+                    pairCandidateAID: candidateB.id,
+                    pairCandidateBID: candidateA.id,
+                    pairJudgeModel: "gpt-5-nano"
                 ),
-                candidateID: candidate.id,
                 benchmarkKey: BenchmarkKey(
                     task: .generation,
                     datasetPath: casesPath.path,
                     datasetHash: "hash-a",
-                    candidateID: candidate.id,
+                    candidateID: "pair:\(candidateB.id)__vs__\(candidateA.id)",
                     runtimeOptionsHash: "runtime-a",
-                    evaluatorVersion: "v1",
+                    evaluatorVersion: "pairwise-v1",
                     codeVersion: "dev"
                 ),
                 metrics: BenchmarkRunMetrics(
@@ -78,9 +95,22 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                     executedCases: 2,
                     skippedCases: 0,
                     failedCases: 0,
-                    avgCER: 0.2,
-                    weightedCER: 0.24,
-                    postLatencyMs: BenchmarkLatencyDistribution(avg: 110, p50: 100, p95: 180, p99: 210)
+                    pairwiseSummary: PairwiseRunSummary(
+                        judgedCases: 2,
+                        judgeErrorCases: 0,
+                        overallAWins: 1,
+                        overallBWins: 1,
+                        overallTies: 0,
+                        intentAWins: 1,
+                        intentBWins: 1,
+                        intentTies: 0,
+                        hallucinationAWins: 0,
+                        hallucinationBWins: 2,
+                        hallucinationTies: 0,
+                        styleContextAWins: 1,
+                        styleContextBWins: 0,
+                        styleContextTies: 1
+                    )
                 ),
                 paths: paths
             )
@@ -92,13 +122,54 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                 id: "case-1",
                 status: .ok,
                 reason: nil,
-                cache: BenchmarkCacheRecord(hit: true, key: "abc", namespace: "generation"),
+                cache: BenchmarkCacheRecord(hit: true, key: "abc", namespace: "generation_pairwise"),
                 sources: BenchmarkReferenceSources(input: "stt_text", reference: "ground_truth_text"),
                 contextUsed: true,
                 visionImageAttached: false,
-                metrics: BenchmarkCaseMetrics(cer: 0.2, postMs: 140, outputChars: 120)
+                metrics: BenchmarkCaseMetrics(
+                    pairwise: PairwiseCaseJudgement(
+                        overallWinner: .a,
+                        intentWinner: .a,
+                        hallucinationWinner: .b,
+                        styleContextWinner: .tie,
+                        overallReason: "Aが僅差で優位",
+                        intentReason: "Aは意図表現が明確",
+                        hallucinationReason: "Bは余計な補完が少ない",
+                        styleContextReason: "同等",
+                        confidence: "medium"
+                    )
+                )
             )
         )
+        try dataStore.appendCaseResult(
+            runID: runID,
+            result: BenchmarkCaseResult(
+                id: "case-2",
+                status: .ok,
+                reason: nil,
+                cache: BenchmarkCacheRecord(hit: false, key: "def", namespace: "generation_pairwise"),
+                sources: BenchmarkReferenceSources(input: "stt_text", reference: "ground_truth_text"),
+                contextUsed: true,
+                visionImageAttached: false,
+                metrics: BenchmarkCaseMetrics(
+                    pairwise: PairwiseCaseJudgement(
+                        overallWinner: .b,
+                        intentWinner: .b,
+                        hallucinationWinner: .b,
+                        styleContextWinner: .a,
+                        overallReason: "Bが2軸で優位",
+                        intentReason: "Bの指示追従が安定",
+                        hallucinationReason: "Bの追加情報が少ない",
+                        styleContextReason: "Aの文体がより自然",
+                        confidence: "high"
+                    )
+                )
+            )
+        )
+        _ = try dataStore.writeCaseIOText(runID: runID, caseID: "case-1", fileName: "output_generation_a.txt", text: "A output case-1")
+        _ = try dataStore.writeCaseIOText(runID: runID, caseID: "case-1", fileName: "output_generation_b.txt", text: "B output case-1")
+        _ = try dataStore.writeCaseIOText(runID: runID, caseID: "case-2", fileName: "output_generation_a.txt", text: "A output case-2")
+        _ = try dataStore.writeCaseIOText(runID: runID, caseID: "case-2", fileName: "output_generation_b.txt", text: "B output case-2")
 
         let issue = BenchmarkIntegrityIssue(
             id: "issue-1",
@@ -157,6 +228,28 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
+    func testRenderBenchmarkPromptCandidateModalAfter() throws {
+        let artifactDir = try makeArtifactDirectory()
+        let home = try makeTempHome()
+        let env = ["HOME": home.path]
+        let viewModel = BenchmarkViewModel(
+            store: BenchmarkStore(environment: env),
+            candidateStore: BenchmarkCandidateStore(environment: env),
+            integrityStore: BenchmarkIntegrityStore(environment: env)
+        )
+        viewModel.selectedTask = .generation
+        viewModel.refresh()
+        viewModel.openCreatePromptCandidateModal()
+        viewModel.promptCandidateDraftName = "modal-preview"
+        viewModel.promptCandidateDraftTemplate = "整形してください。入力: {STT結果}"
+
+        let rendered = try renderSnapshot(viewModel: viewModel)
+        let url = artifactDir.appendingPathComponent("benchmark_prompt_candidate_modal_after.png")
+        try pngData(from: rendered).write(to: url, options: .atomic)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
 
     func testRenderBenchmarkViewRoundTripTabSwitchKeepsLayout() throws {

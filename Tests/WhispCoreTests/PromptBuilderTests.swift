@@ -47,6 +47,67 @@ final class PromptBuilderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("専門用語候補: func main, http.Server"))
     }
 
+    func testPromptReplacesContextVariables() {
+        let context = ContextInfo(
+            accessibilityText: "選択中の文",
+            windowText: "会議メモの本文",
+            visionSummary: "Slackで議事録を編集",
+            visionTerms: ["Whisp", "Benchmark"]
+        )
+        let prompt = buildPrompt(
+            sttResult: "今日は定例です",
+            languageHint: "ja",
+            appName: nil,
+            appPromptRules: [],
+            context: context,
+            templateOverride: """
+            入力={STT結果}
+            選択={選択テキスト}
+            画面={画面テキスト}
+            要約={画面要約}
+            用語={専門用語候補}
+            """
+        )
+
+        XCTAssertTrue(prompt.contains("入力=今日は定例です"))
+        XCTAssertTrue(prompt.contains("選択=選択中の文"))
+        XCTAssertTrue(prompt.contains("画面=会議メモの本文"))
+        XCTAssertTrue(prompt.contains("要約=Slackで議事録を編集"))
+        XCTAssertTrue(prompt.contains("用語=Whisp, Benchmark"))
+    }
+
+    func testPromptReplacesMissingContextVariablesWithEmptyString() {
+        let prompt = buildPrompt(
+            sttResult: "テスト",
+            languageHint: "ja",
+            appName: nil,
+            appPromptRules: [],
+            context: nil,
+            templateOverride: "選択={選択テキスト}|画面={画面テキスト}|要約={画面要約}|用語={専門用語候補}"
+        )
+
+        XCTAssertEqual(prompt, "選択=|画面=|要約=|用語=\n\n入力: テスト")
+    }
+
+    func testPromptSkipsContextBlockWhenTemplateContainsContextVariable() {
+        let context = ContextInfo(
+            accessibilityText: "選択された単語",
+            visionSummary: "IDEで編集中",
+            visionTerms: ["Swift"]
+        )
+        let prompt = buildPrompt(
+            sttResult: "テスト",
+            languageHint: "ja",
+            appName: nil,
+            appPromptRules: [],
+            context: context,
+            templateOverride: "入力={STT結果}\n要約={画面要約}"
+        )
+
+        XCTAssertTrue(prompt.contains("要約=IDEで編集中"))
+        XCTAssertFalse(prompt.contains("画面コンテキスト:"))
+    }
+
     func testParseGeminiResponseWithUsage() throws {
         let json = """
         {

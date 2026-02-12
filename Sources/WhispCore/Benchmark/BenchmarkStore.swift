@@ -6,7 +6,7 @@ public final class BenchmarkStore: @unchecked Sendable {
     let fileManager = FileManager.default
     let runsURL: URL
 
-    private let schemaMarkerFile = ".schema-v4"
+    private let schemaMarkerFile = ".schema-v5"
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let paths = try? WhispPaths(environment: environment, allowTemporaryFallback: true)
@@ -82,7 +82,7 @@ public final class BenchmarkStore: @unchecked Sendable {
             else {
                 continue
             }
-            guard run.schemaVersion == 4 else { continue }
+            guard run.schemaVersion == 5 else { continue }
             runs.append(run)
         }
 
@@ -343,7 +343,7 @@ public final class BenchmarkStore: @unchecked Sendable {
             try fileManager.removeItem(at: entry)
         }
 
-        try Data("4\n".utf8).write(to: marker, options: [.atomic])
+        try Data("5\n".utf8).write(to: marker, options: [.atomic])
     }
 
     private func ensureRunDirectoriesLocked(runID: String) throws {

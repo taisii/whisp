@@ -285,6 +285,42 @@ struct LLMEvaluationResponse: Decodable {
     }
 }
 
+struct PairwiseJudgeResponse: Decodable {
+    let overallWinner: String
+    let intentWinner: String
+    let hallucinationWinner: String
+    let styleContextWinner: String
+    let overallReason: String?
+    let intentReason: String?
+    let hallucinationReason: String?
+    let styleContextReason: String?
+    let confidence: String?
+
+    enum CodingKeys: String, CodingKey {
+        case overallWinner = "overall_winner"
+        case intentWinner = "intent_winner"
+        case hallucinationWinner = "hallucination_winner"
+        case styleContextWinner = "style_context_winner"
+        case overallReason = "overall_reason"
+        case intentReason = "intent_reason"
+        case hallucinationReason = "hallucination_reason"
+        case styleContextReason = "style_context_reason"
+        case confidence
+    }
+}
+
+struct PairwiseJudgeResult {
+    let overallWinner: PairwiseWinner
+    let intentWinner: PairwiseWinner
+    let hallucinationWinner: PairwiseWinner
+    let styleContextWinner: PairwiseWinner
+    let overallReason: String?
+    let intentReason: String?
+    let hallucinationReason: String?
+    let styleContextReason: String?
+    let confidence: String?
+}
+
 struct LatencyDistributionLog: Codable {
     let avg: Double?
     let p50: Double?
@@ -332,6 +368,9 @@ struct GenerationBenchmarkOptions {
     let codeVersion: String?
     let benchmarkKey: BenchmarkKey?
     let modelOverride: LLMModel?
+    let promptTemplateOverride: String?
+    let promptName: String?
+    let promptHash: String?
 }
 
 struct BenchmarkCompareOptions {
@@ -340,6 +379,21 @@ struct BenchmarkCompareOptions {
     let candidateIDs: [String]
     let force: Bool
     let benchmarkWorkers: Int?
+    let judgeModel: LLMModel?
+}
+
+struct GenerationPairwiseCompareOptions {
+    let jsonlPath: String
+    let benchmarkWorkers: Int?
+    let limit: Int?
+    let candidateA: BenchmarkCandidate
+    let candidateB: BenchmarkCandidate
+    let judgeModel: LLMModel
+    let datasetHash: String?
+    let runtimeOptionsHash: String?
+    let evaluatorVersion: String?
+    let codeVersion: String?
+    let benchmarkKey: BenchmarkKey?
 }
 
 struct BenchmarkIntegrityScanOptions {

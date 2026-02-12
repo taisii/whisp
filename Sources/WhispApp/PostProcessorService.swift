@@ -190,6 +190,7 @@ final class PostProcessorService: @unchecked Sendable {
         }
         let sanitized = ContextInfo(
             accessibilityText: context.accessibilityText,
+            windowText: context.windowText,
             visionSummary: context.visionSummary,
             visionTerms: context.visionTerms
         )

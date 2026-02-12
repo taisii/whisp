@@ -3,6 +3,7 @@ import WhispCore
 
 struct BenchmarkComparisonView: View {
     @ObservedObject var viewModel: BenchmarkViewModel
+    private let judgeModels: [LLMModel] = [.gemini25FlashLite, .gpt4oMini, .gpt5Nano]
 
     private struct ComparisonColumn: Identifiable {
         let id: String
@@ -11,55 +12,31 @@ struct BenchmarkComparisonView: View {
     }
 
     var body: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                controlBar
-                Divider()
-
-                HSplitView {
-                    comparisonTable
-                        .frame(minWidth: 980)
-
-                    candidateDetail
-                        .frame(minWidth: 360, maxWidth: 480)
-                }
-
-                Divider()
-                caseBreakdown
-                    .frame(minHeight: 220)
-            }
-
-            if viewModel.isCaseDetailPresented {
-                caseDetailOverlay
-                    .transition(.opacity)
+        VStack(spacing: 0) {
+            controlBar
+            Divider()
+            if viewModel.selectedTask == .generation {
+                generationPairwiseBody
+            } else {
+                sttComparisonBody
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: viewModel.isCaseDetailPresented)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var caseDetailOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.28)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    viewModel.dismissCaseDetail()
-                }
+    private var sttComparisonBody: some View {
+        VStack(spacing: 0) {
+            HSplitView {
+                comparisonTable
+                    .frame(minWidth: 980)
 
-            BenchmarkCaseDetailModal(viewModel: viewModel)
-                .frame(minWidth: 860, idealWidth: 980, maxWidth: 1080, minHeight: 620, maxHeight: 780)
-                .background(Color(NSColor.windowBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                }
-                .shadow(color: .black.opacity(0.24), radius: 18, y: 8)
-                .padding(32)
-                .onTapGesture {
-                    // 背景タップとの競合を避けるため、モーダル内タップは消費する。
-                }
+                candidateDetail
+                    .frame(minWidth: 360, maxWidth: 480)
+            }
+
+            Divider()
+            caseBreakdown
+                .frame(minHeight: 220)
         }
     }
 
@@ -72,27 +49,59 @@ struct BenchmarkComparisonView: View {
             .pickerStyle(.segmented)
             .frame(width: 220)
 
-            Menu {
-                if viewModel.taskCandidates.isEmpty {
-                    Text("No candidates")
-                } else {
-                    ForEach(viewModel.taskCandidates, id: \.id) { candidate in
-                        Button {
-                            viewModel.toggleCandidateSelection(candidate.id)
-                        } label: {
-                            Label(candidate.id, systemImage: viewModel.selectedCandidateIDs.contains(candidate.id) ? "checkmark.circle.fill" : "circle")
-                        }
-                    }
-                    Divider()
-                    Button("Select All") {
-                        viewModel.selectedCandidateIDs = Set(viewModel.taskCandidates.map(\.id))
-                    }
-                    Button("Clear") {
-                        viewModel.selectedCandidateIDs.removeAll()
+            if viewModel.selectedTask == .generation {
+                Picker("candidate A", selection: Binding(
+                    get: { viewModel.generationPairCandidateAID ?? "" },
+                    set: { viewModel.setGenerationPairCandidateA($0) }
+                )) {
+                    ForEach(viewModel.generationCandidates, id: \.id) { candidate in
+                        Text(candidate.id).tag(candidate.id)
                     }
                 }
-            } label: {
-                Text("Candidates \(viewModel.selectedCandidateIDs.count)/\(viewModel.taskCandidates.count)")
+                .frame(width: 240)
+
+                Picker("candidate B", selection: Binding(
+                    get: { viewModel.generationPairCandidateBID ?? "" },
+                    set: { viewModel.setGenerationPairCandidateB($0) }
+                )) {
+                    ForEach(viewModel.generationCandidates, id: \.id) { candidate in
+                        Text(candidate.id).tag(candidate.id)
+                    }
+                }
+                .frame(width: 240)
+
+                Picker("judge_model", selection: Binding(
+                    get: { viewModel.generationPairJudgeModel },
+                    set: { viewModel.setGenerationPairJudgeModel($0) }
+                )) {
+                    ForEach(judgeModels, id: \.self) { model in
+                        Text(model.rawValue).tag(model)
+                    }
+                }
+                .frame(width: 190)
+            } else {
+                Menu {
+                    if viewModel.taskCandidates.isEmpty {
+                        Text("No candidates")
+                    } else {
+                        ForEach(viewModel.taskCandidates, id: \.id) { candidate in
+                            Button {
+                                viewModel.toggleCandidateSelection(candidate.id)
+                            } label: {
+                                Label(candidate.id, systemImage: viewModel.selectedCandidateIDs.contains(candidate.id) ? "checkmark.circle.fill" : "circle")
+                            }
+                        }
+                        Divider()
+                        Button("Select All") {
+                            viewModel.selectedCandidateIDs = Set(viewModel.taskCandidates.map(\.id))
+                        }
+                        Button("Clear") {
+                            viewModel.selectedCandidateIDs.removeAll()
+                        }
+                    }
+                } label: {
+                    Text("Candidates \(viewModel.selectedCandidateIDs.count)/\(viewModel.taskCandidates.count)")
+                }
             }
 
             Toggle("Force rerun", isOn: $viewModel.forceRerun)
@@ -121,9 +130,32 @@ struct BenchmarkComparisonView: View {
             }
             .buttonStyle(.bordered)
             .disabled(viewModel.isExecutingBenchmark)
+
+            if viewModel.selectedTask == .generation {
+                Button {
+                    viewModel.openCreatePromptCandidateModal()
+                } label: {
+                    Label("新規Prompt Candidate", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.isExecutingBenchmark)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private var generationPairwiseBody: some View {
+        VStack(spacing: 0) {
+            generationSummary
+            Divider()
+            HSplitView {
+                generationCaseList
+                    .frame(minWidth: 760)
+                generationCaseDetail
+                    .frame(minWidth: 520, maxWidth: .infinity)
+            }
+        }
     }
 
     private var comparisonTable: some View {
@@ -188,9 +220,18 @@ struct BenchmarkComparisonView: View {
                     detailLine("candidate_id", row.candidate.id)
                     detailLine("task", row.candidate.task.rawValue)
                     detailLine("model", row.candidate.model)
-                    detailLine("prompt_profile", row.candidate.promptProfileID ?? "-")
+                    detailLine("prompt_name", row.candidate.promptName ?? "-")
+                    detailLine("prompt_hash", row.candidate.generationPromptHash ?? "-")
                     detailLine("latest_run", row.latestRunID ?? "-")
                     detailLine("last_run_at", row.lastRunAt ?? "-")
+                    if row.candidate.task == .generation {
+                        Button {
+                            viewModel.openEditPromptCandidateModal()
+                        } label: {
+                            Label("プロンプト編集", systemImage: "square.and.pencil")
+                        }
+                        .buttonStyle(.bordered)
+                    }
 
                     Divider()
                     Text("options")
@@ -249,6 +290,191 @@ struct BenchmarkComparisonView: View {
             .listStyle(.plain)
         }
         .padding(.bottom, 8)
+    }
+
+    private var generationSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Pairwise Summary")
+                .font(.system(size: 13, weight: .semibold))
+            if let summary = viewModel.generationPairwiseSummary {
+                HStack(spacing: 10) {
+                    summaryChip("overall", a: summary.overallAWins, b: summary.overallBWins, tie: summary.overallTies)
+                    summaryChip("intent", a: summary.intentAWins, b: summary.intentBWins, tie: summary.intentTies)
+                    summaryChip("hallucination", a: summary.hallucinationAWins, b: summary.hallucinationBWins, tie: summary.hallucinationTies)
+                    summaryChip("style_context", a: summary.styleContextAWins, b: summary.styleContextBWins, tie: summary.styleContextTies)
+                }
+                Text("judged_cases=\(summary.judgedCases) / judge_error_cases=\(summary.judgeErrorCases)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("比較結果がありません。A/Bを選択して Run compare を実行してください。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var generationCaseList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Case List")
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+
+            HStack(spacing: 10) {
+                headerText("case_id", width: 180)
+                headerText("status", width: 70)
+                headerText("overall_winner", width: 120)
+                headerText("intent_winner", width: 110)
+                headerText("hallucination_winner", width: 150)
+                headerText("style_context_winner", width: 150)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+
+            List(selection: Binding(
+                get: { viewModel.selectedGenerationPairwiseCaseID },
+                set: { viewModel.selectGenerationPairwiseCase($0) }
+            )) {
+                ForEach(viewModel.generationPairwiseCaseRows) { row in
+                    HStack(spacing: 10) {
+                        Text(row.id)
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .frame(width: 180, alignment: .leading)
+                        statusChip(row.status)
+                            .frame(width: 70, alignment: .leading)
+                        winnerCell(row.overallWinner, width: 120)
+                        winnerCell(row.intentWinner, width: 110)
+                        winnerCell(row.hallucinationWinner, width: 150)
+                        winnerCell(row.styleContextWinner, width: 150)
+                        Spacer(minLength: 0)
+                    }
+                    .tag(Optional(row.id))
+                }
+            }
+            .listStyle(.plain)
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var generationCaseDetail: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("Case Detail")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    if let candidateA = viewModel.generationPairCandidateA {
+                        Button("Aを編集") {
+                            viewModel.openEditPromptCandidateModal(candidateID: candidateA.id)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                    if let candidateB = viewModel.generationPairCandidateB {
+                        Button("Bを編集") {
+                            viewModel.openEditPromptCandidateModal(candidateID: candidateB.id)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                if let detail = viewModel.generationPairwiseCaseDetail {
+                    detailLine("case_id", detail.caseID)
+                    detailLine("status", detail.status.rawValue)
+                    detailLine("overall_winner", winnerText(detail.overallWinner))
+                    detailLine("intent_winner", winnerText(detail.intentWinner))
+                    detailLine("hallucination_winner", winnerText(detail.hallucinationWinner))
+                    detailLine("style_context_winner", winnerText(detail.styleContextWinner))
+
+                    section(title: "overall_reason", text: detail.overallReason ?? "-")
+                    section(title: "intent_reason", text: detail.intentReason ?? "-")
+                    section(title: "hallucination_reason", text: detail.hallucinationReason ?? "-")
+                    section(title: "style_context_reason", text: detail.styleContextReason ?? "-")
+
+                    if let judgeError = detail.judgeError, !judgeError.isEmpty {
+                        section(title: "judge_error", text: judgeError)
+                    }
+
+                    section(title: "output_generation_a", text: detail.outputA.isEmpty ? "-" : detail.outputA)
+                    section(title: "output_generation_b", text: detail.outputB.isEmpty ? "-" : detail.outputB)
+                } else {
+                    Text("ケースを選択してください。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private func summaryChip(_ title: String, a: Int, b: Int, tie: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            Text("A:\(a) B:\(b) tie:\(tie)")
+                .font(.system(size: 11, design: .monospaced))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+        }
+    }
+
+    private func winnerCell(_ winner: PairwiseWinner?, width: CGFloat) -> some View {
+        Text(winnerText(winner))
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(winnerColor(winner))
+            .frame(width: width, alignment: .leading)
+    }
+
+    private func winnerText(_ winner: PairwiseWinner?) -> String {
+        guard let winner else { return "-" }
+        switch winner {
+        case .a:
+            return "A"
+        case .b:
+            return "B"
+        case .tie:
+            return "tie"
+        }
+    }
+
+    private func winnerColor(_ winner: PairwiseWinner?) -> Color {
+        switch winner {
+        case .a:
+            return .blue
+        case .b:
+            return .green
+        case .tie:
+            return .secondary
+        case .none:
+            return .secondary
+        }
+    }
+
+    private func section(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text(text)
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(8)
+        .background(Color(NSColor.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+        }
     }
 
     @ViewBuilder
@@ -340,7 +566,7 @@ struct BenchmarkComparisonView: View {
             var columns = [
                 ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 210),
                 ComparisonColumn(id: "model", label: "model", width: 120),
-                ComparisonColumn(id: "prompt_profile", label: "prompt_profile", width: 120),
+                ComparisonColumn(id: "prompt_name", label: "prompt_name", width: 120),
                 ComparisonColumn(id: "avg_cer", label: "avg_cer", width: 90),
                 ComparisonColumn(id: "weighted_cer", label: "weighted_cer", width: 100),
                 ComparisonColumn(id: "post_ms_p95", label: "post_ms_p95", width: 100),
@@ -378,8 +604,8 @@ struct BenchmarkComparisonView: View {
             return (row.candidate.id, .primary)
         case "model":
             return (row.candidate.model, .primary)
-        case "prompt_profile":
-            return (row.candidate.promptProfileID ?? "-", .primary)
+        case "prompt_name":
+            return (row.candidate.promptName ?? "-", .primary)
         case "executed_cases":
             return ("\(row.executedCases)", .primary)
         case "skip_cases":
@@ -452,6 +678,251 @@ struct BenchmarkComparisonView: View {
     private func ms(_ value: Double?) -> String {
         guard let value else { return "-" }
         return String(format: "%.1f", value)
+    }
+}
+
+struct BenchmarkGlobalModalOverlay: View {
+    @ObservedObject var viewModel: BenchmarkViewModel
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.28)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    dismissOnBackgroundTap()
+                }
+
+            if viewModel.isPromptCandidateModalPresented {
+                BenchmarkOverlayModalCard(
+                    minWidth: 760,
+                    idealWidth: 820,
+                    maxWidth: 920,
+                    minHeight: 600,
+                    maxHeight: 760
+                ) {
+                    BenchmarkPromptCandidateModal(viewModel: viewModel)
+                }
+            } else if viewModel.isCaseDetailPresented {
+                BenchmarkOverlayModalCard(
+                    minWidth: 860,
+                    idealWidth: 980,
+                    maxWidth: 1080,
+                    minHeight: 620,
+                    maxHeight: 780
+                ) {
+                    BenchmarkCaseDetailModal(viewModel: viewModel)
+                }
+            }
+        }
+    }
+
+    private func dismissOnBackgroundTap() {
+        if viewModel.isPromptCandidateModalPresented {
+            viewModel.dismissPromptCandidateModal()
+            return
+        }
+        if viewModel.isCaseDetailPresented {
+            viewModel.dismissCaseDetail()
+        }
+    }
+}
+
+private struct BenchmarkOverlayModalCard<Content: View>: View {
+    let minWidth: CGFloat
+    let idealWidth: CGFloat
+    let maxWidth: CGFloat
+    let minHeight: CGFloat
+    let maxHeight: CGFloat
+    let content: Content
+
+    init(
+        minWidth: CGFloat,
+        idealWidth: CGFloat,
+        maxWidth: CGFloat,
+        minHeight: CGFloat,
+        maxHeight: CGFloat,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.minWidth = minWidth
+        self.idealWidth = idealWidth
+        self.maxWidth = maxWidth
+        self.minHeight = minHeight
+        self.maxHeight = maxHeight
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .frame(minWidth: minWidth, idealWidth: idealWidth, maxWidth: maxWidth, minHeight: minHeight, maxHeight: maxHeight)
+            .background(Color(NSColor.windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.24), radius: 18, y: 8)
+            .padding(32)
+            .onTapGesture {
+                // 背景タップとの競合を避けるため、モーダル内タップは消費する。
+            }
+    }
+}
+
+private struct BenchmarkPromptCandidateModal: View {
+    @ObservedObject var viewModel: BenchmarkViewModel
+
+    private let models: [LLMModel] = [.gemini25FlashLite, .gpt4oMini, .gpt5Nano]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    groupBox {
+                        row("candidate_id") {
+                            Text(viewModel.promptCandidateDraftCandidateID)
+                                .font(.system(size: 12, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        row("model") {
+                            Picker("model", selection: $viewModel.promptCandidateDraftModel) {
+                                ForEach(models, id: \.self) { model in
+                                    Text(model.rawValue).tag(model)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 260)
+                        }
+                        row("prompt_name") {
+                            TextField("例: concise", text: $viewModel.promptCandidateDraftName)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 12, design: .monospaced))
+                        }
+                    }
+
+                    groupBox {
+                        Text("prompt_template")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $viewModel.promptCandidateDraftTemplate)
+                            .font(.system(size: 12, design: .monospaced))
+                            .frame(minHeight: 260)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+                            }
+                    }
+
+                    groupBox {
+                        Text("利用可能な変数")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.secondary)
+
+                        ForEach(viewModel.promptVariableItems) { item in
+                            variableRow(item)
+                        }
+
+                        Text("未取得データは空文字で置換されます。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    groupBox {
+                        Toggle("require_context", isOn: $viewModel.promptCandidateDraftRequireContext)
+                        Toggle("use_cache", isOn: $viewModel.promptCandidateDraftUseCache)
+                    }
+
+                    if !viewModel.promptCandidateDraftValidationError.isEmpty {
+                        Text(viewModel.promptCandidateDraftValidationError)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
+                    }
+                }
+                .padding(16)
+            }
+
+            Divider()
+            footer
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Text(viewModel.isPromptCandidateEditing ? "Prompt Candidate編集" : "Prompt Candidate新規作成")
+                .font(.system(size: 15, weight: .semibold))
+            Spacer()
+            Button("閉じる") {
+                viewModel.dismissPromptCandidateModal()
+            }
+            .buttonStyle(.bordered)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Button("キャンセル") {
+                viewModel.dismissPromptCandidateModal()
+            }
+            .buttonStyle(.bordered)
+
+            Spacer()
+
+            Button("保存") {
+                viewModel.savePromptCandidateModal()
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func row<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 130, alignment: .leading)
+            content()
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func groupBox<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            content()
+        }
+        .padding(12)
+        .background(Color(NSColor.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+        }
+    }
+
+    private func variableRow(_ item: PromptVariableItem) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.token)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                Text(item.description)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Text("例: \(item.sample)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            Button("挿入") {
+                viewModel.appendPromptVariableToDraft(item.token)
+            }
+            .buttonStyle(.bordered)
+        }
     }
 }
 

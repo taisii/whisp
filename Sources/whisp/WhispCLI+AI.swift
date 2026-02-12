@@ -363,6 +363,86 @@ extension WhispCLI {
         )
     }
 
+    static func runPairwiseJudge(
+        model: LLMModel,
+        apiKey: String,
+        referenceText: String?,
+        context: ContextInfo?,
+        candidateAText: String,
+        candidateBText: String
+    ) async throws -> (result: PairwiseJudgeResult, prompt: String, responseJSON: String) {
+        let contextSnippet = llmEvalContextSnippet(context: context)
+        let referenceBlock = referenceText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? (referenceText ?? "")
+            : "(none)"
+        let prompt = """
+        あなたは音声入力ベンチマークの比較審査員です。候補A/Bを比較し、必ずJSONのみを返してください。
+
+        出力スキーマ:
+        {"overall_winner":"a|b|tie","intent_winner":"a|b|tie","hallucination_winner":"a|b|tie","style_context_winner":"a|b|tie","overall_reason":"短い理由","intent_reason":"短い理由","hallucination_reason":"短い理由","style_context_reason":"短い理由","confidence":"high|medium|low"}
+
+        判定軸:
+        - intent_winner: 入力の意図保持
+        - hallucination_winner: 根拠のない追加情報の少なさ
+        - style_context_winner: 文体・文脈への適合
+        - overall_winner: 上記3軸の多数決。多数がなければ tie
+
+        reference_text:
+        \(referenceBlock)
+
+        context_excerpt:
+        \(contextSnippet)
+
+        candidate_a_text:
+        \(candidateAText)
+
+        candidate_b_text:
+        \(candidateBText)
+        """
+
+        let responseText: String
+        switch model {
+        case .gemini25FlashLite, .gemini25FlashLiteAudio:
+            let body = GeminiTextRequest(contents: [
+                GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
+            ])
+            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(LLMModel.gemini25FlashLite.modelName):generateContent?key=\(apiKey)"
+            guard let url = URL(string: endpoint) else {
+                throw AppError.invalidArgument("Gemini URL生成に失敗")
+            }
+            let data = try await sendJSONRequest(url: url, headers: [:], body: body)
+            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
+            responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        case .gpt4oMini, .gpt5Nano:
+            let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
+            guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
+                throw AppError.invalidArgument("OpenAI URL生成に失敗")
+            }
+            let headers = ["Authorization": "Bearer \(apiKey)"]
+            let data = try await sendJSONRequest(url: url, headers: headers, body: body)
+            let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
+            responseText = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+
+        let jsonText = extractedJSONObjectText(from: responseText)
+        guard let data = jsonText.data(using: .utf8) else {
+            throw AppError.decode("pairwise judge response parse failed")
+        }
+        let decoded = try JSONDecoder().decode(PairwiseJudgeResponse.self, from: data)
+        let result = PairwiseJudgeResult(
+            overallWinner: try parsePairwiseWinner(decoded.overallWinner),
+            intentWinner: try parsePairwiseWinner(decoded.intentWinner),
+            hallucinationWinner: try parsePairwiseWinner(decoded.hallucinationWinner),
+            styleContextWinner: try parsePairwiseWinner(decoded.styleContextWinner),
+            overallReason: decoded.overallReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+            intentReason: decoded.intentReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+            hallucinationReason: decoded.hallucinationReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+            styleContextReason: decoded.styleContextReason?.trimmingCharacters(in: .whitespacesAndNewlines),
+            confidence: decoded.confidence?.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        return (result, prompt, jsonText)
+    }
+
     static func extractedJSONObjectText(from raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.hasPrefix("{"), trimmed.hasSuffix("}") {
@@ -377,21 +457,37 @@ extension WhispCLI {
         return trimmed
     }
 
+    static func makePostProcessPrompt(
+        config: Config,
+        sttText: String,
+        context: ContextInfo?,
+        templateOverride: String? = nil
+    ) -> String {
+        return buildPrompt(
+            sttResult: sttText,
+            languageHint: config.inputLanguage,
+            appName: nil,
+            appPromptRules: config.appPromptRules,
+            context: context,
+            templateOverride: templateOverride
+        )
+    }
+
     static func postProcessText(
         model: LLMModel,
         apiKey: String,
         config: Config,
         sttText: String,
         context: ContextInfo?,
-        sttMode: String
+        sttMode: String,
+        templateOverride: String? = nil
     ) async throws -> PostProcessResult {
         let sanitizedContext = sanitizeContextForPrompt(context)
-        let prompt = buildPrompt(
-            sttResult: sttText,
-            languageHint: config.inputLanguage,
-            appName: nil,
-            appPromptRules: config.appPromptRules,
-            context: sanitizedContext
+        let prompt = makePostProcessPrompt(
+            config: config,
+            sttText: sttText,
+            context: sanitizedContext,
+            templateOverride: templateOverride
         )
         PromptTrace.dump(
             stage: "pipeline_benchmark_postprocess",
@@ -500,6 +596,7 @@ extension WhispCLI {
         }
         let sanitized = ContextInfo(
             accessibilityText: context.accessibilityText,
+            windowText: context.windowText,
             visionSummary: context.visionSummary,
             visionTerms: context.visionTerms
         )
@@ -654,5 +751,13 @@ extension WhispCLI {
 
     private static func clampedScore(_ value: Double) -> Double {
         max(0, min(1, value))
+    }
+
+    private static func parsePairwiseWinner(_ raw: String) throws -> PairwiseWinner {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let winner = PairwiseWinner(rawValue: trimmed) else {
+            throw AppError.decode("pairwise winner が不正です: \(raw)")
+        }
+        return winner
     }
 }

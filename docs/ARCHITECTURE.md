@@ -126,6 +126,9 @@
 - アクセシビリティ: `accessibilitySnapshot`
 - Vision: `visionImageFilePath`, `visionImageMimeType`
 
+generation テンプレート変数は `context` を入力源にする（`{選択テキスト}`, `{画面テキスト}`, `{画面要約}`, `{専門用語候補}`）。
+`accessibilitySnapshot` はデバッグ保存用途で、現時点では generation テンプレート変数には直接マッピングしない。
+
 `status` の代表値:
 
 - `recording`
@@ -163,6 +166,8 @@
 - `prompts/<trace_id>/request.txt`: 実際に送信したプロンプト本文
 - `prompts/<trace_id>/request.json`: `traceID`, `stage`, `model`, `context`, `requestChars`, `extra` など
   - `context` はその stage のAPIに実際に渡した文脈（postprocess/audio_transcribe では sanitize 後）を保持する。
+
+postprocess 系の sanitize では `accessibilityText`, `windowText`, `visionSummary`, `visionTerms` を保持する。
 - `prompts/<trace_id>/response.txt`: 対応するレスポンス本文
 - `prompts/<trace_id>/response.json`: `status(ok/error)`, `responseChars`, `usage`, `errorMessage` など
 
@@ -235,11 +240,13 @@
 
 ### 7.2 主要データ
 
-- `BenchmarkCandidate`: 比較対象定義（`task + model + promptProfileID + options`）
+- `BenchmarkCandidate`: 比較対象定義（`task + model + promptName + generationPromptTemplate/hash + options`）
 - `BenchmarkKey`: 比較セル識別子（`task + datasetPath/hash + candidateID + runtimeOptionsHash + evaluator/code version`）
-- `BenchmarkRunRecord`: run正本（`schemaVersion=4`、run全体 `metrics`、`candidateID`、`benchmarkKey`）
+- `BenchmarkRunRecord`: run正本（`schemaVersion=5`、run全体 `metrics`、`candidateID`、`benchmarkKey`）
+  - generation pairwise は `options.compareMode=pairwise`、`pairCandidateAID`、`pairCandidateBID`、`pairJudgeModel` を保存
 - `BenchmarkCaseResult`: `cases_index.jsonl` の軽量行（一覧表示向け）
 - `BenchmarkCaseManifest` + `BenchmarkCaseMetrics`: ケース詳細の正本
+  - generation pairwise は `BenchmarkCaseMetrics.pairwise` に winner/reason を保存
 - `BenchmarkOrchestratorEvent`: run進捗（キュー投入/開始/完了/失敗）
 - `BenchmarkIntegrityIssue`: ケース不備（欠落/参照不足/破損）を保持
 
@@ -248,8 +255,10 @@
 - `--benchmark-workers` で固定ワーカープール数を指定可能（未指定は `min(4, CPUコア数)`）。
 - ケース処理はケース単位で独立実行し、保存は `cases/<case_id>/` 配下に分離する。
 - run全体進捗は `orchestrator_events.jsonl`、UI一覧は `cases_index.jsonl` を参照する。
-- CLI `--benchmark-compare` は candidate ごとに `BenchmarkKey` を構築し、同一キーの成功 run があれば再実行をスキップ（`--force` 時除く）。
-- App (`BenchmarkViewModel`) は candidate を複数選択し、`--benchmark-compare` を実行して比較表を更新する。
+- CLI `--benchmark-compare` は `BenchmarkKey` を構築し、同一キーの成功 run があれば再実行をスキップ（`--force` 時除く）。
+  - `stt`: candidate単位で実行
+  - `generation`: pairwise専用（A/B 2候補 + judgeモデル）で実行
+- App (`BenchmarkViewModel`) は `stt` では複数candidate選択、`generation` では A/B + judge_model 選択で `--benchmark-compare` を実行する。
 - `--benchmark-scan-integrity` は task 単位で不備一覧を再生成し、除外状態は `exclusions.json` で維持する。
 
 ### 7.4 Generation 入力方針
@@ -257,6 +266,13 @@
 - generation benchmark の入力は `stt_text` 必須。
 - 欠落時は `skipped_missing_input_stt` としてスキップ記録する。
 - `labels.transcript_*` へのフォールバックは行わない。
+
+### 7.5 Generation Pairwise 評価
+
+- 判定軸は `intent` / `hallucination` / `style_context` の3軸。
+- judge は A→B と B→A の2回判定を実行し、軸ごとに一致時のみ winner を採用。不一致は `tie`。
+- `overall_winner` は3軸多数決（同数は `tie`）。
+- ケースI/Oは `prompt_generation_a/b.txt`, `output_generation_a/b.txt`, `prompt_pairwise_round1/2.txt`, `pairwise_round1/2_response.json`, `pairwise_decision.json` を保存する。
 
 ---
 

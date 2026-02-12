@@ -21,18 +21,57 @@ extension WhispCLI {
         print("benchmark_workers: \(resolveBenchmarkWorkers(options.benchmarkWorkers))")
         print("force: \(options.force)")
 
+        switch options.task {
+        case .stt:
+            try await runSTTBenchmarkCompare(
+                options: options,
+                datasetPath: datasetPath,
+                datasetHash: datasetHash,
+                candidateStore: candidateStore,
+                benchmarkStore: benchmarkStore
+            )
+        case .generation:
+            try await runGenerationPairwiseBenchmarkCompare(
+                options: options,
+                datasetPath: datasetPath,
+                datasetHash: datasetHash,
+                candidateStore: candidateStore,
+                benchmarkStore: benchmarkStore
+            )
+        case .vision:
+            throw AppError.invalidArgument("--benchmark-compare は stt/generation のみ対応です")
+        }
+    }
+
+    static func runBenchmarkListCandidates() throws {
+        let store = BenchmarkCandidateStore()
+        let candidates = try store.listCandidates()
+        print("mode: benchmark_list_candidates")
+        print("count: \(candidates.count)")
+        for candidate in candidates {
+            print("\(candidate.id)\ttask=\(candidate.task.rawValue)\tmodel=\(candidate.model)\tprompt_name=\(candidate.promptName ?? "-")")
+        }
+    }
+
+    private static func runSTTBenchmarkCompare(
+        options: BenchmarkCompareOptions,
+        datasetPath: String,
+        datasetHash: String,
+        candidateStore: BenchmarkCandidateStore,
+        benchmarkStore: BenchmarkStore
+    ) async throws {
         for candidateID in options.candidateIDs {
             let candidate = try candidateStore.loadCandidate(id: candidateID)
             guard let candidate else {
                 throw AppError.invalidArgument("candidate が見つかりません: \(candidateID)")
             }
-            guard candidate.task == options.task else {
-                throw AppError.invalidArgument("candidate \(candidateID) の task が一致しません (expected=\(options.task.rawValue), actual=\(candidate.task.rawValue))")
+            guard candidate.task == .stt else {
+                throw AppError.invalidArgument("candidate \(candidateID) の task が一致しません (expected=stt, actual=\(candidate.task.rawValue))")
             }
 
             let runtimeHash = buildRuntimeOptionsHash(candidate: candidate)
             let key = BenchmarkKey(
-                task: options.task,
+                task: .stt,
                 datasetPath: datasetPath,
                 datasetHash: datasetHash,
                 candidateID: candidate.id,
@@ -49,44 +88,87 @@ extension WhispCLI {
             }
 
             print("candidate: \(candidate.id)\tstatus: running\tmodel: \(candidate.model)")
-
-            switch options.task {
-            case .stt:
-                let sttOptions = try makeSTTCompareOptions(
-                    candidate: candidate,
-                    datasetPath: datasetPath,
-                    datasetHash: datasetHash,
-                    runtimeHash: runtimeHash,
-                    benchmarkKey: key,
-                    benchmarkWorkers: options.benchmarkWorkers
-                )
-                try await runSTTCaseBenchmark(options: sttOptions)
-            case .generation:
-                let generationOptions = try makeGenerationCompareOptions(
-                    candidate: candidate,
-                    datasetPath: datasetPath,
-                    datasetHash: datasetHash,
-                    runtimeHash: runtimeHash,
-                    benchmarkKey: key,
-                    benchmarkWorkers: options.benchmarkWorkers
-                )
-                try await runGenerationCaseBenchmark(options: generationOptions)
-            case .vision:
-                throw AppError.invalidArgument("--benchmark-compare は stt/generation のみ対応です")
-            }
-
+            let sttOptions = try makeSTTCompareOptions(
+                candidate: candidate,
+                datasetPath: datasetPath,
+                datasetHash: datasetHash,
+                runtimeHash: runtimeHash,
+                benchmarkKey: key,
+                benchmarkWorkers: options.benchmarkWorkers
+            )
+            try await runSTTCaseBenchmark(options: sttOptions)
             print("candidate: \(candidate.id)\tstatus: done")
         }
     }
 
-    static func runBenchmarkListCandidates() throws {
-        let store = BenchmarkCandidateStore()
-        let candidates = try store.listCandidates()
-        print("mode: benchmark_list_candidates")
-        print("count: \(candidates.count)")
-        for candidate in candidates {
-            print("\(candidate.id)\ttask=\(candidate.task.rawValue)\tmodel=\(candidate.model)\tprompt_profile=\(candidate.promptProfileID ?? "-")")
+    private static func runGenerationPairwiseBenchmarkCompare(
+        options: BenchmarkCompareOptions,
+        datasetPath: String,
+        datasetHash: String,
+        candidateStore: BenchmarkCandidateStore,
+        benchmarkStore: BenchmarkStore
+    ) async throws {
+        guard options.candidateIDs.count == 2 else {
+            throw AppError.invalidArgument("generation compare は --candidate-id を2件指定してください")
         }
+        guard let candidateA = try candidateStore.loadCandidate(id: options.candidateIDs[0]) else {
+            throw AppError.invalidArgument("candidate が見つかりません: \(options.candidateIDs[0])")
+        }
+        guard let candidateB = try candidateStore.loadCandidate(id: options.candidateIDs[1]) else {
+            throw AppError.invalidArgument("candidate が見つかりません: \(options.candidateIDs[1])")
+        }
+        guard candidateA.task == .generation else {
+            throw AppError.invalidArgument("candidate \(candidateA.id) は generation ではありません")
+        }
+        guard candidateB.task == .generation else {
+            throw AppError.invalidArgument("candidate \(candidateB.id) は generation ではありません")
+        }
+        guard candidateA.id != candidateB.id else {
+            throw AppError.invalidArgument("generation compare は異なる candidate を2件指定してください")
+        }
+
+        let config = try loadConfig()
+        let judgeModel = options.judgeModel ?? APIKeyResolver.effectivePostProcessModel(config.llmModel)
+        let runtimeHash = try buildGenerationPairwiseRuntimeOptionsHash(
+            candidateA: candidateA,
+            candidateB: candidateB,
+            judgeModel: judgeModel
+        )
+        let pairKey = "pair:\(candidateA.id)__vs__\(candidateB.id)"
+        let key = BenchmarkKey(
+            task: .generation,
+            datasetPath: datasetPath,
+            datasetHash: datasetHash,
+            candidateID: pairKey,
+            runtimeOptionsHash: runtimeHash,
+            evaluatorVersion: "pairwise-v1",
+            codeVersion: ProcessInfo.processInfo.environment["WHISP_CODE_VERSION"] ?? "dev"
+        )
+
+        print("pair_candidate_a: \(candidateA.id)")
+        print("pair_candidate_b: \(candidateB.id)")
+        print("judge_model: \(judgeModel.rawValue)")
+
+        if !options.force,
+           let existing = try benchmarkStore.findLatestCompletedRun(matching: key)
+        {
+            print("pair: \(candidateA.id) vs \(candidateB.id)\tstatus: skipped_existing\trun_id: \(existing.id)")
+            return
+        }
+
+        let generationOptions = try makeGenerationPairwiseCompareOptions(
+            candidateA: candidateA,
+            candidateB: candidateB,
+            judgeModel: judgeModel,
+            datasetPath: datasetPath,
+            datasetHash: datasetHash,
+            runtimeHash: runtimeHash,
+            benchmarkKey: key,
+            benchmarkWorkers: options.benchmarkWorkers
+        )
+        print("pair: \(candidateA.id) vs \(candidateB.id)\tstatus: running")
+        try await runGenerationPairwiseCompare(options: generationOptions)
+        print("pair: \(candidateA.id) vs \(candidateB.id)\tstatus: done")
     }
 
     private static func makeSTTCompareOptions(
@@ -102,7 +184,6 @@ extension WhispCLI {
             throw AppError.invalidArgument("candidate \(candidate.id): stt_mode は rest|stream を指定してください")
         }
         let chunkMs = try parseCandidateInt(candidate.options, key: "chunk_ms", defaultValue: 120)
-        // STT benchmark compare は fileReplayRealtime に固定する。
         let realtime = true
         let minAudioSeconds = try parseCandidateDouble(candidate.options, key: "min_audio_seconds", defaultValue: 2.0)
         let useCache = try parseCandidateBool(candidate.options, key: "use_cache", defaultValue: true)
@@ -133,50 +214,60 @@ extension WhispCLI {
         )
     }
 
-    private static func makeGenerationCompareOptions(
-        candidate: BenchmarkCandidate,
+    private static func makeGenerationPairwiseCompareOptions(
+        candidateA: BenchmarkCandidate,
+        candidateB: BenchmarkCandidate,
+        judgeModel: LLMModel,
         datasetPath: String,
         datasetHash: String,
         runtimeHash: String,
         benchmarkKey: BenchmarkKey,
         benchmarkWorkers: Int?
-    ) throws -> GenerationBenchmarkOptions {
-        guard let model = LLMModel(rawValue: candidate.model) else {
-            throw AppError.invalidArgument("candidate \(candidate.id): generation model が不正です: \(candidate.model)")
-        }
-
-        let limit = try parseCandidateOptionalInt(candidate.options, key: "limit")
-        let requireContext = try parseCandidateBool(candidate.options, key: "require_context", defaultValue: false)
-        let useCache = try parseCandidateBool(candidate.options, key: "use_cache", defaultValue: true)
-        let llmEvalEnabled = try parseCandidateBool(candidate.options, key: "llm_eval", defaultValue: false)
-        let llmEvalModel: LLMModel?
-        if let raw = candidate.options["llm_eval_model"]?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !raw.isEmpty
-        {
-            guard let parsed = LLMModel(rawValue: raw) else {
-                throw AppError.invalidArgument("candidate \(candidate.id): llm_eval_model が不正です: \(raw)")
+    ) throws -> GenerationPairwiseCompareOptions {
+        _ = try parseGenerationCandidateDescriptor(candidateA)
+        _ = try parseGenerationCandidateDescriptor(candidateB)
+        let limitA = try parseCandidateOptionalInt(candidateA.options, key: "limit")
+        let limitB = try parseCandidateOptionalInt(candidateB.options, key: "limit")
+        let limit: Int?
+        switch (limitA, limitB) {
+        case let (.some(a), .some(b)):
+            if a != b {
+                throw AppError.invalidArgument("pairwise compare の limit が一致しません: \(candidateA.id)=\(a), \(candidateB.id)=\(b)")
             }
-            llmEvalModel = parsed
-        } else {
-            llmEvalModel = nil
+            limit = a
+        case let (.some(a), .none):
+            limit = a
+        case let (.none, .some(b)):
+            limit = b
+        case (.none, .none):
+            limit = nil
         }
 
-        return GenerationBenchmarkOptions(
+        return GenerationPairwiseCompareOptions(
             jsonlPath: datasetPath,
             benchmarkWorkers: benchmarkWorkers,
             limit: limit,
-            requireContext: requireContext,
-            useCache: useCache,
-            llmEvalEnabled: llmEvalEnabled,
-            llmEvalModel: llmEvalModel,
-            candidateID: candidate.id,
+            candidateA: candidateA,
+            candidateB: candidateB,
+            judgeModel: judgeModel,
             datasetHash: datasetHash,
             runtimeOptionsHash: runtimeHash,
             evaluatorVersion: benchmarkKey.evaluatorVersion,
             codeVersion: benchmarkKey.codeVersion,
-            benchmarkKey: benchmarkKey,
-            modelOverride: model
+            benchmarkKey: benchmarkKey
         )
+    }
+
+    private static func parseGenerationCandidateDescriptor(_ candidate: BenchmarkCandidate) throws -> (model: LLMModel, promptTemplate: String, promptHash: String) {
+        guard let model = LLMModel(rawValue: candidate.model) else {
+            throw AppError.invalidArgument("candidate \(candidate.id): generation model が不正です: \(candidate.model)")
+        }
+        let trimmedPromptTemplate = (candidate.generationPromptTemplate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPromptTemplate.isEmpty else {
+            throw AppError.invalidArgument("candidate \(candidate.id): generation_prompt_template が未設定です")
+        }
+        let promptHash = candidate.generationPromptHash ?? promptTemplateHash(trimmedPromptTemplate)
+        return (model, trimmedPromptTemplate, promptHash)
     }
 
     private static func buildRuntimeOptionsHash(candidate: BenchmarkCandidate) -> String {
@@ -186,12 +277,48 @@ extension WhispCLI {
         } else {
             effectiveOptions = candidate.options
         }
+        let promptHash: String
+        if candidate.task == .generation {
+            let template = (candidate.generationPromptTemplate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !template.isEmpty {
+                promptHash = candidate.generationPromptHash ?? promptTemplateHash(template)
+            } else {
+                promptHash = candidate.generationPromptHash ?? ""
+            }
+        } else {
+            promptHash = ""
+        }
         let sortedOptions = effectiveOptions.keys.sorted().map { "\($0)=\(effectiveOptions[$0] ?? "")" }.joined(separator: "|")
         let material = [
             "task=\(candidate.task.rawValue)",
             "model=\(candidate.model)",
-            "prompt_profile=\(candidate.promptProfileID ?? "")",
+            "prompt_hash=\(promptHash)",
             "options=\(sortedOptions)",
+        ].joined(separator: "\n")
+        return sha256Hex(text: material)
+    }
+
+    private static func buildGenerationPairwiseRuntimeOptionsHash(
+        candidateA: BenchmarkCandidate,
+        candidateB: BenchmarkCandidate,
+        judgeModel: LLMModel
+    ) throws -> String {
+        let descriptorA = try parseGenerationCandidateDescriptor(candidateA)
+        let descriptorB = try parseGenerationCandidateDescriptor(candidateB)
+        let optionsA = candidateA.options.keys.sorted().map { "\($0)=\(candidateA.options[$0] ?? "")" }.joined(separator: "|")
+        let optionsB = candidateB.options.keys.sorted().map { "\($0)=\(candidateB.options[$0] ?? "")" }.joined(separator: "|")
+        let material = [
+            "task=generation",
+            "compare_mode=pairwise",
+            "a.id=\(candidateA.id)",
+            "a.model=\(descriptorA.model.rawValue)",
+            "a.prompt_hash=\(descriptorA.promptHash)",
+            "a.options=\(optionsA)",
+            "b.id=\(candidateB.id)",
+            "b.model=\(descriptorB.model.rawValue)",
+            "b.prompt_hash=\(descriptorB.promptHash)",
+            "b.options=\(optionsB)",
+            "judge_model=\(judgeModel.rawValue)",
         ].joined(separator: "\n")
         return sha256Hex(text: material)
     }

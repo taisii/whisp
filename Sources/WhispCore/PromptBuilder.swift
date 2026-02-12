@@ -1,6 +1,7 @@
+import CryptoKit
 import Foundation
 
-private let defaultPromptTemplate = """
+public let defaultPostProcessPromptTemplate = """
 以下の音声認識結果を、意味を保って自然な文に整形してください。
 出力は整形後テキストのみ。
 
@@ -10,6 +11,61 @@ private let defaultPromptTemplate = """
 
 入力: {STT結果}
 """
+
+public func canonicalPromptTemplate(_ template: String) -> String {
+    template
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+public func promptTemplateHash(_ template: String) -> String {
+    let canonical = canonicalPromptTemplate(template)
+    let material = "prompt-v1|\(canonical)"
+    let digest = SHA256.hash(data: Data(material.utf8))
+    return digest.map { String(format: "%02x", $0) }.joined()
+}
+
+public struct PromptVariableDescriptor: Equatable, Sendable {
+    public let token: String
+    public let description: String
+    public let sample: String
+
+    public init(token: String, description: String, sample: String) {
+        self.token = token
+        self.description = description
+        self.sample = sample
+    }
+}
+
+public let sttResultPromptVariableToken = "{STT結果}"
+
+public let generationPromptVariableDescriptors: [PromptVariableDescriptor] = [
+    PromptVariableDescriptor(
+        token: sttResultPromptVariableToken,
+        description: "ケースの stt_text を挿入",
+        sample: "今日は13時から定例です"
+    ),
+    PromptVariableDescriptor(
+        token: "{選択テキスト}",
+        description: "context.accessibilityText を挿入",
+        sample: "選択中の文章"
+    ),
+    PromptVariableDescriptor(
+        token: "{画面テキスト}",
+        description: "context.windowText を挿入",
+        sample: "ウィンドウ内の可視テキスト"
+    ),
+    PromptVariableDescriptor(
+        token: "{画面要約}",
+        description: "context.visionSummary を挿入",
+        sample: "エディタでSwiftコードを編集中"
+    ),
+    PromptVariableDescriptor(
+        token: "{専門用語候補}",
+        description: "context.visionTerms をカンマ区切りで挿入",
+        sample: "BenchmarkRunRecord, PromptBuilder"
+    ),
+]
 
 public struct ContextInfo: Codable, Equatable, Sendable {
     public var accessibilityText: String?
@@ -68,13 +124,55 @@ public func languageLabel(_ languageHint: String) -> String {
     }
 }
 
-private func applyTemplate(_ template: String, sttResult: String, languageHint: String) -> String {
+private let sttResultToken = sttResultPromptVariableToken
+private let contextPromptVariableTokens: [String] = generationPromptVariableDescriptors
+    .map(\.token)
+    .filter { $0 != sttResultToken }
+
+private func contextVariableValue(forToken token: String, context: ContextInfo?) -> String {
+    guard let context else {
+        return ""
+    }
+    switch token {
+    case "{選択テキスト}":
+        return context.accessibilityText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    case "{画面テキスト}":
+        return context.windowText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    case "{画面要約}":
+        return context.visionSummary?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    case "{専門用語候補}":
+        return context.visionTerms
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+    default:
+        return ""
+    }
+}
+
+private func hasContextPromptVariable(in template: String) -> Bool {
+    contextPromptVariableTokens.contains { template.contains($0) }
+}
+
+private func applyTemplate(
+    _ template: String,
+    sttResult: String,
+    languageHint: String,
+    context: ContextInfo?
+) -> String {
     let label = languageLabel(languageHint)
     var prompt = template
         .replacingOccurrences(of: "{言語}", with: label)
-        .replacingOccurrences(of: "{STT結果}", with: sttResult)
+        .replacingOccurrences(of: sttResultToken, with: sttResult)
 
-    if !template.contains("{STT結果}") {
+    for token in contextPromptVariableTokens {
+        prompt = prompt.replacingOccurrences(
+            of: token,
+            with: contextVariableValue(forToken: token, context: context)
+        )
+    }
+
+    if !template.contains(sttResultToken) {
         prompt += "\n\n入力: \(sttResult)"
     }
     return prompt
@@ -120,11 +218,21 @@ public func buildPrompt(
     languageHint: String,
     appName: String?,
     appPromptRules: [AppPromptRule],
-    context: ContextInfo?
+    context: ContextInfo?,
+    templateOverride: String? = nil
 ) -> String {
-    let template = resolveAppTemplate(appName: appName, rules: appPromptRules) ?? defaultPromptTemplate
-    var prompt = applyTemplate(template, sttResult: sttResult, languageHint: languageHint)
-    if let context {
+    let override = (templateOverride ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    let template = !override.isEmpty
+        ? override
+        : (resolveAppTemplate(appName: appName, rules: appPromptRules) ?? defaultPostProcessPromptTemplate)
+    let containsContextVariable = hasContextPromptVariable(in: template)
+    var prompt = applyTemplate(
+        template,
+        sttResult: sttResult,
+        languageHint: languageHint,
+        context: context
+    )
+    if let context, !containsContextVariable {
         appendContext(to: &prompt, context: context)
     }
     return prompt

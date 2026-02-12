@@ -315,7 +315,10 @@ extension WhispCLI {
             evaluatorVersion: nil,
             codeVersion: nil,
             benchmarkKey: nil,
-            modelOverride: nil
+            modelOverride: nil,
+            promptTemplateOverride: nil,
+            promptName: nil,
+            promptHash: nil
         )
     }
 
@@ -325,6 +328,7 @@ extension WhispCLI {
         var candidateIDs: [String] = []
         var force = false
         var benchmarkWorkers: Int?
+        var judgeModel: LLMModel?
         var parser = ArgParser(args: args, startIndex: 1)
 
         while let item = parser.next() {
@@ -349,21 +353,36 @@ extension WhispCLI {
                 benchmarkWorkers = try parsePositiveInt(try parser.value(for: "--benchmark-workers"), option: "--benchmark-workers")
                 continue
             }
+            if item == "--judge-model" {
+                let raw = try parser.value(for: "--judge-model")
+                guard let parsed = LLMModel(rawValue: raw) else {
+                    throw AppError.invalidArgument("--judge-model は有効なモデルIDを指定してください")
+                }
+                judgeModel = parsed
+                continue
+            }
             throw AppError.invalidArgument("不明な引数: \(item)")
         }
 
         guard let task else {
             throw AppError.invalidArgument("--task が必要です (stt|generation)")
         }
-        guard !candidateIDs.isEmpty else {
-            throw AppError.invalidArgument("--candidate-id が1件以上必要です")
+        if task == .generation {
+            guard candidateIDs.count == 2 else {
+                throw AppError.invalidArgument("generation compare は --candidate-id を2件指定してください")
+            }
+        } else {
+            guard !candidateIDs.isEmpty else {
+                throw AppError.invalidArgument("--candidate-id が1件以上必要です")
+            }
         }
         return BenchmarkCompareOptions(
             task: task,
             casesPath: casesPath,
             candidateIDs: candidateIDs,
             force: force,
-            benchmarkWorkers: benchmarkWorkers
+            benchmarkWorkers: benchmarkWorkers,
+            judgeModel: judgeModel
         )
     }
 

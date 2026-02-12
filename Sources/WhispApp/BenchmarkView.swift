@@ -5,31 +5,40 @@ struct BenchmarkView: View {
     var autoRefreshOnAppear = true
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            tabSelector
-            Divider()
+        ZStack {
+            VStack(spacing: 0) {
+                header
+                Divider()
+                tabSelector
+                Divider()
 
-            Group {
-                switch viewModel.selectedTab {
-                case .comparison:
-                    BenchmarkComparisonView(viewModel: viewModel)
-                case .integrity:
-                    BenchmarkIntegrityView(viewModel: viewModel)
+                Group {
+                    switch viewModel.selectedTab {
+                    case .comparison:
+                        BenchmarkComparisonView(viewModel: viewModel)
+                    case .integrity:
+                        BenchmarkIntegrityView(viewModel: viewModel)
+                    }
                 }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .id(viewModel.selectedTab)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .id(viewModel.selectedTab)
 
-            Divider()
-            statusBar
+                Divider()
+                statusBar
+            }
+
+            if viewModel.isCaseDetailPresented || viewModel.isPromptCandidateModalPresented {
+                BenchmarkGlobalModalOverlay(viewModel: viewModel)
+                    .transition(.opacity)
+            }
         }
         .onAppear {
             if autoRefreshOnAppear {
                 viewModel.refresh()
             }
         }
+        .animation(.easeInOut(duration: 0.15), value: viewModel.isCaseDetailPresented)
+        .animation(.easeInOut(duration: 0.15), value: viewModel.isPromptCandidateModalPresented)
         .frame(minWidth: 1420, minHeight: 860)
     }
 

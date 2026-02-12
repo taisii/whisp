@@ -42,6 +42,29 @@ final class BenchmarkCandidateStoreTests: XCTestCase {
         XCTAssertEqual(after?.options["stt_mode"], "rest")
     }
 
+    func testSaveLoadGenerationPromptFields() throws {
+        let home = tempHome()
+        let store = BenchmarkCandidateStore(environment: ["HOME": home.path])
+        let template = "整形してください。入力: {STT結果}"
+        let candidate = BenchmarkCandidate(
+            id: "gen-a",
+            task: .generation,
+            model: "gpt-5-nano",
+            promptName: "concise",
+            generationPromptTemplate: template,
+            generationPromptHash: promptTemplateHash(template),
+            options: ["use_cache": "true"],
+            createdAt: "2026-02-12T00:00:00.000Z",
+            updatedAt: "2026-02-12T00:00:00.000Z"
+        )
+        try store.saveCandidates([candidate])
+
+        let loaded = try store.loadCandidate(id: "gen-a")
+        XCTAssertEqual(loaded?.promptName, "concise")
+        XCTAssertEqual(loaded?.generationPromptTemplate, template)
+        XCTAssertEqual(loaded?.generationPromptHash, promptTemplateHash(template))
+    }
+
     func testSaveCandidatesRejectsDuplicateID() {
         let home = tempHome()
         let store = BenchmarkCandidateStore(environment: ["HOME": home.path])

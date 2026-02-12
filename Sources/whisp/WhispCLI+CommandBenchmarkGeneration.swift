@@ -11,12 +11,16 @@ extension WhispCLI {
         let selectedCases = options.limit.map { Array(allCases.prefix($0)) } ?? allCases
         let runID = defaultBenchmarkRunID(kind: .generation)
         let benchmarkWorkers = resolveBenchmarkWorkers(options.benchmarkWorkers)
+        let effectivePromptTemplate = options.promptTemplateOverride ?? defaultPostProcessPromptTemplate
+        let effectivePromptHash = options.promptHash ?? promptTemplateHash(effectivePromptTemplate)
 
         print("mode: generation_case_benchmark")
         print("jsonl: \(options.jsonlPath)")
         print("cases_total: \(allCases.count)")
         print("cases_selected: \(selectedCases.count)")
         print("model: \(model.rawValue)")
+        print("prompt_name: \(options.promptName ?? "-")")
+        print("prompt_hash: \(effectivePromptHash)")
         print("require_context: \(options.requireContext)")
         print("use_cache: \(options.useCache)")
         print("llm_eval: \(options.llmEvalEnabled)")
@@ -32,6 +36,8 @@ extension WhispCLI {
             evaluatorVersion: options.evaluatorVersion,
             codeVersion: options.codeVersion,
             candidateID: options.candidateID,
+            promptName: options.promptName,
+            generationPromptHash: effectivePromptHash,
             requireContext: options.requireContext,
             useCache: options.useCache,
             llmEvalEnabled: options.llmEvalEnabled,
@@ -85,6 +91,8 @@ extension WhispCLI {
                 evaluatorVersion: options.evaluatorVersion,
                 codeVersion: options.codeVersion,
                 candidateID: options.candidateID,
+                promptName: options.promptName,
+                generationPromptHash: effectivePromptHash,
                 requireContext: options.requireContext,
                 useCache: options.useCache,
                 llmEvalEnabled: options.llmEvalEnabled,
@@ -110,6 +118,8 @@ extension WhispCLI {
             evaluatorVersion: options.evaluatorVersion,
             codeVersion: options.codeVersion,
             candidateID: options.candidateID,
+            promptName: options.promptName,
+            generationPromptHash: effectivePromptHash,
             requireContext: options.requireContext,
             useCache: options.useCache,
             llmEvalEnabled: options.llmEvalEnabled,
@@ -143,6 +153,755 @@ extension WhispCLI {
         }
         print("benchmark_run_id: \(run.id)")
         print("benchmark_manifest: \(benchmarkManifestPath(runID: run.id))")
+    }
+
+    static func runGenerationPairwiseCompare(options: GenerationPairwiseCompareOptions) async throws {
+        let config = try loadConfig()
+        let descriptorA = try makePairwiseCandidateDescriptor(candidate: options.candidateA, config: config)
+        let descriptorB = try makePairwiseCandidateDescriptor(candidate: options.candidateB, config: config)
+        let judgeContext = try APIKeyResolver.resolveIntentJudgeContext(config: config, preferredModel: options.judgeModel)
+        let allCases = try loadManualBenchmarkCases(path: options.jsonlPath)
+        let selectedCases = options.limit.map { Array(allCases.prefix($0)) } ?? allCases
+        let runID = defaultBenchmarkRunID(kind: .generation)
+        let benchmarkWorkers = resolveBenchmarkWorkers(options.benchmarkWorkers)
+
+        print("mode: generation_pairwise_compare")
+        print("jsonl: \(options.jsonlPath)")
+        print("cases_total: \(allCases.count)")
+        print("cases_selected: \(selectedCases.count)")
+        print("candidate_a: \(descriptorA.id)")
+        print("candidate_b: \(descriptorB.id)")
+        print("model_a: \(descriptorA.model.rawValue)")
+        print("model_b: \(descriptorB.model.rawValue)")
+        print("prompt_hash_a: \(descriptorA.promptHash)")
+        print("prompt_hash_b: \(descriptorB.promptHash)")
+        print("judge_model: \(judgeContext.model.rawValue)")
+        print("benchmark_workers: \(benchmarkWorkers)")
+        print("")
+        print("id\tstatus\toverall\tintent\thallucination\tstyle_context")
+
+        let runOptions = BenchmarkRunOptions(
+            sourceCasesPath: options.jsonlPath,
+            datasetHash: options.datasetHash,
+            runtimeOptionsHash: options.runtimeOptionsHash,
+            evaluatorVersion: options.evaluatorVersion,
+            codeVersion: options.codeVersion,
+            llmModel: "\(descriptorA.model.rawValue)|\(descriptorB.model.rawValue)",
+            caseLimit: options.limit,
+            compareMode: .pairwise,
+            pairCandidateAID: descriptorA.id,
+            pairCandidateBID: descriptorB.id,
+            pairJudgeModel: judgeContext.model.rawValue
+        )
+        let recorder = try BenchmarkRunRecorder(
+            runID: runID,
+            kind: .generation,
+            options: runOptions,
+            candidateID: nil,
+            benchmarkKey: options.benchmarkKey,
+            initialMetrics: BenchmarkRunMetrics(
+                casesTotal: allCases.count,
+                casesSelected: selectedCases.count,
+                executedCases: 0,
+                skippedCases: 0,
+                failedCases: 0,
+                cachedHits: 0
+            )
+        )
+
+        for item in selectedCases {
+            try recorder.markCaseQueued(caseID: item.id)
+        }
+
+        let accumulator = PairwiseOutcomeAccumulator()
+        do {
+            try await runBenchmarkCaseWorkers(
+                cases: selectedCases,
+                workers: options.benchmarkWorkers
+            ) { _, item in
+                try recorder.markCaseStarted(caseID: item.id)
+                return await executeGenerationPairwiseWorker(
+                    runID: runID,
+                    item: item,
+                    config: config,
+                    descriptorA: descriptorA,
+                    descriptorB: descriptorB,
+                    judgeModel: judgeContext.model,
+                    judgeAPIKey: judgeContext.apiKey
+                )
+            } onResult: { outcome in
+                try await accumulator.consume(outcome, recorder: recorder)
+            }
+        } catch {
+            let partial = await accumulator.snapshot()
+            let failedMetrics = makeGenerationPairwiseRunMetrics(
+                allCasesCount: allCases.count,
+                selectedCasesCount: selectedCases.count,
+                summary: partial
+            )
+            _ = try? recorder.finalize(metrics: failedMetrics, options: runOptions, status: BenchmarkRunStatus.failed)
+            throw error
+        }
+
+        let summary = await accumulator.snapshot()
+        let metrics = makeGenerationPairwiseRunMetrics(
+            allCasesCount: allCases.count,
+            selectedCasesCount: selectedCases.count,
+            summary: summary
+        )
+        let run = try recorder.finalize(metrics: metrics, options: runOptions, status: BenchmarkRunStatus.completed)
+
+        print("")
+        print("summary")
+        print("executed_cases: \(summary.executed)")
+        print("skipped_cases: \(summary.skipped)")
+        print("failed_cases: \(summary.failed)")
+        print("cached_hits: \(summary.cachedHits)")
+        print("judged_cases: \(summary.pairwiseSummary.judgedCases)")
+        print("judge_error_cases: \(summary.pairwiseSummary.judgeErrorCases)")
+        print("overall: a=\(summary.pairwiseSummary.overallAWins) b=\(summary.pairwiseSummary.overallBWins) tie=\(summary.pairwiseSummary.overallTies)")
+        print("intent: a=\(summary.pairwiseSummary.intentAWins) b=\(summary.pairwiseSummary.intentBWins) tie=\(summary.pairwiseSummary.intentTies)")
+        print("hallucination: a=\(summary.pairwiseSummary.hallucinationAWins) b=\(summary.pairwiseSummary.hallucinationBWins) tie=\(summary.pairwiseSummary.hallucinationTies)")
+        print("style_context: a=\(summary.pairwiseSummary.styleContextAWins) b=\(summary.pairwiseSummary.styleContextBWins) tie=\(summary.pairwiseSummary.styleContextTies)")
+        print("benchmark_run_id: \(run.id)")
+        print("benchmark_manifest: \(benchmarkManifestPath(runID: run.id))")
+    }
+
+    private struct PairwiseCandidateDescriptor: Sendable {
+        let id: String
+        let model: LLMModel
+        let promptName: String?
+        let promptTemplate: String
+        let promptHash: String
+        let requireContext: Bool
+        let useCache: Bool
+        let apiKey: String
+    }
+
+    private struct PairwiseGenerationOutput: Sendable {
+        let text: String
+        let prompt: String
+        let postMs: Double
+        let cached: Bool
+        let cacheKey: String
+    }
+
+    private struct PairwiseCaseWorkerOutcome: Sendable {
+        let displayLine: String
+        let result: BenchmarkCaseResult
+        let events: [BenchmarkCaseEvent]
+        let ioWrites: [GenerationCaseIOWrite]
+        let executed: Int
+        let skipped: Int
+        let failed: Int
+        let cachedHits: Int
+        let pairwise: PairwiseCaseJudgement?
+        let judgeError: Bool
+    }
+
+    private struct PairwiseOutcomeSummary: Sendable {
+        var executed = 0
+        var skipped = 0
+        var failed = 0
+        var cachedHits = 0
+        var pairwiseSummary = PairwiseRunSummary()
+    }
+
+    private actor PairwiseOutcomeAccumulator {
+        private var summary = PairwiseOutcomeSummary()
+
+        func consume(_ outcome: PairwiseCaseWorkerOutcome, recorder: BenchmarkRunRecorder) throws {
+            print(outcome.displayLine)
+            summary.executed += outcome.executed
+            summary.skipped += outcome.skipped
+            summary.failed += outcome.failed
+            summary.cachedHits += outcome.cachedHits
+            if let judgement = outcome.pairwise {
+                summary.pairwiseSummary.judgedCases += 1
+                applyWinner(&summary.pairwiseSummary.overallAWins, &summary.pairwiseSummary.overallBWins, &summary.pairwiseSummary.overallTies, judgement.overallWinner)
+                applyWinner(&summary.pairwiseSummary.intentAWins, &summary.pairwiseSummary.intentBWins, &summary.pairwiseSummary.intentTies, judgement.intentWinner)
+                applyWinner(&summary.pairwiseSummary.hallucinationAWins, &summary.pairwiseSummary.hallucinationBWins, &summary.pairwiseSummary.hallucinationTies, judgement.hallucinationWinner)
+                applyWinner(&summary.pairwiseSummary.styleContextAWins, &summary.pairwiseSummary.styleContextBWins, &summary.pairwiseSummary.styleContextTies, judgement.styleContextWinner)
+            }
+            if outcome.judgeError {
+                summary.pairwiseSummary.judgeErrorCases += 1
+            }
+
+            try recorder.appendCaseResult(outcome.result)
+            try recorder.appendEvents(outcome.events)
+            for write in outcome.ioWrites {
+                try recorder.writeCaseIOText(caseID: outcome.result.id, fileName: write.fileName, text: write.text)
+            }
+        }
+
+        func snapshot() -> PairwiseOutcomeSummary {
+            summary
+        }
+    }
+
+    private static func executeGenerationPairwiseWorker(
+        runID: String,
+        item: ManualBenchmarkCase,
+        config: Config,
+        descriptorA: PairwiseCandidateDescriptor,
+        descriptorB: PairwiseCandidateDescriptor,
+        judgeModel: LLMModel,
+        judgeAPIKey: String
+    ) async -> PairwiseCaseWorkerOutcome {
+        let caseStartedAtMs = nowEpochMs()
+        guard let input = item.resolvedGenerationInputSTT() else {
+            return makePairwiseSkippedOutcome(
+                runID: runID,
+                caseStartedAtMs: caseStartedAtMs,
+                item: item,
+                reason: "stt入力がありません"
+            )
+        }
+        let requireContext = descriptorA.requireContext || descriptorB.requireContext
+        if requireContext, item.context == nil {
+            return makePairwiseSkippedOutcome(
+                runID: runID,
+                caseStartedAtMs: caseStartedAtMs,
+                item: item,
+                reason: "候補の require_context 条件を満たせません"
+            )
+        }
+
+        let sources = BenchmarkReferenceSources(
+            input: input.source,
+            reference: item.resolvedGenerationReferenceText()?.source
+        )
+        do {
+            let reference = item.resolvedGenerationReferenceText()?.text
+            let contextHash = sha256Hex(text: canonicalContextString(item.context))
+            let inputHash = sha256Hex(text: input.text)
+            let generationA = try await generateForPairwiseCandidate(
+                descriptor: descriptorA,
+                config: config,
+                inputText: input.text,
+                context: item.context,
+                inputHash: inputHash,
+                contextHash: contextHash
+            )
+            let generationB = try await generateForPairwiseCandidate(
+                descriptor: descriptorB,
+                config: config,
+                inputText: input.text,
+                context: item.context,
+                inputHash: inputHash,
+                contextHash: contextHash
+            )
+
+            let judgeRound1: (result: PairwiseJudgeResult, prompt: String, responseJSON: String)
+            let judgeRound2: (result: PairwiseJudgeResult, prompt: String, responseJSON: String)
+            do {
+                judgeRound1 = try await runPairwiseJudge(
+                    model: judgeModel,
+                    apiKey: judgeAPIKey,
+                    referenceText: reference,
+                    context: item.context,
+                    candidateAText: generationA.text,
+                    candidateBText: generationB.text
+                )
+                judgeRound2 = try await runPairwiseJudge(
+                    model: judgeModel,
+                    apiKey: judgeAPIKey,
+                    referenceText: reference,
+                    context: item.context,
+                    candidateAText: generationB.text,
+                    candidateBText: generationA.text
+                )
+            } catch {
+                throw AppError.io("pairwise_judge_failed: \(error.localizedDescription)")
+            }
+            let judgement = aggregatePairwiseJudgement(round1: judgeRound1.result, round2Swapped: judgeRound2.result)
+            let decisionJSON = encodePairwiseDecisionJSON(judgement)
+
+            let outputChars = generationA.text.count + generationB.text.count
+            let result = BenchmarkCaseResult(
+                id: item.id,
+                status: .ok,
+                reason: nil,
+                cache: BenchmarkCacheRecord(
+                    hit: generationA.cached && generationB.cached,
+                    key: "\(generationA.cacheKey)|\(generationB.cacheKey)",
+                    namespace: "generation_pairwise"
+                ),
+                sources: sources,
+                contextUsed: item.context != nil,
+                visionImageAttached: item.visionImageFile != nil,
+                metrics: BenchmarkCaseMetrics(
+                    postMs: max(generationA.postMs, generationB.postMs),
+                    outputChars: outputChars,
+                    pairwise: judgement
+                )
+            )
+
+            var events: [BenchmarkCaseEvent] = []
+            let loadEndedAtMs = nowEpochMs()
+            events.append(.loadCase(BenchmarkLoadCaseLog(
+                base: makeEventBase(
+                    runID: runID,
+                    caseID: item.id,
+                    stage: .loadCase,
+                    status: .ok,
+                    startedAtMs: caseStartedAtMs,
+                    endedAtMs: loadEndedAtMs
+                ),
+                sources: sources,
+                contextPresent: item.context != nil,
+                visionImagePresent: item.visionImageFile != nil,
+                audioFilePath: item.audioFile,
+                rawRowRef: nil
+            )))
+            events.append(.cache(BenchmarkCacheLog(
+                base: makeEventBase(runID: runID, caseID: item.id, stage: .cache, status: .ok),
+                namespace: "generation_a",
+                key: generationA.cacheKey,
+                hit: generationA.cached,
+                keyMaterialRef: nil,
+                error: nil
+            )))
+            events.append(.cache(BenchmarkCacheLog(
+                base: makeEventBase(runID: runID, caseID: item.id, stage: .cache, status: .ok),
+                namespace: "generation_b",
+                key: generationB.cacheKey,
+                hit: generationB.cached,
+                keyMaterialRef: nil,
+                error: nil
+            )))
+            events.append(.generation(BenchmarkGenerationLog(
+                base: makeEventBase(runID: runID, caseID: item.id, stage: .generation, status: .ok),
+                model: descriptorA.model.rawValue,
+                inputChars: input.text.count,
+                outputChars: generationA.text.count,
+                postMs: generationA.postMs,
+                promptRef: nil,
+                responseRef: nil,
+                error: nil
+            )))
+            events.append(.generation(BenchmarkGenerationLog(
+                base: makeEventBase(runID: runID, caseID: item.id, stage: .generation, status: .ok),
+                model: descriptorB.model.rawValue,
+                inputChars: input.text.count,
+                outputChars: generationB.text.count,
+                postMs: generationB.postMs,
+                promptRef: nil,
+                responseRef: nil,
+                error: nil
+            )))
+            events.append(.judge(BenchmarkJudgeLog(
+                base: makeEventBase(runID: runID, caseID: item.id, stage: .judge, status: .ok),
+                model: judgeModel.rawValue,
+                match: nil,
+                score: nil,
+                intentPreservationScore: nil,
+                hallucinationScore: nil,
+                hallucinationRate: nil,
+                requestRef: nil,
+                responseRef: nil,
+                error: nil
+            )))
+            events.append(.aggregate(BenchmarkAggregateLog(
+                base: makeEventBase(runID: runID, caseID: item.id, stage: .aggregate, status: .ok),
+                exactMatch: nil,
+                cer: nil,
+                intentMatch: nil,
+                intentScore: nil,
+                intentPreservationScore: nil,
+                hallucinationScore: nil,
+                hallucinationRate: nil,
+                latencyMs: nil,
+                totalAfterStopMs: nil,
+                outputChars: outputChars
+            )))
+
+            var ioWrites: [GenerationCaseIOWrite] = [
+                GenerationCaseIOWrite(fileName: "input_stt.txt", text: input.text),
+                GenerationCaseIOWrite(fileName: "prompt_generation_a.txt", text: generationA.prompt),
+                GenerationCaseIOWrite(fileName: "output_generation_a.txt", text: generationA.text),
+                GenerationCaseIOWrite(fileName: "prompt_generation_b.txt", text: generationB.prompt),
+                GenerationCaseIOWrite(fileName: "output_generation_b.txt", text: generationB.text),
+                GenerationCaseIOWrite(fileName: "prompt_pairwise_round1.txt", text: judgeRound1.prompt),
+                GenerationCaseIOWrite(fileName: "prompt_pairwise_round2.txt", text: judgeRound2.prompt),
+                GenerationCaseIOWrite(fileName: "pairwise_round1_response.json", text: judgeRound1.responseJSON),
+                GenerationCaseIOWrite(fileName: "pairwise_round2_response.json", text: judgeRound2.responseJSON),
+                GenerationCaseIOWrite(fileName: "pairwise_decision.json", text: decisionJSON),
+            ]
+            if let reference, !reference.isEmpty {
+                ioWrites.append(GenerationCaseIOWrite(fileName: "reference.txt", text: reference))
+            }
+
+            return PairwiseCaseWorkerOutcome(
+                displayLine: "\(item.id)\tok\t\(judgement.overallWinner.rawValue)\t\(judgement.intentWinner.rawValue)\t\(judgement.hallucinationWinner.rawValue)\t\(judgement.styleContextWinner.rawValue)",
+                result: result,
+                events: events,
+                ioWrites: ioWrites,
+                executed: 1,
+                skipped: 0,
+                failed: 0,
+                cachedHits: (generationA.cached ? 1 : 0) + (generationB.cached ? 1 : 0),
+                pairwise: judgement,
+                judgeError: false
+            )
+        } catch {
+            let reason = error.localizedDescription
+            let isJudgeError = reason.contains("pairwise_judge_failed:")
+            let result = BenchmarkCaseResult(
+                id: item.id,
+                status: .error,
+                reason: reason,
+                cache: BenchmarkCacheRecord(hit: false, namespace: "generation_pairwise"),
+                sources: sources,
+                contextUsed: item.context != nil,
+                visionImageAttached: item.visionImageFile != nil,
+                metrics: BenchmarkCaseMetrics()
+            )
+            let events: [BenchmarkCaseEvent] = [
+                .loadCase(BenchmarkLoadCaseLog(
+                    base: makeEventBase(runID: runID, caseID: item.id, stage: .loadCase, status: .ok, startedAtMs: caseStartedAtMs, endedAtMs: nowEpochMs()),
+                    sources: sources,
+                    contextPresent: item.context != nil,
+                    visionImagePresent: item.visionImageFile != nil,
+                    audioFilePath: item.audioFile,
+                    rawRowRef: nil
+                )),
+                .judge(BenchmarkJudgeLog(
+                    base: makeEventBase(runID: runID, caseID: item.id, stage: .judge, status: isJudgeError ? .error : .skipped),
+                    model: judgeModel.rawValue,
+                    match: nil,
+                    score: nil,
+                    intentPreservationScore: nil,
+                    hallucinationScore: nil,
+                    hallucinationRate: nil,
+                    requestRef: nil,
+                    responseRef: nil,
+                    error: reason
+                )),
+                .aggregate(BenchmarkAggregateLog(
+                    base: makeEventBase(runID: runID, caseID: item.id, stage: .aggregate, status: .error),
+                    exactMatch: nil,
+                    cer: nil,
+                    intentMatch: nil,
+                    intentScore: nil,
+                    intentPreservationScore: nil,
+                    hallucinationScore: nil,
+                    hallucinationRate: nil,
+                    latencyMs: nil,
+                    totalAfterStopMs: nil,
+                    outputChars: nil
+                )),
+                .error(BenchmarkErrorLog(
+                    base: makeEventBase(runID: runID, caseID: item.id, stage: .error, status: .error),
+                    originStage: isJudgeError ? .judge : .generation,
+                    errorType: isJudgeError ? "pairwise_judge_error" : "pairwise_generation_error",
+                    message: reason
+                )),
+            ]
+            return PairwiseCaseWorkerOutcome(
+                displayLine: "\(item.id)\terror\t-\t-\t-\t-",
+                result: result,
+                events: events,
+                ioWrites: [],
+                executed: 0,
+                skipped: 0,
+                failed: 1,
+                cachedHits: 0,
+                pairwise: nil,
+                judgeError: isJudgeError
+            )
+        }
+    }
+
+    private static func makePairwiseSkippedOutcome(
+        runID: String,
+        caseStartedAtMs: Int64,
+        item: ManualBenchmarkCase,
+        reason: String
+    ) -> PairwiseCaseWorkerOutcome {
+        let result = BenchmarkCaseResult(
+            id: item.id,
+            status: .skipped,
+            reason: reason,
+            cache: BenchmarkCacheRecord(hit: false, namespace: "generation_pairwise"),
+            sources: BenchmarkReferenceSources(),
+            contextUsed: item.context != nil,
+            visionImageAttached: item.visionImageFile != nil,
+            metrics: BenchmarkCaseMetrics()
+        )
+        let events: [BenchmarkCaseEvent] = [
+            .loadCase(BenchmarkLoadCaseLog(
+                base: makeEventBase(
+                    runID: runID,
+                    caseID: item.id,
+                    stage: .loadCase,
+                    status: .ok,
+                    startedAtMs: caseStartedAtMs,
+                    endedAtMs: nowEpochMs()
+                ),
+                sources: BenchmarkReferenceSources(),
+                contextPresent: item.context != nil,
+                visionImagePresent: item.visionImageFile != nil,
+                audioFilePath: item.audioFile,
+                rawRowRef: nil
+            )),
+            .aggregate(BenchmarkAggregateLog(
+                base: makeEventBase(runID: runID, caseID: item.id, stage: .aggregate, status: .skipped),
+                exactMatch: nil,
+                cer: nil,
+                intentMatch: nil,
+                intentScore: nil,
+                intentPreservationScore: nil,
+                hallucinationScore: nil,
+                hallucinationRate: nil,
+                latencyMs: nil,
+                totalAfterStopMs: nil,
+                outputChars: nil
+            )),
+        ]
+        return PairwiseCaseWorkerOutcome(
+            displayLine: "\(item.id)\tskipped\t-\t-\t-\t-",
+            result: result,
+            events: events,
+            ioWrites: [],
+            executed: 0,
+            skipped: 1,
+            failed: 0,
+            cachedHits: 0,
+            pairwise: nil,
+            judgeError: false
+        )
+    }
+
+    private static func generateForPairwiseCandidate(
+        descriptor: PairwiseCandidateDescriptor,
+        config: Config,
+        inputText: String,
+        context: ContextInfo?,
+        inputHash: String,
+        contextHash: String
+    ) async throws -> PairwiseGenerationOutput {
+        let prompt = makePostProcessPrompt(
+            config: config,
+            sttText: inputText,
+            context: context,
+            templateOverride: descriptor.promptTemplate
+        )
+        let cacheKey = sha256Hex(
+            text: "generation-v2|\(descriptor.model.rawValue)|\(config.inputLanguage)|\(descriptor.promptHash)|\(inputHash)|\(contextHash)"
+        )
+
+        if descriptor.useCache,
+           let cached: CachedGenerationResult = loadCacheEntry(component: "generation", key: cacheKey)
+        {
+            return PairwiseGenerationOutput(
+                text: cached.output,
+                prompt: prompt,
+                postMs: cached.postMs,
+                cached: true,
+                cacheKey: cacheKey
+            )
+        }
+
+        let startedAt = DispatchTime.now()
+        let result = try await postProcessText(
+            model: descriptor.model,
+            apiKey: descriptor.apiKey,
+            config: config,
+            sttText: inputText,
+            context: context,
+            sttMode: "generation_pairwise_compare",
+            templateOverride: descriptor.promptTemplate
+        )
+        let postMs = elapsedMs(since: startedAt)
+        if descriptor.useCache {
+            let cache = CachedGenerationResult(
+                key: cacheKey,
+                model: descriptor.model.rawValue,
+                output: result.text,
+                postMs: postMs,
+                createdAt: ISO8601DateFormatter().string(from: Date())
+            )
+            try saveCacheEntry(component: "generation", key: cacheKey, value: cache)
+        }
+        return PairwiseGenerationOutput(
+            text: result.text,
+            prompt: prompt,
+            postMs: postMs,
+            cached: false,
+            cacheKey: cacheKey
+        )
+    }
+
+    private static func makePairwiseCandidateDescriptor(candidate: BenchmarkCandidate, config: Config) throws -> PairwiseCandidateDescriptor {
+        guard let parsed = LLMModel(rawValue: candidate.model) else {
+            throw AppError.invalidArgument("candidate \(candidate.id): generation model が不正です: \(candidate.model)")
+        }
+        let model = APIKeyResolver.effectivePostProcessModel(parsed)
+        let apiKey = try APIKeyResolver.llmKey(config: config, model: model)
+        let promptTemplate = (candidate.generationPromptTemplate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !promptTemplate.isEmpty else {
+            throw AppError.invalidArgument("candidate \(candidate.id): generation_prompt_template が未設定です")
+        }
+        let promptHash = candidate.generationPromptHash ?? promptTemplateHash(promptTemplate)
+        return PairwiseCandidateDescriptor(
+            id: candidate.id,
+            model: model,
+            promptName: candidate.promptName,
+            promptTemplate: promptTemplate,
+            promptHash: promptHash,
+            requireContext: try parseCandidateBoolOption(candidate.options, key: "require_context", defaultValue: false),
+            useCache: try parseCandidateBoolOption(candidate.options, key: "use_cache", defaultValue: true),
+            apiKey: apiKey
+        )
+    }
+
+    static func parseCandidateBoolOption(_ options: [String: String], key: String, defaultValue: Bool) throws -> Bool {
+        guard let raw = options[key]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty else {
+            return defaultValue
+        }
+        switch raw {
+        case "1", "true", "yes", "on":
+            return true
+        case "0", "false", "no", "off":
+            return false
+        default:
+            throw AppError.invalidArgument("candidate option \(key) は bool で指定してください")
+        }
+    }
+
+    private static func aggregatePairwiseJudgement(round1: PairwiseJudgeResult, round2Swapped: PairwiseJudgeResult) -> PairwiseCaseJudgement {
+        let round2 = normalizeSwappedJudgeResult(round2Swapped)
+        let intentWinner = consensusWinner(primary: round1.intentWinner, secondary: round2.intentWinner)
+        let hallucinationWinner = consensusWinner(primary: round1.hallucinationWinner, secondary: round2.hallucinationWinner)
+        let styleWinner = consensusWinner(primary: round1.styleContextWinner, secondary: round2.styleContextWinner)
+        let overallWinner = majorityWinner(intentWinner: intentWinner, hallucinationWinner: hallucinationWinner, styleWinner: styleWinner)
+        return PairwiseCaseJudgement(
+            overallWinner: overallWinner,
+            intentWinner: intentWinner,
+            hallucinationWinner: hallucinationWinner,
+            styleContextWinner: styleWinner,
+            overallReason: mergedReason(primaryWinner: round1.overallWinner, primaryReason: round1.overallReason, secondaryWinner: round2.overallWinner, secondaryReason: round2.overallReason, finalWinner: overallWinner),
+            intentReason: mergedReason(primaryWinner: round1.intentWinner, primaryReason: round1.intentReason, secondaryWinner: round2.intentWinner, secondaryReason: round2.intentReason, finalWinner: intentWinner),
+            hallucinationReason: mergedReason(primaryWinner: round1.hallucinationWinner, primaryReason: round1.hallucinationReason, secondaryWinner: round2.hallucinationWinner, secondaryReason: round2.hallucinationReason, finalWinner: hallucinationWinner),
+            styleContextReason: mergedReason(primaryWinner: round1.styleContextWinner, primaryReason: round1.styleContextReason, secondaryWinner: round2.styleContextWinner, secondaryReason: round2.styleContextReason, finalWinner: styleWinner),
+            confidence: mergedConfidence(round1.confidence, round2.confidence)
+        )
+    }
+
+    private static func normalizeSwappedJudgeResult(_ result: PairwiseJudgeResult) -> PairwiseJudgeResult {
+        PairwiseJudgeResult(
+            overallWinner: swappedWinner(result.overallWinner),
+            intentWinner: swappedWinner(result.intentWinner),
+            hallucinationWinner: swappedWinner(result.hallucinationWinner),
+            styleContextWinner: swappedWinner(result.styleContextWinner),
+            overallReason: result.overallReason,
+            intentReason: result.intentReason,
+            hallucinationReason: result.hallucinationReason,
+            styleContextReason: result.styleContextReason,
+            confidence: result.confidence
+        )
+    }
+
+    private static func swappedWinner(_ winner: PairwiseWinner) -> PairwiseWinner {
+        switch winner {
+        case .a:
+            return .b
+        case .b:
+            return .a
+        case .tie:
+            return .tie
+        }
+    }
+
+    private static func consensusWinner(primary: PairwiseWinner, secondary: PairwiseWinner) -> PairwiseWinner {
+        primary == secondary ? primary : .tie
+    }
+
+    private static func majorityWinner(intentWinner: PairwiseWinner, hallucinationWinner: PairwiseWinner, styleWinner: PairwiseWinner) -> PairwiseWinner {
+        let winners = [intentWinner, hallucinationWinner, styleWinner]
+        let aWins = winners.filter { $0 == .a }.count
+        let bWins = winners.filter { $0 == .b }.count
+        if aWins > bWins {
+            return .a
+        }
+        if bWins > aWins {
+            return .b
+        }
+        return .tie
+    }
+
+    private static func mergedReason(
+        primaryWinner: PairwiseWinner,
+        primaryReason: String?,
+        secondaryWinner: PairwiseWinner,
+        secondaryReason: String?,
+        finalWinner: PairwiseWinner
+    ) -> String? {
+        if finalWinner == primaryWinner {
+            return primaryReason
+        }
+        if finalWinner == secondaryWinner {
+            return secondaryReason
+        }
+        let trimmedPrimary = (primaryReason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSecondary = (secondaryReason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedPrimary.isEmpty && trimmedSecondary.isEmpty {
+            return "2回判定が一致しなかったため tie"
+        }
+        if trimmedPrimary.isEmpty {
+            return "\(trimmedSecondary) / 不一致のため tie"
+        }
+        if trimmedSecondary.isEmpty {
+            return "\(trimmedPrimary) / 不一致のため tie"
+        }
+        return "\(trimmedPrimary) / \(trimmedSecondary)"
+    }
+
+    private static func mergedConfidence(_ primary: String?, _ secondary: String?) -> String? {
+        let p = (primary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let s = (secondary ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if p.isEmpty { return s.isEmpty ? nil : s }
+        if s.isEmpty { return p }
+        return p == s ? p : "mixed"
+    }
+
+    private static func encodePairwiseDecisionJSON(_ judgement: PairwiseCaseJudgement) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(judgement),
+           let text = String(data: data, encoding: .utf8)
+        {
+            return text
+        }
+        return "{}"
+    }
+
+    private static func makeGenerationPairwiseRunMetrics(
+        allCasesCount: Int,
+        selectedCasesCount: Int,
+        summary: PairwiseOutcomeSummary
+    ) -> BenchmarkRunMetrics {
+        BenchmarkRunMetrics(
+            casesTotal: allCasesCount,
+            casesSelected: selectedCasesCount,
+            executedCases: summary.executed,
+            skippedCases: summary.skipped,
+            failedCases: summary.failed,
+            cachedHits: summary.cachedHits,
+            pairwiseSummary: summary.pairwiseSummary
+        )
+    }
+
+    private static func applyWinner(_ aWins: inout Int, _ bWins: inout Int, _ ties: inout Int, _ winner: PairwiseWinner) {
+        switch winner {
+        case .a:
+            aWins += 1
+        case .b:
+            bWins += 1
+        case .tie:
+            ties += 1
+        }
     }
 
     private struct GenerationCaseIOWrite: Sendable {
@@ -534,7 +1293,15 @@ extension WhispCLI {
         do {
             let contextHash = sha256Hex(text: canonicalContextString(item.context))
             let inputHash = sha256Hex(text: input.text)
-            let cacheKey = sha256Hex(text: "generation-v1|\(model.rawValue)|\(config.inputLanguage)|\(inputHash)|\(contextHash)")
+            let promptTemplate = options.promptTemplateOverride ?? defaultPostProcessPromptTemplate
+            let promptHash = options.promptHash ?? promptTemplateHash(promptTemplate)
+            let renderedPrompt = makePostProcessPrompt(
+                config: config,
+                sttText: input.text,
+                context: item.context,
+                templateOverride: options.promptTemplateOverride
+            )
+            let cacheKey = sha256Hex(text: "generation-v2|\(model.rawValue)|\(config.inputLanguage)|\(promptHash)|\(inputHash)|\(contextHash)")
             let loadEndedAtMs = nowEpochMs()
             let cacheStartedAtMs = nowEpochMs()
             var cacheEndedAtMs = cacheStartedAtMs
@@ -561,7 +1328,8 @@ extension WhispCLI {
                     config: config,
                     sttText: input.text,
                     context: item.context,
-                    sttMode: "generation_benchmark"
+                    sttMode: "generation_benchmark",
+                    templateOverride: options.promptTemplateOverride
                 )
                 let postMs = elapsedMs(since: startedAt)
                 generationEndedAtMs = nowEpochMs()
@@ -747,6 +1515,7 @@ extension WhispCLI {
                 events: events,
                 ioWrites: [
                     GenerationCaseIOWrite(fileName: "input_stt.txt", text: input.text),
+                    GenerationCaseIOWrite(fileName: "prompt_generation.txt", text: renderedPrompt),
                     GenerationCaseIOWrite(fileName: "output_generation.txt", text: generation.output),
                     GenerationCaseIOWrite(fileName: "reference.txt", text: reference.text),
                 ],
