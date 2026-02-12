@@ -61,6 +61,8 @@
 - `WhispCLI+Commands.swift`（実行処理）
 - `WhispCLI+Parsing.swift`（引数解析）
 - `WhispCLI+BenchmarkSupport.swift`（ベンチ補助）
+- `WhispCLI+CommandBenchmarkCompare.swift`（candidate比較実行）
+- `WhispCLI+CommandBenchmarkIntegrity.swift`（ケース不備スキャン）
 - `WhispCLI+AI.swift`（API連携補助）
 - `WhispCLI+Utils.swift`（共通関数）
 - `WhispCLI+Models.swift`（CLI用モデル）
@@ -202,38 +204,59 @@
 - `PromptTrace` は失敗しても本処理を止めない（ベストエフォート保存）。
 - Vision文脈は設定/タイミング条件によりスキップされる場合がある。
 
-## 7. ベンチマーク保存モデル（性能評価）
+## 7. ベンチマーク設計（比較中心）
 
-ベンチマークは `Run` と `Case` を分離し、さらに `events` と `artifacts` を併用して再現性を確保する。
+ベンチマークは「実行できたか」ではなく「candidate比較で意思決定できるか」を目的にする。
+現行は `stt/generation/vision` の3種を同一保存規約で扱う。
 
 ### 7.1 保存ルート
 
-- ベース: `~/.config/whisp/debug/benchmarks/runs/<run_id>/`
-- `manifest.json`: Runサマリ
-- `cases.jsonl`: Caseサマリ（1行1case）
-- `events.jsonl`: Caseイベント（1行1event）
-- `artifacts/`: prompt/response/judge/rawレスポンスなどの生データ
+```text
+~/.config/whisp/debug/benchmarks/
+├── candidates/
+│   └── candidates.json
+├── integrity/
+│   ├── exclusions.json
+│   ├── issues_stt.json
+│   └── issues_generation.json
+└── runs/
+    └── <run_id>/
+        ├── manifest.json
+        ├── orchestrator_events.jsonl
+        ├── cases_index.jsonl
+        └── cases/
+            └── <case_id>/
+                ├── manifest.json
+                ├── metrics.json
+                ├── events.jsonl
+                ├── io/
+                └── artifacts/
+```
 
-### 7.2 イベントモデル
+### 7.2 主要データ
 
-`BenchmarkCaseEvent` は `stage` ごとの厳密Unionで保存:
+- `BenchmarkCandidate`: 比較対象定義（`task + model + promptProfileID + options`）
+- `BenchmarkKey`: 比較セル識別子（`task + datasetPath/hash + candidateID + runtimeOptionsHash + evaluator/code version`）
+- `BenchmarkRunRecord`: run正本（`schemaVersion=4`、run全体 `metrics`、`candidateID`、`benchmarkKey`）
+- `BenchmarkCaseResult`: `cases_index.jsonl` の軽量行（一覧表示向け）
+- `BenchmarkCaseManifest` + `BenchmarkCaseMetrics`: ケース詳細の正本
+- `BenchmarkOrchestratorEvent`: run進捗（キュー投入/開始/完了/失敗）
+- `BenchmarkIntegrityIssue`: ケース不備（欠落/参照不足/破損）を保持
 
-- `load_case`
-- `stt`
-- `context`
-- `generation`
-- `judge`
-- `aggregate`
-- `cache`
-- `error`
-- `artifact_write_failed`
+### 7.3 実行フロー
 
-### 7.3 CLIログとの関係
+- `--benchmark-workers` で固定ワーカープール数を指定可能（未指定は `min(4, CPUコア数)`）。
+- ケース処理はケース単位で独立実行し、保存は `cases/<case_id>/` 配下に分離する。
+- run全体進捗は `orchestrator_events.jsonl`、UI一覧は `cases_index.jsonl` を参照する。
+- CLI `--benchmark-compare` は candidate ごとに `BenchmarkKey` を構築し、同一キーの成功 run があれば再実行をスキップ（`--force` 時除く）。
+- App (`BenchmarkViewModel`) は candidate を複数選択し、`--benchmark-compare` を実行して比較表を更新する。
+- `--benchmark-scan-integrity` は task 単位で不備一覧を再生成し、除外状態は `exclusions.json` で維持する。
 
-- CLIは `rows/summary` を出力し、実行後に importer (`BenchmarkLegacyImporter`) で `BenchmarkStore` へ正規化保存する。
-- importerは現行スキーマを厳密decodeする。旧キーfallbackや互換読み分けは行わない。
-- decodeできない旧形式の `manifest/summary` は一覧表示対象外（スキップ）になる。
-- AppのベンチマークUIは `BenchmarkStore` のデータを参照する。
+### 7.4 Generation 入力方針
+
+- generation benchmark の入力は `stt_text` 必須。
+- 欠落時は `skipped_missing_input_stt` としてスキップ記録する。
+- `labels.transcript_*` へのフォールバックは行わない。
 
 ---
 

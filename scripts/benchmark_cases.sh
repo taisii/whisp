@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "usage: $0 <manual|stt|generation|vision|e2e> [jsonl_path] [--result-root DIR] [extra args...]"
+  echo "usage: $0 <stt|generation|vision> [jsonl_path] [--result-root DIR] [extra args...]"
   exit 1
 fi
 
@@ -10,13 +10,6 @@ kind="$1"
 shift
 
 case "$kind" in
-  manual)
-    bench_flag="--benchmark-manual-cases"
-    default_prefix="whisp-manualbench"
-    summary_name="manual_summary.json"
-    rows_name="manual_case_rows.jsonl"
-    label="manual-case"
-    ;;
   stt)
     bench_flag="--benchmark-stt-cases"
     default_prefix="whisp-sttbench-cases"
@@ -37,13 +30,6 @@ case "$kind" in
     summary_name="vision_summary.json"
     rows_name="vision_case_rows.jsonl"
     label="vision-case"
-    ;;
-  e2e)
-    bench_flag="--benchmark-e2e-cases"
-    default_prefix="whisp-e2ebench"
-    summary_name="manual_summary.json"
-    rows_name="manual_case_rows.jsonl"
-    label="e2e-case"
     ;;
   *)
     echo "unknown benchmark kind: $kind"
@@ -83,7 +69,7 @@ echo "building..."
 swift build >/dev/null
 
 echo "running ${label} benchmark..."
-./.build/debug/whisp "$bench_flag" "$jsonl_path" --benchmark-log-dir "$result_root" "${extra_args[@]}" | tee "$result_root/summary.txt"
+./.build/debug/whisp "$bench_flag" "$jsonl_path" "${extra_args[@]}" | tee "$result_root/summary.txt"
 
 echo "result_root: $result_root"
 echo "summary_log: $result_root/$summary_name"

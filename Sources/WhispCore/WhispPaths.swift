@@ -9,6 +9,8 @@ public struct WhispPaths: Sendable {
     public let runsDirectory: URL
     public let benchmarkDirectory: URL
     public let benchmarkRunsDirectory: URL
+    public let benchmarkCandidatesDirectory: URL
+    public let benchmarkIntegrityDirectory: URL
     public let statsDirectory: URL
     public let runtimeStatsFile: URL
     public let manualCasesFile: URL
@@ -39,6 +41,8 @@ public struct WhispPaths: Sendable {
         runsDirectory = debugDirectory.appendingPathComponent("runs", isDirectory: true)
         benchmarkDirectory = debugDirectory.appendingPathComponent("benchmarks", isDirectory: true)
         benchmarkRunsDirectory = benchmarkDirectory.appendingPathComponent("runs", isDirectory: true)
+        benchmarkCandidatesDirectory = benchmarkDirectory.appendingPathComponent("candidates", isDirectory: true)
+        benchmarkIntegrityDirectory = benchmarkDirectory.appendingPathComponent("integrity", isDirectory: true)
         statsDirectory = debugDirectory.appendingPathComponent("stats", isDirectory: true)
         runtimeStatsFile = statsDirectory.appendingPathComponent("runtime_stats.json", isDirectory: false)
         manualCasesFile = debugDirectory.appendingPathComponent("manual_test_cases.jsonl", isDirectory: false)

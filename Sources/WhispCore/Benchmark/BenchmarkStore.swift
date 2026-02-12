@@ -6,6 +6,8 @@ public final class BenchmarkStore: @unchecked Sendable {
     let fileManager = FileManager.default
     let runsURL: URL
 
+    private let schemaMarkerFile = ".schema-v4"
+
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let paths = try? WhispPaths(environment: environment, allowTemporaryFallback: true)
         runsURL = paths?.benchmarkRunsDirectory
@@ -15,15 +17,29 @@ public final class BenchmarkStore: @unchecked Sendable {
 
     public var runsDirectoryPath: String { runsURL.path }
 
+    public func runDirectoryPath(runID: String) -> String {
+        runDirectory(runID: runID).path
+    }
+
     public func resolveRunPaths(runID: String) -> BenchmarkRunPaths {
         let runDir = runDirectory(runID: runID)
         return BenchmarkRunPaths(
-            logDirectoryPath: "",
-            rowsFilePath: "",
-            summaryFilePath: "",
-            casesFilePath: runDir.appendingPathComponent("cases.jsonl", isDirectory: false).path,
-            eventsFilePath: runDir.appendingPathComponent("events.jsonl", isDirectory: false).path,
-            artifactsDirectoryPath: runDir.appendingPathComponent("artifacts", isDirectory: true).path
+            manifestPath: runDir.appendingPathComponent("manifest.json", isDirectory: false).path,
+            orchestratorEventsPath: runDir.appendingPathComponent("orchestrator_events.jsonl", isDirectory: false).path,
+            casesIndexPath: runDir.appendingPathComponent("cases_index.jsonl", isDirectory: false).path,
+            casesDirectoryPath: runDir.appendingPathComponent("cases", isDirectory: true).path
+        )
+    }
+
+    public func resolveCasePaths(runID: String, caseID: String) -> BenchmarkCasePaths {
+        let caseDir = caseDirectory(runID: runID, caseID: caseID)
+        return BenchmarkCasePaths(
+            caseDirectoryPath: caseDir.path,
+            manifestPath: caseDir.appendingPathComponent("manifest.json", isDirectory: false).path,
+            metricsPath: caseDir.appendingPathComponent("metrics.json", isDirectory: false).path,
+            eventsPath: caseDir.appendingPathComponent("events.jsonl", isDirectory: false).path,
+            ioDirectoryPath: caseDir.appendingPathComponent("io", isDirectory: true).path,
+            artifactsDirectoryPath: caseDir.appendingPathComponent("artifacts", isDirectory: true).path
         )
     }
 
@@ -31,35 +47,34 @@ public final class BenchmarkStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        try ensureDirectories()
-        let runDir = runDirectory(runID: run.id)
-        try fileManager.createDirectory(at: runDir, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: artifactsDirectory(runID: run.id), withIntermediateDirectories: true)
-        try ensureLogFileIfMissing(path: casesPath(runID: run.id))
-        try ensureLogFileIfMissing(path: eventsPath(runID: run.id))
-
+        try ensureRunDirectoriesLocked(runID: run.id)
         let path = manifestPath(runID: run.id)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(run)
-        try data.write(to: path, options: [.atomic])
+        try writePrettyJSON(run, to: path)
     }
 
     public func loadRun(runID: String) throws -> BenchmarkRunRecord? {
         lock.lock()
         defer { lock.unlock() }
-        return try loadRunWithoutLock(runID: runID)
+
+        try ensureDirectoriesLocked()
+        let path = manifestPath(runID: runID)
+        guard fileManager.fileExists(atPath: path.path) else {
+            return nil
+        }
+        let data = try Data(contentsOf: path)
+        return try JSONDecoder().decode(BenchmarkRunRecord.self, from: data)
     }
 
     public func listRuns(limit: Int = 100) throws -> [BenchmarkRunRecord] {
         lock.lock()
         defer { lock.unlock() }
 
-        try ensureDirectories()
+        try ensureDirectoriesLocked()
         let entries = try fileManager.contentsOfDirectory(at: runsURL, includingPropertiesForKeys: nil)
         var runs: [BenchmarkRunRecord] = []
 
         for entry in entries {
+            guard isRunDirectory(entry) else { continue }
             let path = entry.appendingPathComponent("manifest.json", isDirectory: false)
             guard fileManager.fileExists(atPath: path.path) else { continue }
             guard let data = try? Data(contentsOf: path),
@@ -67,6 +82,7 @@ public final class BenchmarkStore: @unchecked Sendable {
             else {
                 continue
             }
+            guard run.schemaVersion == 4 else { continue }
             runs.append(run)
         }
 
@@ -74,80 +90,183 @@ public final class BenchmarkStore: @unchecked Sendable {
         return Array(sorted.prefix(max(1, limit)))
     }
 
+    public func findLatestCompletedRun(matching key: BenchmarkKey) throws -> BenchmarkRunRecord? {
+        let runs = try listRuns(limit: 2_000)
+        return runs
+            .filter { $0.status == .completed && $0.benchmarkKey == key }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .first
+    }
+
     public func appendCaseResult(runID: String, result: BenchmarkCaseResult) throws {
         lock.lock()
         defer { lock.unlock() }
 
-        try ensureRunDirectories(runID: runID)
-        let path = casesPath(runID: runID)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let line = try encoder.encode(result)
-        try appendLine(data: line, to: path)
+        try ensureCaseDirectoriesLocked(runID: runID, caseID: result.id)
+
+        let casesIndex = casesIndexPath(runID: runID)
+        try appendJSONL(result, to: casesIndex)
+
+        let now = isoNow()
+        let manifest = BenchmarkCaseManifest(
+            runID: runID,
+            caseID: result.id,
+            status: result.status,
+            reason: result.reason,
+            startedAt: now,
+            endedAt: now,
+            audioFilePath: nil,
+            contextUsed: result.contextUsed ?? false,
+            visionImageAttached: result.visionImageAttached ?? false,
+            transcriptSource: result.sources.transcript,
+            inputSource: result.sources.input,
+            referenceSource: result.sources.reference
+        )
+        try writePrettyJSON(manifest, to: caseManifestPath(runID: runID, caseID: result.id))
+        try writePrettyJSON(result.metrics, to: caseMetricsPath(runID: runID, caseID: result.id))
     }
 
     public func loadCaseResults(runID: String) throws -> [BenchmarkCaseResult] {
         lock.lock()
         defer { lock.unlock() }
 
-        let path = casesPath(runID: runID)
+        let path = casesIndexPath(runID: runID)
         guard fileManager.fileExists(atPath: path.path) else {
             return []
         }
 
-        let text = try String(contentsOf: path, encoding: .utf8)
-        let decoder = JSONDecoder()
-        var rows: [BenchmarkCaseResult] = []
+        let rows: [BenchmarkCaseResult] = try loadJSONL(path: path)
+        var latestByID: [String: BenchmarkCaseResult] = [:]
+        var order: [String] = []
 
-        for rawLine in text.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty { continue }
-            guard let data = line.data(using: .utf8) else {
-                throw AppError.decode("invalid benchmark case row encoding")
+        for row in rows {
+            if latestByID[row.id] == nil {
+                order.append(row.id)
             }
-            rows.append(try decoder.decode(BenchmarkCaseResult.self, from: data))
+            latestByID[row.id] = row
         }
-        return rows
+
+        return order.compactMap { latestByID[$0] }
+    }
+
+    public func saveCaseManifest(runID: String, manifest: BenchmarkCaseManifest) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureCaseDirectoriesLocked(runID: runID, caseID: manifest.caseID)
+        try writePrettyJSON(manifest, to: caseManifestPath(runID: runID, caseID: manifest.caseID))
+    }
+
+    public func loadCaseManifest(runID: String, caseID: String) throws -> BenchmarkCaseManifest? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let path = caseManifestPath(runID: runID, caseID: caseID)
+        guard fileManager.fileExists(atPath: path.path) else {
+            return nil
+        }
+        let data = try Data(contentsOf: path)
+        return try JSONDecoder().decode(BenchmarkCaseManifest.self, from: data)
+    }
+
+    public func saveCaseMetrics(runID: String, caseID: String, metrics: BenchmarkCaseMetrics) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureCaseDirectoriesLocked(runID: runID, caseID: caseID)
+        try writePrettyJSON(metrics, to: caseMetricsPath(runID: runID, caseID: caseID))
+    }
+
+    public func loadCaseMetrics(runID: String, caseID: String) throws -> BenchmarkCaseMetrics? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let path = caseMetricsPath(runID: runID, caseID: caseID)
+        guard fileManager.fileExists(atPath: path.path) else {
+            return nil
+        }
+        let data = try Data(contentsOf: path)
+        return try JSONDecoder().decode(BenchmarkCaseMetrics.self, from: data)
     }
 
     public func appendEvent(runID: String, event: BenchmarkCaseEvent) throws {
         lock.lock()
         defer { lock.unlock() }
 
-        try ensureRunDirectories(runID: runID)
-        let path = eventsPath(runID: runID)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let line = try encoder.encode(event)
-        try appendLine(data: line, to: path)
+        try ensureCaseDirectoriesLocked(runID: runID, caseID: event.base.caseID)
+        let path = caseEventsPath(runID: runID, caseID: event.base.caseID)
+        try appendJSONL(event, to: path)
+        try applyCaseEventSideEffectsLocked(runID: runID, event: event)
     }
 
     public func loadEvents(runID: String, caseID: String? = nil) throws -> [BenchmarkCaseEvent] {
         lock.lock()
         defer { lock.unlock() }
 
-        let path = eventsPath(runID: runID)
+        if let caseID {
+            let path = caseEventsPath(runID: runID, caseID: caseID)
+            guard fileManager.fileExists(atPath: path.path) else {
+                return []
+            }
+            let events: [BenchmarkCaseEvent] = try loadJSONL(path: path)
+            return events.sorted(by: { lhs, rhs in
+                if lhs.base.startedAtMs != rhs.base.startedAtMs {
+                    return lhs.base.startedAtMs < rhs.base.startedAtMs
+                }
+                return lhs.base.recordedAtMs < rhs.base.recordedAtMs
+            })
+        }
+
+        let casesDir = casesDirectory(runID: runID)
+        guard fileManager.fileExists(atPath: casesDir.path) else {
+            return []
+        }
+        let caseEntries = try fileManager.contentsOfDirectory(at: casesDir, includingPropertiesForKeys: nil)
+        var allEvents: [BenchmarkCaseEvent] = []
+        for entry in caseEntries where isRunDirectory(entry) {
+            let path = entry.appendingPathComponent("events.jsonl", isDirectory: false)
+            guard fileManager.fileExists(atPath: path.path) else { continue }
+            let events: [BenchmarkCaseEvent] = try loadJSONL(path: path)
+            allEvents.append(contentsOf: events)
+        }
+        return allEvents.sorted(by: { lhs, rhs in
+            if lhs.base.startedAtMs != rhs.base.startedAtMs {
+                return lhs.base.startedAtMs < rhs.base.startedAtMs
+            }
+            return lhs.base.recordedAtMs < rhs.base.recordedAtMs
+        })
+    }
+
+    public func appendOrchestratorEvent(runID: String, event: BenchmarkOrchestratorEvent) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureRunDirectoriesLocked(runID: runID)
+        try appendJSONL(event, to: orchestratorEventsPath(runID: runID))
+    }
+
+    public func loadOrchestratorEvents(runID: String) throws -> [BenchmarkOrchestratorEvent] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        let path = orchestratorEventsPath(runID: runID)
         guard fileManager.fileExists(atPath: path.path) else {
             return []
         }
+        let events: [BenchmarkOrchestratorEvent] = try loadJSONL(path: path)
+        return events.sorted { $0.recordedAtMs < $1.recordedAtMs }
+    }
 
-        let text = try String(contentsOf: path, encoding: .utf8)
-        let decoder = JSONDecoder()
-        var events: [BenchmarkCaseEvent] = []
+    public func writeCaseIOText(runID: String, caseID: String, fileName: String, text: String) throws -> String {
+        lock.lock()
+        defer { lock.unlock() }
 
-        for rawLine in text.components(separatedBy: .newlines) {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty { continue }
-            guard let data = line.data(using: .utf8) else {
-                throw AppError.decode("invalid benchmark event row encoding")
-            }
-            let event = try decoder.decode(BenchmarkCaseEvent.self, from: data)
-            if let caseID, event.base.caseID != caseID {
-                continue
-            }
-            events.append(event)
-        }
-        return events
+        try ensureCaseDirectoriesLocked(runID: runID, caseID: caseID)
+        let safe = sanitizePathComponent(fileName)
+        let path = caseIODirectory(runID: runID, caseID: caseID)
+            .appendingPathComponent(safe, isDirectory: false)
+        try text.data(using: .utf8)?.write(to: path, options: [.atomic])
+        return path.path
     }
 
     public func writeArtifact(
@@ -161,12 +280,12 @@ public final class BenchmarkStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        try ensureRunDirectories(runID: runID)
+        try ensureCaseDirectoriesLocked(runID: runID, caseID: caseID)
 
         let safeCase = sanitizePathComponent(caseID)
         let safeName = sanitizePathComponent(fileName)
         let token = timestampToken()
-        let relative = "artifacts/\(safeCase)/\(token)-\(safeName)"
+        let relative = "cases/\(safeCase)/artifacts/\(token)-\(safeName)"
         let url = runDirectory(runID: runID).appendingPathComponent(relative, isDirectory: false)
         try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: [.atomic])
@@ -205,48 +324,187 @@ public final class BenchmarkStore: @unchecked Sendable {
         try fileManager.removeItem(at: runDir)
     }
 
-    func ensureDirectories() throws {
+    private func ensureDirectoriesLocked() throws {
         try fileManager.createDirectory(at: runsURL, withIntermediateDirectories: true)
+        try prepareSchemaLayoutLocked()
     }
 
-    func ensureRunDirectories(runID: String) throws {
-        try ensureDirectories()
-        try fileManager.createDirectory(at: runDirectory(runID: runID), withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: artifactsDirectory(runID: runID), withIntermediateDirectories: true)
-        try ensureLogFileIfMissing(path: casesPath(runID: runID))
-        try ensureLogFileIfMissing(path: eventsPath(runID: runID))
+    private func prepareSchemaLayoutLocked() throws {
+        let marker = runsURL.appendingPathComponent(schemaMarkerFile, isDirectory: false)
+        if fileManager.fileExists(atPath: marker.path) {
+            return
+        }
+
+        let entries = try fileManager.contentsOfDirectory(at: runsURL, includingPropertiesForKeys: nil)
+        for entry in entries {
+            if entry.lastPathComponent == schemaMarkerFile {
+                continue
+            }
+            try fileManager.removeItem(at: entry)
+        }
+
+        try Data("4\n".utf8).write(to: marker, options: [.atomic])
     }
 
-    func runDirectory(runID: String) -> URL {
+    private func ensureRunDirectoriesLocked(runID: String) throws {
+        try ensureDirectoriesLocked()
+        let runDir = runDirectory(runID: runID)
+        try fileManager.createDirectory(at: runDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: casesDirectory(runID: runID), withIntermediateDirectories: true)
+        try ensureLogFileIfMissing(path: casesIndexPath(runID: runID))
+        try ensureLogFileIfMissing(path: orchestratorEventsPath(runID: runID))
+    }
+
+    private func ensureCaseDirectoriesLocked(runID: String, caseID: String) throws {
+        try ensureRunDirectoriesLocked(runID: runID)
+        let caseDir = caseDirectory(runID: runID, caseID: caseID)
+        try fileManager.createDirectory(at: caseDir, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: caseIODirectory(runID: runID, caseID: caseID), withIntermediateDirectories: true)
+        try ensureLogFileIfMissing(path: caseEventsPath(runID: runID, caseID: caseID))
+    }
+
+    private func runDirectory(runID: String) -> URL {
         runsURL.appendingPathComponent(runID, isDirectory: true)
     }
 
-    func artifactsDirectory(runID: String) -> URL {
-        runDirectory(runID: runID).appendingPathComponent("artifacts", isDirectory: true)
-    }
-
-    func manifestPath(runID: String) -> URL {
+    private func manifestPath(runID: String) -> URL {
         runDirectory(runID: runID).appendingPathComponent("manifest.json", isDirectory: false)
     }
 
-    func casesPath(runID: String) -> URL {
-        runDirectory(runID: runID).appendingPathComponent("cases.jsonl", isDirectory: false)
+    private func orchestratorEventsPath(runID: String) -> URL {
+        runDirectory(runID: runID).appendingPathComponent("orchestrator_events.jsonl", isDirectory: false)
     }
 
-    func eventsPath(runID: String) -> URL {
-        runDirectory(runID: runID).appendingPathComponent("events.jsonl", isDirectory: false)
+    private func casesIndexPath(runID: String) -> URL {
+        runDirectory(runID: runID).appendingPathComponent("cases_index.jsonl", isDirectory: false)
     }
 
-    func loadRunWithoutLock(runID: String) throws -> BenchmarkRunRecord? {
-        let path = manifestPath(runID: runID)
-        guard fileManager.fileExists(atPath: path.path) else {
-            return nil
+    private func casesDirectory(runID: String) -> URL {
+        runDirectory(runID: runID).appendingPathComponent("cases", isDirectory: true)
+    }
+
+    private func caseDirectory(runID: String, caseID: String) -> URL {
+        casesDirectory(runID: runID).appendingPathComponent(sanitizePathComponent(caseID), isDirectory: true)
+    }
+
+    private func caseManifestPath(runID: String, caseID: String) -> URL {
+        caseDirectory(runID: runID, caseID: caseID).appendingPathComponent("manifest.json", isDirectory: false)
+    }
+
+    private func caseMetricsPath(runID: String, caseID: String) -> URL {
+        caseDirectory(runID: runID, caseID: caseID).appendingPathComponent("metrics.json", isDirectory: false)
+    }
+
+    private func caseEventsPath(runID: String, caseID: String) -> URL {
+        caseDirectory(runID: runID, caseID: caseID).appendingPathComponent("events.jsonl", isDirectory: false)
+    }
+
+    private func caseIODirectory(runID: String, caseID: String) -> URL {
+        caseDirectory(runID: runID, caseID: caseID).appendingPathComponent("io", isDirectory: true)
+    }
+
+    private func caseArtifactsDirectory(runID: String, caseID: String) -> URL {
+        caseDirectory(runID: runID, caseID: caseID).appendingPathComponent("artifacts", isDirectory: true)
+    }
+
+    private func appendJSONL<T: Encodable>(_ value: T, to path: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let line = try encoder.encode(value)
+        try appendLine(data: line, to: path)
+    }
+
+    private func applyCaseEventSideEffectsLocked(runID: String, event: BenchmarkCaseEvent) throws {
+        switch event {
+        case let .loadCase(log):
+            let manifestPath = caseManifestPath(runID: runID, caseID: log.base.caseID)
+            let current: BenchmarkCaseManifest
+            if fileManager.fileExists(atPath: manifestPath.path),
+               let data = try? Data(contentsOf: manifestPath),
+               let decoded = try? JSONDecoder().decode(BenchmarkCaseManifest.self, from: data)
+            {
+                current = decoded
+            } else {
+                let now = isoNow()
+                current = BenchmarkCaseManifest(
+                    runID: runID,
+                    caseID: log.base.caseID,
+                    status: .ok,
+                    startedAt: now,
+                    endedAt: now,
+                    contextUsed: log.contextPresent,
+                    visionImageAttached: log.visionImagePresent
+                )
+            }
+
+            let updated = BenchmarkCaseManifest(
+                runID: current.runID,
+                caseID: current.caseID,
+                status: current.status,
+                reason: current.reason,
+                startedAt: current.startedAt,
+                endedAt: current.endedAt,
+                audioFilePath: log.audioFilePath,
+                contextUsed: log.contextPresent,
+                visionImageAttached: log.visionImagePresent,
+                transcriptSource: log.sources.transcript,
+                inputSource: log.sources.input,
+                referenceSource: log.sources.reference
+            )
+            try writePrettyJSON(updated, to: manifestPath)
+        case let .stt(log):
+            if let transcriptText = log.transcriptText, !transcriptText.isEmpty {
+                let outputPath = caseIODirectory(runID: runID, caseID: log.base.caseID)
+                    .appendingPathComponent("output_stt.txt", isDirectory: false)
+                try transcriptText.data(using: .utf8)?.write(to: outputPath, options: [.atomic])
+            }
+            if let referenceText = log.referenceText, !referenceText.isEmpty {
+                let referencePath = caseIODirectory(runID: runID, caseID: log.base.caseID)
+                    .appendingPathComponent("reference.txt", isDirectory: false)
+                try referenceText.data(using: .utf8)?.write(to: referencePath, options: [.atomic])
+            }
+        case let .error(log):
+            let errorPath = caseArtifactsDirectory(runID: runID, caseID: log.base.caseID)
+                .appendingPathComponent("error.json", isDirectory: false)
+            try fileManager.createDirectory(at: errorPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let payload: [String: Any] = [
+                "run_id": runID,
+                "case_id": log.base.caseID,
+                "error_type": log.errorType ?? "",
+                "origin_stage": log.originStage?.rawValue ?? "",
+                "message": log.message,
+                "recorded_at_ms": log.base.recordedAtMs,
+            ]
+            let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: errorPath, options: [.atomic])
+        default:
+            break
         }
-        let data = try Data(contentsOf: path)
-        return try JSONDecoder().decode(BenchmarkRunRecord.self, from: data)
     }
 
-    func appendLine(data: Data, to path: URL) throws {
+    private func loadJSONL<T: Decodable>(path: URL) throws -> [T] {
+        let text = try String(contentsOf: path, encoding: .utf8)
+        let decoder = JSONDecoder()
+        var rows: [T] = []
+        for rawLine in text.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+            guard let data = line.data(using: .utf8) else {
+                throw AppError.decode("invalid benchmark row encoding")
+            }
+            rows.append(try decoder.decode(T.self, from: data))
+        }
+        return rows
+    }
+
+    private func writePrettyJSON<T: Encodable>(_ value: T, to path: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(value)
+        try data.write(to: path, options: [.atomic])
+    }
+
+    private func appendLine(data: Data, to path: URL) throws {
         guard let handle = try? FileHandle(forWritingTo: path) else {
             throw AppError.io("benchmark log file open failed: \(path.path)")
         }
@@ -256,14 +514,25 @@ public final class BenchmarkStore: @unchecked Sendable {
         try handle.write(contentsOf: Data([0x0A]))
     }
 
-    func ensureLogFileIfMissing(path: URL) throws {
+    private func ensureLogFileIfMissing(path: URL) throws {
         if fileManager.fileExists(atPath: path.path) {
             return
         }
         try Data().write(to: path, options: [.atomic])
     }
 
-    func sanitizePathComponent(_ value: String) -> String {
+    private func isRunDirectory(_ url: URL) -> Bool {
+        if url.lastPathComponent.hasPrefix(".") {
+            return false
+        }
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return false
+        }
+        return isDirectory.boolValue
+    }
+
+    private func sanitizePathComponent(_ value: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         let transformed = value.unicodeScalars.map { scalar -> String in
             if allowed.contains(scalar) {
@@ -275,10 +544,16 @@ public final class BenchmarkStore: @unchecked Sendable {
         return trimmed.isEmpty ? "item" : trimmed
     }
 
-    func timestampToken() -> String {
+    private func timestampToken() -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        return formatter.string(from: Date())
+    }
+
+    private func isoNow() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: Date())
     }
 }

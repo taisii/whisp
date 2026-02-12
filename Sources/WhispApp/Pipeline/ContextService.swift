@@ -65,7 +65,7 @@ final class ScreenVisionContextProvider: VisionContextProvider, @unchecked Senda
     ) async -> VisionContextCollectionResult {
         let visionStartedAt = DispatchTime.now()
         let captureStartedAt = DispatchTime.now()
-        guard let image = ScreenCapture.captureOptimizedImage(
+        guard let image = await ScreenCapture.captureOptimizedImage(
             maxDimension: 1280,
             jpegQuality: 0.6,
             preferredOwnerPID: preferredWindowOwnerPID

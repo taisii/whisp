@@ -136,151 +136,24 @@ extension WhispCLI {
         )
     }
 
-    static func parseManualBenchmarkOptions(args: [String]) throws -> ManualBenchmarkOptions {
-        var jsonlPath = defaultManualCasesPath()
-        var sttMode: STTMode = .stream
-        var chunkMs = 120
-        var realtime = true
-        var limit: Int?
-        var requireContext = false
-        var minAudioSeconds = 2.0
-        var benchmarkLogDir: String?
-        var intentSource: IntentSource = .auto
-        var intentJudgeEnabled = false
-        var intentJudgeModel: LLMModel?
-        var llmEvalEnabled = false
-        var llmEvalModel: LLMModel?
-        var minLabelConfidence: Double?
-        var parser = ArgParser(args: args, startIndex: 1)
-
-        while let item = parser.next() {
-            if item == "--realtime" {
-                realtime = true
-                continue
-            }
-            if item == "--no-realtime" {
-                realtime = false
-                continue
-            }
-            if item == "--chunk-ms" {
-                chunkMs = try parsePositiveInt(try parser.value(for: "--chunk-ms"), option: "--chunk-ms")
-                continue
-            }
-            if item == "--stt" {
-                let value = try parser.value(for: "--stt")
-                guard let parsed = STTMode(rawValue: value) else {
-                    throw AppError.invalidArgument("--stt は rest または stream を指定してください")
-                }
-                sttMode = parsed
-                continue
-            }
-            if item == "--limit" {
-                limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
-                continue
-            }
-            if item == "--min-audio-seconds" {
-                minAudioSeconds = try parseNonNegativeDouble(try parser.value(for: "--min-audio-seconds"), option: "--min-audio-seconds")
-                continue
-            }
-            if item == "--min-label-confidence" {
-                let raw = try parser.value(for: "--min-label-confidence")
-                guard let parsed = Double(raw), (0 ... 1).contains(parsed) else {
-                    throw AppError.invalidArgument("--min-label-confidence は0〜1で指定してください")
-                }
-                minLabelConfidence = parsed
-                continue
-            }
-            if item == "--require-context" {
-                requireContext = true
-                continue
-            }
-            if item == "--benchmark-log-dir" {
-                benchmarkLogDir = try parser.value(for: "--benchmark-log-dir")
-                continue
-            }
-            if item == "--intent-source" {
-                let value = try parser.value(for: "--intent-source")
-                guard let parsed = IntentSource(rawValue: value) else {
-                    throw AppError.invalidArgument("--intent-source は auto|gold|silver を指定してください")
-                }
-                intentSource = parsed
-                continue
-            }
-            if item == "--intent-judge" {
-                intentJudgeEnabled = true
-                continue
-            }
-            if item == "--no-intent-judge" {
-                intentJudgeEnabled = false
-                continue
-            }
-            if item == "--judge-model" {
-                let value = try parser.value(for: "--judge-model")
-                guard let parsed = LLMModel(rawValue: value) else {
-                    throw AppError.invalidArgument("--judge-model は有効なモデルIDを指定してください")
-                }
-                intentJudgeModel = parsed
-                continue
-            }
-            if item == "--llm-eval" {
-                llmEvalEnabled = true
-                continue
-            }
-            if item == "--no-llm-eval" {
-                llmEvalEnabled = false
-                continue
-            }
-            if item == "--llm-eval-model" {
-                let value = try parser.value(for: "--llm-eval-model")
-                guard let parsed = LLMModel(rawValue: value) else {
-                    throw AppError.invalidArgument("--llm-eval-model は有効なモデルIDを指定してください")
-                }
-                llmEvalModel = parsed
-                continue
-            }
-            if item.hasPrefix("--") {
-                throw AppError.invalidArgument("不明な引数: \(item)")
-            }
-
-            jsonlPath = item
-        }
-
-        return ManualBenchmarkOptions(
-            jsonlPath: jsonlPath,
-            sttMode: sttMode,
-            chunkMs: chunkMs,
-            realtime: realtime,
-            limit: limit,
-            requireContext: requireContext,
-            minAudioSeconds: minAudioSeconds,
-            benchmarkLogDir: benchmarkLogDir,
-            intentSource: intentSource,
-            intentJudgeEnabled: intentJudgeEnabled,
-            intentJudgeModel: intentJudgeModel,
-            llmEvalEnabled: llmEvalEnabled,
-            llmEvalModel: llmEvalModel,
-            minLabelConfidence: minLabelConfidence
-        )
-    }
-
     static func parseVisionBenchmarkOptions(args: [String]) throws -> VisionBenchmarkOptions {
         var jsonlPath = defaultManualCasesPath()
         var limit: Int?
-        var benchmarkLogDir: String?
         var useCache = true
+        var benchmarkWorkers: Int?
         var parser = ArgParser(args: args, startIndex: 1)
 
         while let item = parser.next() {
             if item == "--limit" {
                 limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
-                continue
-            }
-            if item == "--benchmark-log-dir" {
-                benchmarkLogDir = try parser.value(for: "--benchmark-log-dir")
                 continue
             }
             if item == "--no-cache" {
                 useCache = false
+                continue
+            }
+            if item == "--benchmark-workers" {
+                benchmarkWorkers = try parsePositiveInt(try parser.value(for: "--benchmark-workers"), option: "--benchmark-workers")
                 continue
             }
             if item.hasPrefix("--") {
@@ -292,8 +165,8 @@ extension WhispCLI {
         return VisionBenchmarkOptions(
             jsonlPath: jsonlPath,
             limit: limit,
-            benchmarkLogDir: benchmarkLogDir,
-            useCache: useCache
+            useCache: useCache,
+            benchmarkWorkers: benchmarkWorkers
         )
     }
 
@@ -302,10 +175,11 @@ extension WhispCLI {
         var sttMode: STTMode = .stream
         var chunkMs = 120
         var realtime = true
+        var benchmarkWorkers: Int?
         var limit: Int?
         var minAudioSeconds = 2.0
-        var benchmarkLogDir: String?
         var useCache = true
+        var sttProvider: STTProvider = .deepgram
         var parser = ArgParser(args: args, startIndex: 1)
 
         while let item = parser.next() {
@@ -329,6 +203,10 @@ extension WhispCLI {
                 realtime = false
                 continue
             }
+            if item == "--benchmark-workers" {
+                benchmarkWorkers = try parsePositiveInt(try parser.value(for: "--benchmark-workers"), option: "--benchmark-workers")
+                continue
+            }
             if item == "--limit" {
                 limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
                 continue
@@ -337,12 +215,16 @@ extension WhispCLI {
                 minAudioSeconds = try parseNonNegativeDouble(try parser.value(for: "--min-audio-seconds"), option: "--min-audio-seconds")
                 continue
             }
-            if item == "--benchmark-log-dir" {
-                benchmarkLogDir = try parser.value(for: "--benchmark-log-dir")
-                continue
-            }
             if item == "--no-cache" {
                 useCache = false
+                continue
+            }
+            if item == "--stt-provider" {
+                let raw = try parser.value(for: "--stt-provider")
+                guard let parsed = STTProvider(rawValue: raw) else {
+                    throw AppError.invalidArgument("--stt-provider は deepgram|whisper|apple_speech を指定してください")
+                }
+                sttProvider = parsed
                 continue
             }
             if item.hasPrefix("--") {
@@ -356,18 +238,25 @@ extension WhispCLI {
             sttMode: sttMode,
             chunkMs: chunkMs,
             realtime: realtime,
+            benchmarkWorkers: benchmarkWorkers,
             limit: limit,
             minAudioSeconds: minAudioSeconds,
-            benchmarkLogDir: benchmarkLogDir,
-            useCache: useCache
+            useCache: useCache,
+            candidateID: nil,
+            datasetHash: nil,
+            runtimeOptionsHash: nil,
+            evaluatorVersion: nil,
+            codeVersion: nil,
+            benchmarkKey: nil,
+            sttProvider: sttProvider
         )
     }
 
     static func parseGenerationBenchmarkOptions(args: [String]) throws -> GenerationBenchmarkOptions {
         var jsonlPath = defaultManualCasesPath()
+        var benchmarkWorkers: Int?
         var limit: Int?
         var requireContext = false
-        var benchmarkLogDir: String?
         var useCache = true
         var llmEvalEnabled = false
         var llmEvalModel: LLMModel?
@@ -382,8 +271,8 @@ extension WhispCLI {
                 requireContext = true
                 continue
             }
-            if item == "--benchmark-log-dir" {
-                benchmarkLogDir = try parser.value(for: "--benchmark-log-dir")
+            if item == "--benchmark-workers" {
+                benchmarkWorkers = try parsePositiveInt(try parser.value(for: "--benchmark-workers"), option: "--benchmark-workers")
                 continue
             }
             if item == "--no-cache" {
@@ -414,12 +303,100 @@ extension WhispCLI {
 
         return GenerationBenchmarkOptions(
             jsonlPath: jsonlPath,
+            benchmarkWorkers: benchmarkWorkers,
             limit: limit,
             requireContext: requireContext,
-            benchmarkLogDir: benchmarkLogDir,
             useCache: useCache,
             llmEvalEnabled: llmEvalEnabled,
-            llmEvalModel: llmEvalModel
+            llmEvalModel: llmEvalModel,
+            candidateID: nil,
+            datasetHash: nil,
+            runtimeOptionsHash: nil,
+            evaluatorVersion: nil,
+            codeVersion: nil,
+            benchmarkKey: nil,
+            modelOverride: nil
         )
+    }
+
+    static func parseBenchmarkCompareOptions(args: [String]) throws -> BenchmarkCompareOptions {
+        var task: BenchmarkKind?
+        var casesPath = defaultManualCasesPath()
+        var candidateIDs: [String] = []
+        var force = false
+        var benchmarkWorkers: Int?
+        var parser = ArgParser(args: args, startIndex: 1)
+
+        while let item = parser.next() {
+            if item == "--task" {
+                let raw = try parser.value(for: "--task")
+                task = try parseCompareTask(raw)
+                continue
+            }
+            if item == "--cases" {
+                casesPath = try parser.value(for: "--cases")
+                continue
+            }
+            if item == "--candidate-id" {
+                candidateIDs.append(try parser.value(for: "--candidate-id"))
+                continue
+            }
+            if item == "--force" {
+                force = true
+                continue
+            }
+            if item == "--benchmark-workers" {
+                benchmarkWorkers = try parsePositiveInt(try parser.value(for: "--benchmark-workers"), option: "--benchmark-workers")
+                continue
+            }
+            throw AppError.invalidArgument("不明な引数: \(item)")
+        }
+
+        guard let task else {
+            throw AppError.invalidArgument("--task が必要です (stt|generation)")
+        }
+        guard !candidateIDs.isEmpty else {
+            throw AppError.invalidArgument("--candidate-id が1件以上必要です")
+        }
+        return BenchmarkCompareOptions(
+            task: task,
+            casesPath: casesPath,
+            candidateIDs: candidateIDs,
+            force: force,
+            benchmarkWorkers: benchmarkWorkers
+        )
+    }
+
+    static func parseBenchmarkIntegrityScanOptions(args: [String]) throws -> BenchmarkIntegrityScanOptions {
+        var task: BenchmarkKind?
+        var casesPath = defaultManualCasesPath()
+        var parser = ArgParser(args: args, startIndex: 1)
+
+        while let item = parser.next() {
+            if item == "--task" {
+                let raw = try parser.value(for: "--task")
+                task = try parseCompareTask(raw)
+                continue
+            }
+            if item == "--cases" {
+                casesPath = try parser.value(for: "--cases")
+                continue
+            }
+            throw AppError.invalidArgument("不明な引数: \(item)")
+        }
+
+        guard let task else {
+            throw AppError.invalidArgument("--task が必要です (stt|generation)")
+        }
+        return BenchmarkIntegrityScanOptions(task: task, casesPath: casesPath)
+    }
+
+    private static func parseCompareTask(_ raw: String) throws -> BenchmarkKind {
+        guard let task = BenchmarkKind(rawValue: raw),
+              task == .stt || task == .generation
+        else {
+            throw AppError.invalidArgument("--task は stt または generation を指定してください")
+        }
+        return task
     }
 }

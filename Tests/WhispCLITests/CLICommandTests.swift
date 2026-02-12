@@ -38,15 +38,6 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.emitMode, .stdout)
         XCTAssertEqual(options.contextFilePath, "/tmp/context.json")
 
-        let manual = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--benchmark-manual-cases", "/tmp/manual.jsonl", "--limit", "10",
-        ]))
-        guard case let .benchmarkManual(options) = manual else {
-            return XCTFail("unexpected manual benchmark command")
-        }
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.limit, 10)
-
         let vision = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-vision-cases", "/tmp/manual.jsonl", "--no-cache",
         ]))
@@ -74,43 +65,35 @@ final class CLICommandTests: XCTestCase {
         }
         XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
         XCTAssertTrue(options.requireContext)
-    }
 
-    func testParseBenchmarkE2EDelegatesToManualOptions() throws {
-        let command = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--benchmark-e2e-cases",
-            "/tmp/manual.jsonl",
-            "--stt", "rest",
-            "--chunk-ms", "300",
-            "--no-realtime",
-            "--limit", "20",
-            "--require-context",
-            "--min-audio-seconds", "1.25",
-            "--benchmark-log-dir", "/tmp/bench",
-            "--intent-source", "silver",
-            "--no-intent-judge",
-            "--judge-model", "gpt-5-nano",
-            "--min-label-confidence", "0.7",
+        let compare = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
+            "--benchmark-compare",
+            "--task", "stt",
+            "--cases", "/tmp/manual.jsonl",
+            "--candidate-id", "stt-a",
         ]))
+        guard case let .benchmarkCompare(compareOptions) = compare else {
+            return XCTFail("unexpected benchmark compare command")
+        }
+        XCTAssertEqual(compareOptions.task, .stt)
+        XCTAssertEqual(compareOptions.casesPath, "/tmp/manual.jsonl")
+        XCTAssertEqual(compareOptions.candidateIDs, ["stt-a"])
 
-        guard case let .benchmarkE2E(options) = command else {
-            return XCTFail("unexpected command")
+        let listCandidates = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: ["--benchmark-list-candidates"]))
+        guard case .benchmarkListCandidates = listCandidates else {
+            return XCTFail("unexpected list candidates command")
         }
 
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.sttMode, .rest)
-        XCTAssertEqual(options.chunkMs, 300)
-        XCTAssertFalse(options.realtime)
-        XCTAssertEqual(options.limit, 20)
-        XCTAssertTrue(options.requireContext)
-        XCTAssertEqual(options.minAudioSeconds, 1.25, accuracy: 0.0001)
-        XCTAssertEqual(options.benchmarkLogDir, "/tmp/bench")
-        XCTAssertEqual(options.intentSource, .silver)
-        XCTAssertFalse(options.intentJudgeEnabled)
-        XCTAssertEqual(options.intentJudgeModel, .gpt5Nano)
-        XCTAssertFalse(options.llmEvalEnabled)
-        XCTAssertNil(options.llmEvalModel)
-        XCTAssertEqual(options.minLabelConfidence, 0.7)
+        let integrity = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
+            "--benchmark-scan-integrity",
+            "--task", "generation",
+            "--cases", "/tmp/manual.jsonl",
+        ]))
+        guard case let .benchmarkScanIntegrity(integrityOptions) = integrity else {
+            return XCTFail("unexpected integrity command")
+        }
+        XCTAssertEqual(integrityOptions.task, .generation)
+        XCTAssertEqual(integrityOptions.casesPath, "/tmp/manual.jsonl")
     }
 
     func testParseUnknownTopLevelCommandReturnsNil() throws {
@@ -149,78 +132,15 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.chunkMs, 200)
     }
 
-    func testParseManualBenchmarkOptionsParsesCombinations() throws {
-        let options = try WhispCLI.parseManualBenchmarkOptions(args: [
-            "--benchmark-manual-cases",
-            "/tmp/manual.jsonl",
-            "--stt", "rest",
-            "--chunk-ms", "260",
-            "--no-realtime",
-            "--limit", "12",
-            "--require-context",
-            "--min-audio-seconds", "1.5",
-            "--benchmark-log-dir", "/tmp/logs",
-            "--intent-source", "gold",
-            "--intent-judge",
-            "--judge-model", "gemini-2.5-flash-lite",
-            "--llm-eval",
-            "--llm-eval-model", "gpt-5-nano",
-            "--min-label-confidence", "0.5",
-        ])
-
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.sttMode, .rest)
-        XCTAssertEqual(options.chunkMs, 260)
-        XCTAssertFalse(options.realtime)
-        XCTAssertEqual(options.limit, 12)
-        XCTAssertTrue(options.requireContext)
-        XCTAssertEqual(options.minAudioSeconds, 1.5, accuracy: 0.0001)
-        XCTAssertEqual(options.benchmarkLogDir, "/tmp/logs")
-        XCTAssertEqual(options.intentSource, .gold)
-        XCTAssertTrue(options.intentJudgeEnabled)
-        XCTAssertEqual(options.intentJudgeModel, .gemini25FlashLite)
-        XCTAssertTrue(options.llmEvalEnabled)
-        XCTAssertEqual(options.llmEvalModel, .gpt5Nano)
-        XCTAssertEqual(options.minLabelConfidence, 0.5)
-    }
-
-    func testParseManualBenchmarkOptionsRejectsInvalidConfidenceRange() {
-        XCTAssertThrowsError(try WhispCLI.parseManualBenchmarkOptions(args: [
-            "--benchmark-manual-cases",
-            "/tmp/manual.jsonl",
-            "--min-label-confidence",
-            "1.1",
-        ]))
-    }
-
-    func testParseManualBenchmarkOptionsRejectsInvalidIntentSource() {
-        XCTAssertThrowsError(try WhispCLI.parseManualBenchmarkOptions(args: [
-            "--benchmark-manual-cases",
-            "/tmp/manual.jsonl",
-            "--intent-source",
-            "invalid",
-        ]))
-    }
-
-    func testParseManualBenchmarkOptionsRejectsUnknownOption() {
-        XCTAssertThrowsError(try WhispCLI.parseManualBenchmarkOptions(args: [
-            "--benchmark-manual-cases",
-            "/tmp/manual.jsonl",
-            "--unknown",
-        ]))
-    }
-
     func testParseVisionBenchmarkOptionsParsesAndRejectsUnknownOption() throws {
         let options = try WhispCLI.parseVisionBenchmarkOptions(args: [
             "--benchmark-vision-cases",
             "/tmp/manual.jsonl",
             "--limit", "8",
-            "--benchmark-log-dir", "/tmp/logs",
             "--no-cache",
         ])
         XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
         XCTAssertEqual(options.limit, 8)
-        XCTAssertEqual(options.benchmarkLogDir, "/tmp/logs")
         XCTAssertFalse(options.useCache)
 
         XCTAssertThrowsError(try WhispCLI.parseVisionBenchmarkOptions(args: [
@@ -230,16 +150,16 @@ final class CLICommandTests: XCTestCase {
         ]))
     }
 
-    func testParseSTTBenchmarkOptionsParsesAndRejectsInvalidMode() throws {
+    func testParseSTTBenchmarkOptionsParsesProviderAndRejectsInvalidValues() throws {
         let options = try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",
             "/tmp/manual.jsonl",
+            "--stt-provider", "apple_speech",
             "--stt", "rest",
             "--chunk-ms", "200",
             "--no-realtime",
             "--limit", "16",
             "--min-audio-seconds", "2.25",
-            "--benchmark-log-dir", "/tmp/logs",
             "--no-cache",
         ])
 
@@ -249,13 +169,20 @@ final class CLICommandTests: XCTestCase {
         XCTAssertFalse(options.realtime)
         XCTAssertEqual(options.limit, 16)
         XCTAssertEqual(options.minAudioSeconds, 2.25, accuracy: 0.0001)
-        XCTAssertEqual(options.benchmarkLogDir, "/tmp/logs")
         XCTAssertFalse(options.useCache)
+        XCTAssertEqual(options.sttProvider, .appleSpeech)
 
         XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",
             "/tmp/manual.jsonl",
             "--stt",
+            "invalid",
+        ]))
+
+        XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
+            "--benchmark-stt-cases",
+            "/tmp/manual.jsonl",
+            "--stt-provider",
             "invalid",
         ]))
     }
@@ -268,7 +195,6 @@ final class CLICommandTests: XCTestCase {
             "--require-context",
             "--llm-eval",
             "--llm-eval-model", "gemini-2.5-flash-lite",
-            "--benchmark-log-dir", "/tmp/logs",
             "--no-cache",
         ])
 
@@ -277,7 +203,6 @@ final class CLICommandTests: XCTestCase {
         XCTAssertTrue(options.requireContext)
         XCTAssertTrue(options.llmEvalEnabled)
         XCTAssertEqual(options.llmEvalModel, .gemini25FlashLite)
-        XCTAssertEqual(options.benchmarkLogDir, "/tmp/logs")
         XCTAssertFalse(options.useCache)
 
         XCTAssertThrowsError(try WhispCLI.parseGenerationBenchmarkOptions(args: [
@@ -285,5 +210,77 @@ final class CLICommandTests: XCTestCase {
             "/tmp/manual.jsonl",
             "--unknown",
         ]))
+    }
+
+    func testBenchmarkLogDirOptionIsRejectedInAllBenchmarkParsers() {
+        XCTAssertThrowsError(try WhispCLI.parseVisionBenchmarkOptions(args: [
+            "--benchmark-vision-cases",
+            "/tmp/manual.jsonl",
+            "--benchmark-log-dir",
+            "/tmp/logs",
+        ]))
+
+        XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
+            "--benchmark-stt-cases",
+            "/tmp/manual.jsonl",
+            "--benchmark-log-dir",
+            "/tmp/logs",
+        ]))
+
+        XCTAssertThrowsError(try WhispCLI.parseGenerationBenchmarkOptions(args: [
+            "--benchmark-generation-cases",
+            "/tmp/manual.jsonl",
+            "--benchmark-log-dir",
+            "/tmp/logs",
+        ]))
+    }
+
+    func testParseBenchmarkCompareOptions() throws {
+        let options = try WhispCLI.parseBenchmarkCompareOptions(args: [
+            "--benchmark-compare",
+            "--task", "generation",
+            "--cases", "/tmp/manual.jsonl",
+            "--candidate-id", "gen-a",
+            "--candidate-id", "gen-b",
+            "--force",
+        ])
+        XCTAssertEqual(options.task, .generation)
+        XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
+        XCTAssertEqual(options.candidateIDs, ["gen-a", "gen-b"])
+        XCTAssertTrue(options.force)
+
+        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
+            "--benchmark-compare",
+            "--task", "vision",
+            "--candidate-id", "x",
+        ]))
+    }
+
+    func testParseBenchmarkIntegrityScanOptions() throws {
+        let options = try WhispCLI.parseBenchmarkIntegrityScanOptions(args: [
+            "--benchmark-scan-integrity",
+            "--task", "stt",
+            "--cases", "/tmp/manual.jsonl",
+        ])
+        XCTAssertEqual(options.task, .stt)
+        XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
+
+        XCTAssertThrowsError(try WhispCLI.parseBenchmarkIntegrityScanOptions(args: [
+            "--benchmark-scan-integrity",
+            "--task", "vision",
+        ]))
+    }
+
+    func testResolvedGenerationInputRequiresSttTextOnly() throws {
+        let decoder = JSONDecoder()
+        let data = Data("""
+        {
+          "id": "case-a",
+          "audio_file": "/tmp/a.wav",
+          "labels": { "transcript_gold": "gold text" }
+        }
+        """.utf8)
+        let item = try decoder.decode(ManualBenchmarkCase.self, from: data)
+        XCTAssertNil(item.resolvedGenerationInputSTT())
     }
 }

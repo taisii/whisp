@@ -13,6 +13,8 @@ final class WhispPathsTests: XCTestCase {
         XCTAssertEqual(paths.runsDirectory.path, "/tmp/test-home/.config/whisp/debug/runs")
         XCTAssertEqual(paths.benchmarkDirectory.path, "/tmp/test-home/.config/whisp/debug/benchmarks")
         XCTAssertEqual(paths.benchmarkRunsDirectory.path, "/tmp/test-home/.config/whisp/debug/benchmarks/runs")
+        XCTAssertEqual(paths.benchmarkCandidatesDirectory.path, "/tmp/test-home/.config/whisp/debug/benchmarks/candidates")
+        XCTAssertEqual(paths.benchmarkIntegrityDirectory.path, "/tmp/test-home/.config/whisp/debug/benchmarks/integrity")
         XCTAssertEqual(paths.statsDirectory.path, "/tmp/test-home/.config/whisp/debug/stats")
         XCTAssertEqual(paths.runtimeStatsFile.path, "/tmp/test-home/.config/whisp/debug/stats/runtime_stats.json")
         XCTAssertEqual(paths.manualCasesFile.path, "/tmp/test-home/.config/whisp/debug/manual_test_cases.jsonl")

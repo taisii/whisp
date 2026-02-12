@@ -1,58 +1,212 @@
 import Foundation
 import ImageIO
+#if canImport(Speech)
+import Speech
+#endif
 import Vision
 import WhispCore
 
 extension WhispCLI {
     static func runSTTInference(
+        provider: STTProvider,
         apiKey: String,
         audio: AudioData,
         languageHint: String,
         mode: STTMode,
         chunkMs: Int,
         realtime: Bool
-    ) async throws -> (transcript: String, totalMs: Double, afterStopMs: Double) {
+    ) async throws -> (
+        transcript: String,
+        totalMs: Double,
+        afterStopMs: Double,
+        replayStartedAtMs: Int64?,
+        replayEndedAtMs: Int64?,
+        attempts: [BenchmarkSTTAttempt]
+    ) {
         let sampleRate = Int(audio.sampleRate)
         let language = LanguageResolver.languageParam(languageHint)
 
-        switch mode {
-        case .rest:
+        switch provider {
+        case .deepgram:
+            switch mode {
+            case .rest:
+                let replayStartedAtMs: Int64?
+                let replayEndedAtMs: Int64?
+                if realtime {
+                    replayStartedAtMs = nowEpochMs()
+                    let durationNs = audioReplayDurationNanoseconds(audio: audio, sampleRate: sampleRate)
+                    if durationNs > 0 {
+                        try? await Task.sleep(nanoseconds: durationNs)
+                    }
+                    replayEndedAtMs = nowEpochMs()
+                } else {
+                    replayStartedAtMs = nil
+                    replayEndedAtMs = nil
+                }
+                let attemptStartedAtMs = nowEpochMs()
+                let startedAt = DispatchTime.now()
+                let result = try await DeepgramClient().transcribe(
+                    apiKey: apiKey,
+                    sampleRate: sampleRate,
+                    audio: audio.pcmBytes,
+                    language: language
+                )
+                let total = elapsedMs(since: startedAt)
+                let attemptEndedAtMs = nowEpochMs()
+                return (
+                    result.transcript,
+                    total,
+                    total,
+                    replayStartedAtMs,
+                    replayEndedAtMs,
+                    [BenchmarkSTTAttempt(
+                        kind: "rest",
+                        status: .ok,
+                        startedAtMs: attemptStartedAtMs,
+                        endedAtMs: attemptEndedAtMs
+                    )]
+                )
+            case .stream:
+                let stream = DeepgramStreamingClient()
+                let chunkSamples = max(1, sampleRate * chunkMs / 1000)
+                let chunkBytes = chunkSamples * MemoryLayout<Int16>.size
+
+                try await stream.start(apiKey: apiKey, sampleRate: sampleRate, language: language)
+                let replayStartedAtMs = nowEpochMs()
+                let sendAttemptStartedAtMs = replayStartedAtMs
+                let sendStartedAt = DispatchTime.now()
+                var offset = 0
+                while offset < audio.pcmBytes.count {
+                    let end = min(offset + chunkBytes, audio.pcmBytes.count)
+                    await stream.enqueueAudioChunk(audio.pcmBytes.subdata(in: offset..<end))
+                    if realtime {
+                        let frameCount = (end - offset) / MemoryLayout<Int16>.size
+                        let seconds = Double(frameCount) / Double(sampleRate)
+                        let nanoseconds = UInt64(seconds * 1_000_000_000)
+                        if nanoseconds > 0 {
+                            try? await Task.sleep(nanoseconds: nanoseconds)
+                        }
+                    }
+                    offset = end
+                }
+                let sendMs = elapsedMs(since: sendStartedAt)
+                let replayEndedAtMs = nowEpochMs()
+                let sendAttemptEndedAtMs = replayEndedAtMs
+                let finalizeStartedAt = DispatchTime.now()
+                let finalizeAttemptStartedAtMs = nowEpochMs()
+                let result = try await stream.finish()
+                let finalizeMs = elapsedMs(since: finalizeStartedAt)
+                let finalizeAttemptEndedAtMs = nowEpochMs()
+                return (
+                    result.transcript,
+                    sendMs + finalizeMs,
+                    finalizeMs,
+                    replayStartedAtMs,
+                    replayEndedAtMs,
+                    [
+                        BenchmarkSTTAttempt(
+                            kind: "stream_send",
+                            status: .ok,
+                            startedAtMs: sendAttemptStartedAtMs,
+                            endedAtMs: sendAttemptEndedAtMs
+                        ),
+                        BenchmarkSTTAttempt(
+                            kind: "stream_finalize",
+                            status: .ok,
+                            startedAtMs: finalizeAttemptStartedAtMs,
+                            endedAtMs: finalizeAttemptEndedAtMs
+                        ),
+                    ]
+                )
+            }
+        case .whisper:
+            guard mode == .rest else {
+                throw AppError.invalidArgument("whisper は --stt rest のみ対応です")
+            }
+            let replayStartedAtMs: Int64?
+            let replayEndedAtMs: Int64?
+            if realtime {
+                replayStartedAtMs = nowEpochMs()
+                let durationNs = audioReplayDurationNanoseconds(audio: audio, sampleRate: sampleRate)
+                if durationNs > 0 {
+                    try? await Task.sleep(nanoseconds: durationNs)
+                }
+                replayEndedAtMs = nowEpochMs()
+            } else {
+                replayStartedAtMs = nil
+                replayEndedAtMs = nil
+            }
+            let attemptStartedAtMs = nowEpochMs()
             let startedAt = DispatchTime.now()
-            let result = try await DeepgramClient().transcribe(
+            let result = try await WhisperClient().transcribe(
                 apiKey: apiKey,
                 sampleRate: sampleRate,
                 audio: audio.pcmBytes,
                 language: language
             )
             let total = elapsedMs(since: startedAt)
-            return (result.transcript, total, total)
-        case .stream:
-            let stream = DeepgramStreamingClient()
-            let chunkSamples = max(1, sampleRate * chunkMs / 1000)
-            let chunkBytes = chunkSamples * MemoryLayout<Int16>.size
-
-            try await stream.start(apiKey: apiKey, sampleRate: sampleRate, language: language)
-            let sendStartedAt = DispatchTime.now()
-            var offset = 0
-            while offset < audio.pcmBytes.count {
-                let end = min(offset + chunkBytes, audio.pcmBytes.count)
-                await stream.enqueueAudioChunk(audio.pcmBytes.subdata(in: offset..<end))
-                if realtime {
-                    let frameCount = (end - offset) / MemoryLayout<Int16>.size
-                    let seconds = Double(frameCount) / Double(sampleRate)
-                    let nanoseconds = UInt64(seconds * 1_000_000_000)
-                    if nanoseconds > 0 {
-                        try? await Task.sleep(nanoseconds: nanoseconds)
-                    }
-                }
-                offset = end
+            let attemptEndedAtMs = nowEpochMs()
+            return (
+                result.transcript,
+                total,
+                total,
+                replayStartedAtMs,
+                replayEndedAtMs,
+                [BenchmarkSTTAttempt(
+                    kind: "rest",
+                    status: .ok,
+                    startedAtMs: attemptStartedAtMs,
+                    endedAtMs: attemptEndedAtMs
+                )]
+            )
+        case .appleSpeech:
+            guard mode == .rest else {
+                throw AppError.invalidArgument("apple_speech は --stt rest のみ対応です")
             }
-            let sendMs = elapsedMs(since: sendStartedAt)
-            let finalizeStartedAt = DispatchTime.now()
-            let result = try await stream.finish()
-            let finalizeMs = elapsedMs(since: finalizeStartedAt)
-            return (result.transcript, sendMs + finalizeMs, finalizeMs)
+            let replayStartedAtMs: Int64?
+            let replayEndedAtMs: Int64?
+            if realtime {
+                replayStartedAtMs = nowEpochMs()
+                let durationNs = audioReplayDurationNanoseconds(audio: audio, sampleRate: sampleRate)
+                if durationNs > 0 {
+                    try? await Task.sleep(nanoseconds: durationNs)
+                }
+                replayEndedAtMs = nowEpochMs()
+            } else {
+                replayStartedAtMs = nil
+                replayEndedAtMs = nil
+            }
+            let attemptStartedAtMs = nowEpochMs()
+            let startedAt = DispatchTime.now()
+            let transcript = try await transcribeWithAppleSpeech(
+                sampleRate: sampleRate,
+                audio: audio.pcmBytes,
+                language: language
+            )
+            let total = elapsedMs(since: startedAt)
+            let attemptEndedAtMs = nowEpochMs()
+            return (
+                transcript,
+                total,
+                total,
+                replayStartedAtMs,
+                replayEndedAtMs,
+                [BenchmarkSTTAttempt(
+                    kind: "rest",
+                    status: .ok,
+                    startedAtMs: attemptStartedAtMs,
+                    endedAtMs: attemptEndedAtMs
+                )]
+            )
         }
+    }
+
+    private static func audioReplayDurationNanoseconds(audio: AudioData, sampleRate: Int) -> UInt64 {
+        guard sampleRate > 0 else { return 0 }
+        let frameCount = audio.pcmBytes.count / MemoryLayout<Int16>.size
+        let seconds = Double(frameCount) / Double(sampleRate)
+        guard seconds.isFinite, seconds > 0 else { return 0 }
+        return UInt64(seconds * 1_000_000_000)
     }
 
     static func analyzeVisionContextOCR(imageData: Data) throws -> ContextInfo? {
@@ -382,6 +536,120 @@ extension WhispCLI {
             return "none"
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func transcribeWithAppleSpeech(
+        sampleRate: Int,
+        audio: Data,
+        language: String?
+    ) async throws -> String {
+#if canImport(Speech)
+        let status = await resolveSpeechAuthorizationStatus()
+        guard status == .authorized else {
+            throw AppError.invalidArgument(speechAuthorizationErrorMessage(status))
+        }
+
+        let locale = localeForSpeechLanguage(language)
+        guard let recognizer = SFSpeechRecognizer(locale: locale) else {
+            throw AppError.invalidArgument("Apple Speechが locale=\(locale.identifier) に対応していません")
+        }
+        guard recognizer.isAvailable else {
+            throw AppError.io("Apple Speechが現在利用できません")
+        }
+
+        let normalizedSampleRate = max(sampleRate, 1)
+        let wavData = buildWAVBytes(sampleRate: UInt32(normalizedSampleRate), pcmData: audio)
+        let tmpURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whisp-apple-stt-\(UUID().uuidString)")
+            .appendingPathExtension("wav")
+        try wavData.write(to: tmpURL, options: [.atomic])
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+
+        let request = SFSpeechURLRecognitionRequest(url: tmpURL)
+        request.shouldReportPartialResults = false
+        request.requiresOnDeviceRecognition = true
+
+        do {
+            let transcript = try await recognizeSpeechTranscript(request: request, recognizer: recognizer)
+            return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch let error as AppError {
+            throw error
+        } catch {
+            throw AppError.io("Apple Speech 文字起こしに失敗: \(error.localizedDescription)")
+        }
+#else
+        throw AppError.invalidArgument("この環境では Speech.framework が利用できません")
+#endif
+    }
+
+#if canImport(Speech)
+    private static func recognizeSpeechTranscript(
+        request: SFSpeechURLRecognitionRequest,
+        recognizer: SFSpeechRecognizer
+    ) async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            var finished = false
+            var task: SFSpeechRecognitionTask?
+            task = recognizer.recognitionTask(with: request) { result, error in
+                if let error {
+                    guard !finished else { return }
+                    finished = true
+                    task?.cancel()
+                    task = nil
+                    continuation.resume(throwing: error)
+                    return
+                }
+
+                guard let result, result.isFinal else {
+                    return
+                }
+                guard !finished else { return }
+                finished = true
+                task = nil
+                continuation.resume(returning: result.bestTranscription.formattedString)
+            }
+        }
+    }
+
+    private static func resolveSpeechAuthorizationStatus() async -> SFSpeechRecognizerAuthorizationStatus {
+        let current = SFSpeechRecognizer.authorizationStatus()
+        if current != .notDetermined {
+            return current
+        }
+        return await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { status in
+                continuation.resume(returning: status)
+            }
+        }
+    }
+
+    private static func speechAuthorizationErrorMessage(_ status: SFSpeechRecognizerAuthorizationStatus) -> String {
+        switch status {
+        case .denied:
+            return "音声認識権限が未許可です（システム設定 > プライバシーとセキュリティ > 音声認識）"
+        case .restricted:
+            return "このMacでは音声認識が制限されています"
+        case .notDetermined:
+            return "音声認識権限の確認中です。再度お試しください"
+        case .authorized:
+            return ""
+        @unknown default:
+            return "音声認識権限の状態を判定できませんでした"
+        }
+    }
+#endif
+
+    private static func localeForSpeechLanguage(_ language: String?) -> Locale {
+        switch language {
+        case "ja":
+            return Locale(identifier: "ja-JP")
+        case "en":
+            return Locale(identifier: "en-US")
+        case .some(let value):
+            return Locale(identifier: value)
+        case .none:
+            return Locale.current
+        }
     }
 
     private static func clampedScore(_ value: Double) -> Double {

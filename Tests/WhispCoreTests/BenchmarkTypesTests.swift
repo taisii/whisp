@@ -55,12 +55,10 @@ final class BenchmarkTypesTests: XCTestCase {
                 avgCER: 0.1
             ),
             paths: BenchmarkRunPaths(
-                logDirectoryPath: "/tmp/logs",
-                rowsFilePath: "/tmp/logs/rows.jsonl",
-                summaryFilePath: "/tmp/logs/summary.json",
-                casesFilePath: "/tmp/store/cases.jsonl",
-                eventsFilePath: "/tmp/store/events.jsonl",
-                artifactsDirectoryPath: "/tmp/store/artifacts"
+                manifestPath: "/tmp/store/manifest.json",
+                orchestratorEventsPath: "/tmp/store/orchestrator_events.jsonl",
+                casesIndexPath: "/tmp/store/cases_index.jsonl",
+                casesDirectoryPath: "/tmp/store/cases"
             )
         )
 

@@ -4,7 +4,93 @@ public enum BenchmarkKind: String, Codable, CaseIterable, Sendable {
     case stt
     case generation
     case vision
-    case e2e
+}
+
+public struct BenchmarkCandidate: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let task: BenchmarkKind
+    public let model: String
+    public let promptProfileID: String?
+    public let options: [String: String]
+    public let createdAt: String
+    public let updatedAt: String
+
+    public init(
+        id: String,
+        task: BenchmarkKind,
+        model: String,
+        promptProfileID: String? = nil,
+        options: [String: String] = [:],
+        createdAt: String,
+        updatedAt: String
+    ) {
+        self.id = id
+        self.task = task
+        self.model = model
+        self.promptProfileID = promptProfileID
+        self.options = options
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
+public struct BenchmarkKey: Codable, Equatable, Hashable, Sendable {
+    public let task: BenchmarkKind
+    public let datasetPath: String
+    public let datasetHash: String
+    public let candidateID: String
+    public let runtimeOptionsHash: String
+    public let evaluatorVersion: String
+    public let codeVersion: String
+
+    public init(
+        task: BenchmarkKind,
+        datasetPath: String,
+        datasetHash: String,
+        candidateID: String,
+        runtimeOptionsHash: String,
+        evaluatorVersion: String,
+        codeVersion: String
+    ) {
+        self.task = task
+        self.datasetPath = datasetPath
+        self.datasetHash = datasetHash
+        self.candidateID = candidateID
+        self.runtimeOptionsHash = runtimeOptionsHash
+        self.evaluatorVersion = evaluatorVersion
+        self.codeVersion = codeVersion
+    }
+}
+
+public struct BenchmarkIntegrityIssue: Codable, Equatable, Identifiable, Sendable {
+    public let id: String
+    public let caseID: String
+    public let task: BenchmarkKind
+    public let issueType: String
+    public let missingFields: [String]
+    public let sourcePath: String
+    public var excluded: Bool
+    public let detectedAt: String
+
+    public init(
+        id: String,
+        caseID: String,
+        task: BenchmarkKind,
+        issueType: String,
+        missingFields: [String],
+        sourcePath: String,
+        excluded: Bool,
+        detectedAt: String
+    ) {
+        self.id = id
+        self.caseID = caseID
+        self.task = task
+        self.issueType = issueType
+        self.missingFields = missingFields
+        self.sourcePath = sourcePath
+        self.excluded = excluded
+        self.detectedAt = detectedAt
+    }
 }
 
 public enum BenchmarkRunStatus: String, Codable, Sendable {
@@ -21,6 +107,7 @@ public enum BenchmarkCaseStatus: String, Codable, Sendable {
 
 public enum BenchmarkEventStage: String, Codable, CaseIterable, Sendable {
     case loadCase = "load_case"
+    case audioReplay = "audio_replay"
     case stt
     case context
     case generation
@@ -224,6 +311,13 @@ public struct BenchmarkCostBreakdown: Codable, Equatable, Sendable {
 
 public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
     public var sourceCasesPath: String
+    public var sttExecutionProfile: String?
+    public var datasetHash: String?
+    public var runtimeOptionsHash: String?
+    public var evaluatorVersion: String?
+    public var codeVersion: String?
+    public var candidateID: String?
+    public var promptProfileID: String?
     public var sttMode: String?
     public var chunkMs: Int?
     public var realtime: Bool?
@@ -241,6 +335,13 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
 
     public init(
         sourceCasesPath: String,
+        sttExecutionProfile: String? = nil,
+        datasetHash: String? = nil,
+        runtimeOptionsHash: String? = nil,
+        evaluatorVersion: String? = nil,
+        codeVersion: String? = nil,
+        candidateID: String? = nil,
+        promptProfileID: String? = nil,
         sttMode: String? = nil,
         chunkMs: Int? = nil,
         realtime: Bool? = nil,
@@ -257,6 +358,13 @@ public struct BenchmarkRunOptions: Codable, Equatable, Sendable {
         caseLimit: Int? = nil
     ) {
         self.sourceCasesPath = sourceCasesPath
+        self.sttExecutionProfile = sttExecutionProfile
+        self.datasetHash = datasetHash
+        self.runtimeOptionsHash = runtimeOptionsHash
+        self.evaluatorVersion = evaluatorVersion
+        self.codeVersion = codeVersion
+        self.candidateID = candidateID
+        self.promptProfileID = promptProfileID
         self.sttMode = sttMode
         self.chunkMs = chunkMs
         self.realtime = realtime
@@ -344,27 +452,21 @@ public struct BenchmarkRunMetrics: Codable, Equatable, Sendable {
 }
 
 public struct BenchmarkRunPaths: Codable, Equatable, Sendable {
-    public var logDirectoryPath: String
-    public var rowsFilePath: String
-    public var summaryFilePath: String
-    public var casesFilePath: String
-    public var eventsFilePath: String
-    public var artifactsDirectoryPath: String
+    public var manifestPath: String
+    public var orchestratorEventsPath: String
+    public var casesIndexPath: String
+    public var casesDirectoryPath: String
 
     public init(
-        logDirectoryPath: String,
-        rowsFilePath: String,
-        summaryFilePath: String,
-        casesFilePath: String,
-        eventsFilePath: String,
-        artifactsDirectoryPath: String
+        manifestPath: String,
+        orchestratorEventsPath: String,
+        casesIndexPath: String,
+        casesDirectoryPath: String
     ) {
-        self.logDirectoryPath = logDirectoryPath
-        self.rowsFilePath = rowsFilePath
-        self.summaryFilePath = summaryFilePath
-        self.casesFilePath = casesFilePath
-        self.eventsFilePath = eventsFilePath
-        self.artifactsDirectoryPath = artifactsDirectoryPath
+        self.manifestPath = manifestPath
+        self.orchestratorEventsPath = orchestratorEventsPath
+        self.casesIndexPath = casesIndexPath
+        self.casesDirectoryPath = casesDirectoryPath
     }
 }
 
@@ -377,17 +479,21 @@ public struct BenchmarkRunRecord: Codable, Equatable, Identifiable, Sendable {
     public var updatedAt: String
 
     public var options: BenchmarkRunOptions
+    public var candidateID: String?
+    public var benchmarkKey: BenchmarkKey?
     public var metrics: BenchmarkRunMetrics
     public var paths: BenchmarkRunPaths
 
     public init(
-        schemaVersion: Int = 2,
+        schemaVersion: Int = 4,
         id: String,
         kind: BenchmarkKind,
         status: BenchmarkRunStatus = .completed,
         createdAt: String,
         updatedAt: String,
         options: BenchmarkRunOptions,
+        candidateID: String? = nil,
+        benchmarkKey: BenchmarkKey? = nil,
         metrics: BenchmarkRunMetrics,
         paths: BenchmarkRunPaths
     ) {
@@ -398,8 +504,114 @@ public struct BenchmarkRunRecord: Codable, Equatable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.options = options
+        self.candidateID = candidateID
+        self.benchmarkKey = benchmarkKey
         self.metrics = metrics
         self.paths = paths
+    }
+}
+
+public struct BenchmarkCasePaths: Codable, Equatable, Sendable {
+    public var caseDirectoryPath: String
+    public var manifestPath: String
+    public var metricsPath: String
+    public var eventsPath: String
+    public var ioDirectoryPath: String
+    public var artifactsDirectoryPath: String
+
+    public init(
+        caseDirectoryPath: String,
+        manifestPath: String,
+        metricsPath: String,
+        eventsPath: String,
+        ioDirectoryPath: String,
+        artifactsDirectoryPath: String
+    ) {
+        self.caseDirectoryPath = caseDirectoryPath
+        self.manifestPath = manifestPath
+        self.metricsPath = metricsPath
+        self.eventsPath = eventsPath
+        self.ioDirectoryPath = ioDirectoryPath
+        self.artifactsDirectoryPath = artifactsDirectoryPath
+    }
+}
+
+public struct BenchmarkCaseManifest: Codable, Equatable, Sendable {
+    public let runID: String
+    public let caseID: String
+    public var status: BenchmarkCaseStatus
+    public var reason: String?
+    public var startedAt: String
+    public var endedAt: String?
+    public var audioFilePath: String?
+    public var contextUsed: Bool
+    public var visionImageAttached: Bool
+    public var transcriptSource: String?
+    public var inputSource: String?
+    public var referenceSource: String?
+
+    public init(
+        runID: String,
+        caseID: String,
+        status: BenchmarkCaseStatus,
+        reason: String? = nil,
+        startedAt: String,
+        endedAt: String? = nil,
+        audioFilePath: String? = nil,
+        contextUsed: Bool,
+        visionImageAttached: Bool,
+        transcriptSource: String? = nil,
+        inputSource: String? = nil,
+        referenceSource: String? = nil
+    ) {
+        self.runID = runID
+        self.caseID = caseID
+        self.status = status
+        self.reason = reason
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.audioFilePath = audioFilePath
+        self.contextUsed = contextUsed
+        self.visionImageAttached = visionImageAttached
+        self.transcriptSource = transcriptSource
+        self.inputSource = inputSource
+        self.referenceSource = referenceSource
+    }
+}
+
+public enum BenchmarkOrchestratorStage: String, Codable, CaseIterable, Sendable {
+    case runStart = "run_start"
+    case caseQueued = "case_queued"
+    case caseStarted = "case_started"
+    case caseFinished = "case_finished"
+    case caseFailed = "case_failed"
+    case runCompleted = "run_completed"
+    case runFailed = "run_failed"
+    case runCancelled = "run_cancelled"
+}
+
+public struct BenchmarkOrchestratorEvent: Codable, Equatable, Sendable {
+    public var runID: String
+    public var caseID: String?
+    public var stage: BenchmarkOrchestratorStage
+    public var status: BenchmarkEventStatus
+    public var recordedAtMs: Int64
+    public var attrs: [String: String]?
+
+    public init(
+        runID: String,
+        caseID: String? = nil,
+        stage: BenchmarkOrchestratorStage,
+        status: BenchmarkEventStatus,
+        recordedAtMs: Int64,
+        attrs: [String: String]? = nil
+    ) {
+        self.runID = runID
+        self.caseID = caseID
+        self.stage = stage
+        self.status = status
+        self.recordedAtMs = recordedAtMs
+        self.attrs = attrs
     }
 }
 
@@ -456,14 +668,66 @@ public struct BenchmarkLoadCaseLog: Equatable, Sendable {
     }
 }
 
+public struct BenchmarkAudioReplayLog: Equatable, Sendable {
+    public let base: BenchmarkCaseEventBase
+    public let profile: String
+    public let chunkMs: Int?
+    public let realtime: Bool
+
+    public init(
+        base: BenchmarkCaseEventBase,
+        profile: String,
+        chunkMs: Int?,
+        realtime: Bool
+    ) {
+        self.base = base
+        self.profile = profile
+        self.chunkMs = chunkMs
+        self.realtime = realtime
+    }
+}
+
+public struct BenchmarkSTTAttempt: Codable, Equatable, Sendable {
+    public let kind: String
+    public let status: BenchmarkEventStatus
+    public let startedAtMs: Int64
+    public let endedAtMs: Int64
+    public let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case status
+        case startedAtMs = "started_at_ms"
+        case endedAtMs = "ended_at_ms"
+        case error
+    }
+
+    public init(
+        kind: String,
+        status: BenchmarkEventStatus,
+        startedAtMs: Int64,
+        endedAtMs: Int64,
+        error: String? = nil
+    ) {
+        self.kind = kind
+        self.status = status
+        self.startedAtMs = startedAtMs
+        self.endedAtMs = endedAtMs
+        self.error = error
+    }
+}
+
 public struct BenchmarkSTTLog: Equatable, Sendable {
     public let base: BenchmarkCaseEventBase
     public let provider: String?
     public let mode: String?
+    public let transcriptText: String?
+    public let referenceText: String?
     public let transcriptChars: Int?
     public let cer: Double?
     public let sttTotalMs: Double?
     public let sttAfterStopMs: Double?
+    public let attempts: [BenchmarkSTTAttempt]?
     public let rawResponseRef: BenchmarkArtifactRef?
     public let error: String?
 
@@ -471,20 +735,26 @@ public struct BenchmarkSTTLog: Equatable, Sendable {
         base: BenchmarkCaseEventBase,
         provider: String?,
         mode: String?,
+        transcriptText: String? = nil,
+        referenceText: String? = nil,
         transcriptChars: Int?,
         cer: Double?,
         sttTotalMs: Double?,
         sttAfterStopMs: Double?,
+        attempts: [BenchmarkSTTAttempt]?,
         rawResponseRef: BenchmarkArtifactRef?,
         error: String?
     ) {
         self.base = base
         self.provider = provider
         self.mode = mode
+        self.transcriptText = transcriptText
+        self.referenceText = referenceText
         self.transcriptChars = transcriptChars
         self.cer = cer
         self.sttTotalMs = sttTotalMs
         self.sttAfterStopMs = sttAfterStopMs
+        self.attempts = attempts
         self.rawResponseRef = rawResponseRef
         self.error = error
     }
@@ -684,6 +954,7 @@ public struct BenchmarkArtifactWriteFailedLog: Equatable, Sendable {
 
 public enum BenchmarkCaseEvent: Equatable, Sendable {
     case loadCase(BenchmarkLoadCaseLog)
+    case audioReplay(BenchmarkAudioReplayLog)
     case stt(BenchmarkSTTLog)
     case context(BenchmarkContextLog)
     case generation(BenchmarkGenerationLog)
@@ -698,6 +969,8 @@ public extension BenchmarkCaseEvent {
     var base: BenchmarkCaseEventBase {
         switch self {
         case let .loadCase(log):
+            return log.base
+        case let .audioReplay(log):
             return log.base
         case let .stt(log):
             return log.base
@@ -741,12 +1014,19 @@ extension BenchmarkCaseEvent: Codable {
         case audioFilePath = "audio_file_path"
         case rawRowRef = "raw_row_ref"
 
+        case profile
+        case chunkMs = "chunk_ms"
+        case realtime
+
         case provider
         case mode
+        case transcriptText = "stt_text"
+        case referenceText = "reference_text"
         case transcriptChars = "transcript_chars"
         case cer
         case sttTotalMs = "stt_total_ms"
         case sttAfterStopMs = "stt_after_stop_ms"
+        case attempts
         case rawResponseRef = "raw_response_ref"
 
         case sourceChars = "source_chars"
@@ -816,15 +1096,25 @@ extension BenchmarkCaseEvent: Codable {
                 audioFilePath: try attrs.decodeIfPresent(String.self, forKey: .audioFilePath),
                 rawRowRef: try attrs.decodeIfPresent(BenchmarkArtifactRef.self, forKey: .rawRowRef)
             ))
+        case .audioReplay:
+            self = .audioReplay(BenchmarkAudioReplayLog(
+                base: base,
+                profile: try attrs.decodeIfPresent(String.self, forKey: .profile) ?? "file_replay_realtime",
+                chunkMs: try attrs.decodeIfPresent(Int.self, forKey: .chunkMs),
+                realtime: try attrs.decodeIfPresent(Bool.self, forKey: .realtime) ?? true
+            ))
         case .stt:
             self = .stt(BenchmarkSTTLog(
                 base: base,
                 provider: try attrs.decodeIfPresent(String.self, forKey: .provider),
                 mode: try attrs.decodeIfPresent(String.self, forKey: .mode),
+                transcriptText: try attrs.decodeIfPresent(String.self, forKey: .transcriptText),
+                referenceText: try attrs.decodeIfPresent(String.self, forKey: .referenceText),
                 transcriptChars: try attrs.decodeIfPresent(Int.self, forKey: .transcriptChars),
                 cer: try attrs.decodeIfPresent(Double.self, forKey: .cer),
                 sttTotalMs: try attrs.decodeIfPresent(Double.self, forKey: .sttTotalMs),
                 sttAfterStopMs: try attrs.decodeIfPresent(Double.self, forKey: .sttAfterStopMs),
+                attempts: try attrs.decodeIfPresent([BenchmarkSTTAttempt].self, forKey: .attempts),
                 rawResponseRef: try attrs.decodeIfPresent(BenchmarkArtifactRef.self, forKey: .rawResponseRef),
                 error: try attrs.decodeIfPresent(String.self, forKey: .error)
             ))
@@ -923,13 +1213,20 @@ extension BenchmarkCaseEvent: Codable {
             try attrs.encode(log.visionImagePresent, forKey: .visionImagePresent)
             try attrs.encodeIfPresent(log.audioFilePath, forKey: .audioFilePath)
             try attrs.encodeIfPresent(log.rawRowRef, forKey: .rawRowRef)
+        case let .audioReplay(log):
+            try attrs.encode(log.profile, forKey: .profile)
+            try attrs.encodeIfPresent(log.chunkMs, forKey: .chunkMs)
+            try attrs.encode(log.realtime, forKey: .realtime)
         case let .stt(log):
             try attrs.encodeIfPresent(log.provider, forKey: .provider)
             try attrs.encodeIfPresent(log.mode, forKey: .mode)
+            try attrs.encodeIfPresent(log.transcriptText, forKey: .transcriptText)
+            try attrs.encodeIfPresent(log.referenceText, forKey: .referenceText)
             try attrs.encodeIfPresent(log.transcriptChars, forKey: .transcriptChars)
             try attrs.encodeIfPresent(log.cer, forKey: .cer)
             try attrs.encodeIfPresent(log.sttTotalMs, forKey: .sttTotalMs)
             try attrs.encodeIfPresent(log.sttAfterStopMs, forKey: .sttAfterStopMs)
+            try attrs.encodeIfPresent(log.attempts, forKey: .attempts)
             try attrs.encodeIfPresent(log.rawResponseRef, forKey: .rawResponseRef)
             try attrs.encodeIfPresent(log.error, forKey: .error)
         case let .context(log):

@@ -6,45 +6,80 @@ import WhispCore
 
 @MainActor
 final class BenchmarkViewSnapshotTests: XCTestCase {
-    private let width = 1360
-    private let height = 820
+    private let width = 1460
+    private let height = 900
 
     func testRenderBenchmarkViewBeforeAfter() throws {
         let artifactDir = try makeArtifactDirectory()
 
         let emptyHome = try makeTempHome()
         let emptyStore = BenchmarkStore(environment: ["HOME": emptyHome.path])
-        let emptyViewModel = BenchmarkViewModel(store: emptyStore)
+        let emptyCandidateStore = BenchmarkCandidateStore(environment: ["HOME": emptyHome.path])
+        let emptyIntegrityStore = BenchmarkIntegrityStore(environment: ["HOME": emptyHome.path])
+        let emptyViewModel = BenchmarkViewModel(
+            store: emptyStore,
+            candidateStore: emptyCandidateStore,
+            integrityStore: emptyIntegrityStore
+        )
         emptyViewModel.refresh()
         let before = try renderSnapshot(viewModel: emptyViewModel)
         let beforeURL = artifactDir.appendingPathComponent("benchmark_view_before.png")
         try pngData(from: before).write(to: beforeURL, options: .atomic)
 
         let dataHome = try makeTempHome()
-        let dataStore = BenchmarkStore(environment: ["HOME": dataHome.path])
-        let runID = "snapshot-run"
-        var paths = dataStore.resolveRunPaths(runID: runID)
-        paths.logDirectoryPath = "/tmp/bench"
-        paths.rowsFilePath = "/tmp/bench/rows.jsonl"
-        paths.summaryFilePath = "/tmp/bench/summary.json"
+        let env = ["HOME": dataHome.path]
+        let dataStore = BenchmarkStore(environment: env)
+        let dataCandidateStore = BenchmarkCandidateStore(environment: env)
+        let dataIntegrityStore = BenchmarkIntegrityStore(environment: env)
 
+        let casesPath = dataHome.appendingPathComponent("cases.jsonl", isDirectory: false)
+        try Data("{}\n".utf8).write(to: casesPath, options: .atomic)
+
+        let candidate = BenchmarkCandidate(
+            id: "generation-gpt-5-nano-a",
+            task: .generation,
+            model: "gpt-5-nano",
+            promptProfileID: "business",
+            options: ["require_context": "true", "llm_eval": "true"],
+            createdAt: "2026-02-12T00:00:00.000Z",
+            updatedAt: "2026-02-12T00:00:00.000Z"
+        )
+        try dataCandidateStore.saveCandidates([candidate])
+
+        let runID = "generation-20260212-000000-aaaa1111"
+        let paths = dataStore.resolveRunPaths(runID: runID)
         try dataStore.saveRun(
             BenchmarkRunRecord(
                 id: runID,
-                kind: .e2e,
+                kind: .generation,
                 status: .completed,
-                createdAt: "2026-02-11T00:00:00Z",
-                updatedAt: "2026-02-11T00:01:00Z",
-                options: BenchmarkRunOptions(sourceCasesPath: "/tmp/cases.jsonl", sttMode: "stream"),
+                createdAt: "2026-02-12T00:00:00.000Z",
+                updatedAt: "2026-02-12T00:00:00.000Z",
+                options: BenchmarkRunOptions(
+                    sourceCasesPath: casesPath.path,
+                    datasetHash: "hash-a",
+                    candidateID: candidate.id,
+                    llmModel: "gpt-5-nano"
+                ),
+                candidateID: candidate.id,
+                benchmarkKey: BenchmarkKey(
+                    task: .generation,
+                    datasetPath: casesPath.path,
+                    datasetHash: "hash-a",
+                    candidateID: candidate.id,
+                    runtimeOptionsHash: "runtime-a",
+                    evaluatorVersion: "v1",
+                    codeVersion: "dev"
+                ),
                 metrics: BenchmarkRunMetrics(
-                    casesTotal: 1,
-                    casesSelected: 1,
-                    executedCases: 1,
+                    casesTotal: 2,
+                    casesSelected: 2,
+                    executedCases: 2,
                     skippedCases: 0,
                     failedCases: 0,
-                    cachedHits: 1,
-                    exactMatchRate: 0.0,
-                    avgCER: 0.12
+                    avgCER: 0.2,
+                    weightedCER: 0.24,
+                    postLatencyMs: BenchmarkLatencyDistribution(avg: 110, p50: 100, p95: 180, p99: 210)
                 ),
                 paths: paths
             )
@@ -55,74 +90,34 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
             result: BenchmarkCaseResult(
                 id: "case-1",
                 status: .ok,
+                reason: nil,
                 cache: BenchmarkCacheRecord(hit: true, key: "abc", namespace: "generation"),
-                sources: BenchmarkReferenceSources(transcript: "labels.transcript_gold", intent: "labels.intent_gold"),
+                sources: BenchmarkReferenceSources(input: "stt_text", reference: "ground_truth_text"),
                 contextUsed: true,
-                visionImageAttached: true,
-                metrics: BenchmarkCaseMetrics(
-                    cer: 0.12,
-                    intentMatch: true,
-                    intentScore: 4,
-                    totalAfterStopMs: 430
-                )
+                visionImageAttached: false,
+                metrics: BenchmarkCaseMetrics(cer: 0.2, postMs: 140, outputChars: 120)
             )
         )
 
-        let requestRef = try dataStore.writeArtifact(
-            runID: runID,
-            caseID: "case-1",
-            fileName: "request.txt",
-            mimeType: "text/plain",
-            data: Data("judge request payload".utf8)
+        let issue = BenchmarkIntegrityIssue(
+            id: "issue-1",
+            caseID: "case-2",
+            task: .generation,
+            issueType: "missing_stt_text",
+            missingFields: ["stt_text"],
+            sourcePath: casesPath.path,
+            excluded: false,
+            detectedAt: "2026-02-12T00:00:00.000Z"
         )
+        try dataIntegrityStore.saveIssues(task: .generation, issues: [issue])
 
-        let loadBase = BenchmarkCaseEventBase(
-            runID: runID,
-            caseID: "case-1",
-            stage: .loadCase,
-            status: .ok,
-            startedAtMs: 1,
-            endedAtMs: 2,
-            recordedAtMs: 3
+        let dataViewModel = BenchmarkViewModel(
+            store: dataStore,
+            candidateStore: dataCandidateStore,
+            integrityStore: dataIntegrityStore
         )
-        try dataStore.appendEvent(
-            runID: runID,
-            event: .loadCase(BenchmarkLoadCaseLog(
-                base: loadBase,
-                sources: BenchmarkReferenceSources(transcript: "labels.transcript_gold"),
-                contextPresent: true,
-                visionImagePresent: true,
-                audioFilePath: nil,
-                rawRowRef: nil
-            ))
-        )
-
-        let judgeBase = BenchmarkCaseEventBase(
-            runID: runID,
-            caseID: "case-1",
-            stage: .judge,
-            status: .ok,
-            startedAtMs: 4,
-            endedAtMs: 5,
-            recordedAtMs: 6
-        )
-        try dataStore.appendEvent(
-            runID: runID,
-            event: .judge(BenchmarkJudgeLog(
-                base: judgeBase,
-                model: "gpt-5-nano",
-                match: true,
-                score: 4,
-                intentPreservationScore: nil,
-                hallucinationScore: nil,
-                hallucinationRate: nil,
-                requestRef: requestRef,
-                responseRef: nil,
-                error: nil
-            ))
-        )
-
-        let dataViewModel = BenchmarkViewModel(store: dataStore)
+        dataViewModel.selectedTask = .generation
+        dataViewModel.datasetPath = casesPath.path
         dataViewModel.refresh()
         let after = try renderSnapshot(viewModel: dataViewModel)
         let afterURL = artifactDir.appendingPathComponent("benchmark_view_after.png")
@@ -132,8 +127,39 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
     }
 
+    func testRenderBenchmarkErrorStatusChipBeforeAfter() throws {
+        let artifactDir = try makeArtifactDirectory()
+        let home = try makeTempHome()
+        let env = ["HOME": home.path]
+        let viewModel = BenchmarkViewModel(
+            store: BenchmarkStore(environment: env),
+            candidateStore: BenchmarkCandidateStore(environment: env),
+            integrityStore: BenchmarkIntegrityStore(environment: env)
+        )
+        viewModel.refresh()
+
+        viewModel.statusIsError = true
+        viewModel.statusMessage = "比較実行に失敗"
+        viewModel.benchmarkErrorLog = ""
+        let before = try renderSnapshot(viewModel: viewModel)
+        let beforeURL = artifactDir.appendingPathComponent("benchmark_error_chip_before.png")
+        try pngData(from: before).write(to: beforeURL, options: .atomic)
+
+        viewModel.benchmarkErrorLog = """
+        io error: benchmark command failed (exit: 1)
+        building...
+        error: API key not found
+        """
+        let after = try renderSnapshot(viewModel: viewModel)
+        let afterURL = artifactDir.appendingPathComponent("benchmark_error_chip_after.png")
+        try pngData(from: after).write(to: afterURL, options: .atomic)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
     private func renderSnapshot(viewModel: BenchmarkViewModel) throws -> NSBitmapImageRep {
-        let root = BenchmarkView(viewModel: viewModel)
+        let root = BenchmarkView(viewModel: viewModel, autoRefreshOnAppear: false)
             .frame(width: CGFloat(width), height: CGFloat(height))
         let hosting = NSHostingView(rootView: root)
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)

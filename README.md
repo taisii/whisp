@@ -22,13 +22,14 @@ Whisp is now implemented as a native macOS app in Swift.
 - `Sources/WhispApp`: native menu bar GUI app
   - `Pipeline/`: `RecordingService` / `STTService` / `PostProcessorService` / `OutputService` / `DebugCaptureService`
   - `LLM/`: provider abstraction (`LLMAPIProvider`) and provider implementations
+  - `Benchmark*View`: candidate比較中心UI（`Comparison` / `Case Integrity`）
 - `Sources/whisp`: small CLI smoke-check target
 - `Tests/WhispCoreTests`: migrated tests
 - `Tests/WhispAppTests`: app-layer tests (pipeline state transitions)
 - `docs/ARCHITECTURE.md`: current architecture and debug data model
 - `scripts/build_macos_app.sh`: local `.app` bundle builder
 - `scripts/reset_permissions.sh`: TCC reset / privacy settings helper
-- `scripts/benchmark_cases.sh`: benchmark entrypoint (`manual|stt|generation|vision|e2e`)
+- `scripts/benchmark_cases.sh`: benchmark entrypoint (`stt|generation|vision`)
 
 ## Prerequisites
 
@@ -157,9 +158,9 @@ scripts/benchmark_manual_cases.sh ~/.config/whisp/debug/manual_test_cases.jsonl 
 - intent評価は `intent_gold` / `intent_silver`（または `labels.intent_gold` / `labels.intent_silver`）を参照します。
 - 生成品質のLLM評価は `--llm-eval` / `--no-llm-eval` / `--llm-eval-model` で制御できます（デフォルトOFF）。
 
-### Component benchmarks (1:Vision / 2:STT / 3:Generation / 4:E2E)
+### Component benchmarks (1:Vision / 2:STT / 3:Generation)
 
-同じ `manual_test_cases.jsonl` を使って、4つの能力を分離して評価できます。
+同じ `manual_test_cases.jsonl` を使って、3つの能力を分離して評価できます。
 
 ```bash
 # 1) 画像 -> OCRコンテキスト抽出
@@ -171,8 +172,6 @@ scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --s
 # 3) stt_text + context -> 最終テキスト（生成）
 scripts/benchmark_cases.sh generation ~/.config/whisp/debug/manual_test_cases.jsonl
 
-# 4) 音声 + context -> 最終テキスト（E2E）
-scripts/benchmark_cases.sh e2e ~/.config/whisp/debug/manual_test_cases.jsonl --min-audio-seconds 2.0
 ```
 
 各ベンチは `--result-root` で保存先を指定できます。保存物:
@@ -183,7 +182,7 @@ scripts/benchmark_cases.sh e2e ~/.config/whisp/debug/manual_test_cases.jsonl --m
 集計の基本方針:
 - ベンチマーク画面は性能中心表示（品質 + レイテンシ分布）で、件数系は主表示しません。
 - レイテンシは平均値だけでなく `P50/P95/P99` を必須指標として扱います。
-- `generation` / `e2e` では `--llm-eval` で意図保持と幻覚率を追加評価できます。
+- `generation` では `--llm-eval` で意図保持と幻覚率を追加評価できます。
 
 キャッシュ:
 - 1/2/3 は `~/.config/whisp/benchmark_cache/` を参照し、同一入力・同一設定の結果を再利用します。
@@ -195,7 +194,45 @@ scripts/benchmark_cases.sh e2e ~/.config/whisp/debug/manual_test_cases.jsonl --m
 scripts/run_component_eval_loop.sh ~/.config/whisp/debug/manual_test_cases.jsonl
 ```
 
-`run_component_eval_loop.sh` は `1_vision/2_stt/3_generation/4_e2e` を同一 `result_root` に出力し、`overview.txt` を生成します。
+`run_component_eval_loop.sh` は `1_vision/2_stt/3_generation` を同一 `result_root` に出力し、`overview.txt` を生成します。
+
+### Candidate 比較コマンド（新UI対応）
+
+比較中心の実行フローでは、candidate を先に定義し、`BenchmarkKey` 一致の既存成功runを再利用します。
+
+```bash
+# candidate一覧
+swift run whisp --benchmark-list-candidates
+
+# STT比較（複数candidateを一括指定、既存成功runは自動スキップ）
+swift run whisp --benchmark-compare \
+  --task stt \
+  --cases ~/.config/whisp/debug/manual_test_cases.jsonl \
+  --candidate-id stt-deepgram-stream-default \
+  --candidate-id stt-apple-speech-rest-default
+
+# Generation比較（強制再実行）
+swift run whisp --benchmark-compare \
+  --task generation \
+  --cases ~/.config/whisp/debug/manual_test_cases.jsonl \
+  --candidate-id generation-gemini-2.5-flash-lite-default \
+  --force
+
+# ケース不備スキャン
+swift run whisp --benchmark-scan-integrity \
+  --task generation \
+  --cases ~/.config/whisp/debug/manual_test_cases.jsonl
+```
+
+STT candidate 設計メモ:
+- `model` は `deepgram|whisper|apple_speech` を指定
+- `deepgram` は `stt_mode=rest|stream` 対応
+- `whisper` / `apple_speech` は `stt_mode=rest` のみ対応
+
+Generation入力ポリシー:
+- `stt_text` は必須
+- 欠落時は `skipped_missing_input_stt` としてスキップ
+- `labels.transcript_*` へのフォールバックは行わない
 
 ### Runtime statistics (運用統計)
 

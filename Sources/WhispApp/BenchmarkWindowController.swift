@@ -24,7 +24,7 @@ final class BenchmarkWindowController {
         let window = NSWindow(contentViewController: hosting)
         window.title = "Whisp Benchmark"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.setContentSize(NSSize(width: 1340, height: 780))
+        window.setContentSize(NSSize(width: 1460, height: 860))
         window.center()
 
         self.window = window

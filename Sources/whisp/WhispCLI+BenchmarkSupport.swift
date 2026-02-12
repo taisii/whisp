@@ -2,7 +2,169 @@ import Foundation
 import CryptoKit
 import WhispCore
 
+final class BenchmarkRunRecorder: @unchecked Sendable {
+    private let store: BenchmarkStore
+    private var run: BenchmarkRunRecord
+
+    init(
+        runID: String,
+        kind: BenchmarkKind,
+        options: BenchmarkRunOptions,
+        candidateID: String? = nil,
+        benchmarkKey: BenchmarkKey? = nil,
+        initialMetrics: BenchmarkRunMetrics? = nil,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws {
+        self.store = BenchmarkStore(environment: environment)
+        self.run = BenchmarkRunRecord(
+            id: runID,
+            kind: kind,
+            status: .running,
+            createdAt: WhispCLI.isoNow(),
+            updatedAt: WhispCLI.isoNow(),
+            options: options,
+            candidateID: candidateID ?? options.candidateID,
+            benchmarkKey: benchmarkKey,
+            metrics: initialMetrics ?? BenchmarkRunMetrics(
+                casesTotal: 0,
+                casesSelected: 0,
+                executedCases: 0,
+                skippedCases: 0,
+                failedCases: 0
+            ),
+            paths: store.resolveRunPaths(runID: runID)
+        )
+        try store.saveRun(run)
+        try store.appendOrchestratorEvent(
+            runID: runID,
+            event: BenchmarkOrchestratorEvent(
+                runID: runID,
+                stage: .runStart,
+                status: .ok,
+                recordedAtMs: WhispCLI.nowEpochMs()
+            )
+        )
+    }
+
+    var runID: String { run.id }
+
+    func appendCaseResult(_ result: BenchmarkCaseResult) throws {
+        try store.appendCaseResult(runID: run.id, result: result)
+        try store.appendOrchestratorEvent(
+            runID: run.id,
+            event: BenchmarkOrchestratorEvent(
+                runID: run.id,
+                caseID: result.id,
+                stage: result.status == .error ? .caseFailed : .caseFinished,
+                status: WhispCLI.eventStatus(from: result.status),
+                recordedAtMs: WhispCLI.nowEpochMs(),
+                attrs: [
+                    "case_status": result.status.rawValue,
+                    "reason": result.reason ?? "",
+                ]
+            )
+        )
+    }
+
+    func appendEvent(_ event: BenchmarkCaseEvent) throws {
+        try store.appendEvent(runID: run.id, event: event)
+    }
+
+    func appendEvents(_ events: [BenchmarkCaseEvent]) throws {
+        for event in events.sorted(by: { $0.base.startedAtMs < $1.base.startedAtMs }) {
+            try appendEvent(event)
+        }
+    }
+
+    func markCaseQueued(caseID: String) throws {
+        try store.appendOrchestratorEvent(
+            runID: run.id,
+            event: BenchmarkOrchestratorEvent(
+                runID: run.id,
+                caseID: caseID,
+                stage: .caseQueued,
+                status: .ok,
+                recordedAtMs: WhispCLI.nowEpochMs()
+            )
+        )
+    }
+
+    func markCaseStarted(caseID: String) throws {
+        try store.appendOrchestratorEvent(
+            runID: run.id,
+            event: BenchmarkOrchestratorEvent(
+                runID: run.id,
+                caseID: caseID,
+                stage: .caseStarted,
+                status: .ok,
+                recordedAtMs: WhispCLI.nowEpochMs()
+            )
+        )
+    }
+
+    func saveCaseManifest(_ manifest: BenchmarkCaseManifest) throws {
+        try store.saveCaseManifest(runID: run.id, manifest: manifest)
+    }
+
+    func saveCaseMetrics(caseID: String, metrics: BenchmarkCaseMetrics) throws {
+        try store.saveCaseMetrics(runID: run.id, caseID: caseID, metrics: metrics)
+    }
+
+    @discardableResult
+    func writeCaseIOText(caseID: String, fileName: String, text: String) throws -> String {
+        try store.writeCaseIOText(runID: run.id, caseID: caseID, fileName: fileName, text: text)
+    }
+
+    @discardableResult
+    func finalize(
+        metrics: BenchmarkRunMetrics,
+        options: BenchmarkRunOptions? = nil,
+        status: BenchmarkRunStatus = .completed
+    ) throws -> BenchmarkRunRecord {
+        run.metrics = metrics
+        if let options {
+            run.options = options
+        }
+        run.status = status
+        run.updatedAt = WhispCLI.isoNow()
+        try store.saveRun(run)
+        try store.appendOrchestratorEvent(
+            runID: run.id,
+            event: BenchmarkOrchestratorEvent(
+                runID: run.id,
+                stage: status == .completed ? .runCompleted : .runFailed,
+                status: status == .completed ? .ok : .error,
+                recordedAtMs: WhispCLI.nowEpochMs(),
+                attrs: [
+                    "cases_selected": String(metrics.casesSelected),
+                    "executed_cases": String(metrics.executedCases),
+                    "skipped_cases": String(metrics.skippedCases),
+                    "failed_cases": String(metrics.failedCases),
+                ]
+            )
+        )
+        return run
+    }
+}
+
 extension WhispCLI {
+    actor BenchmarkCaseWorkQueue {
+        private let items: [ManualBenchmarkCase]
+        private var nextIndex = 0
+
+        init(items: [ManualBenchmarkCase]) {
+            self.items = items
+        }
+
+        func pop() -> (index: Int, item: ManualBenchmarkCase)? {
+            guard nextIndex < items.count else {
+                return nil
+            }
+            defer { nextIndex += 1 }
+            return (nextIndex, items[nextIndex])
+        }
+    }
+
     static func loadManualBenchmarkCases(path: String) throws -> [ManualBenchmarkCase] {
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -34,90 +196,154 @@ extension WhispCLI {
         return results
     }
 
-    static func prepareManualBenchmarkLogPaths(customDir: String?) throws -> ManualBenchmarkLogPaths {
-        let basePath: String
-        if let customDir {
-            let trimmed = customDir.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                throw AppError.invalidArgument("--benchmark-log-dir が空です")
-            }
-            basePath = trimmed
-        } else {
-            let token = benchmarkTimestampToken()
-            basePath = "/tmp/whisp-manualbench-\(token)"
-        }
-
-        try FileManager.default.createDirectory(
-            at: URL(fileURLWithPath: basePath, isDirectory: true),
-            withIntermediateDirectories: true
-        )
-        return ManualBenchmarkLogPaths(
-            baseDir: basePath,
-            caseRowsPath: URL(fileURLWithPath: basePath).appendingPathComponent("manual_case_rows.jsonl").path,
-            summaryPath: URL(fileURLWithPath: basePath).appendingPathComponent("manual_summary.json").path
-        )
-    }
-
     static func benchmarkTimestampToken() -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
         return formatter.string(from: Date())
     }
 
-    static func openWriteHandle(path: String) throws -> FileHandle {
-        let url = URL(fileURLWithPath: path)
-        if !FileManager.default.fileExists(atPath: path) {
-            FileManager.default.createFile(atPath: path, contents: Data())
-        } else {
-            try Data().write(to: url, options: .atomic)
+    static func defaultBenchmarkRunID(kind: BenchmarkKind) -> String {
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8).lowercased()
+        return "\(kind.rawValue)-\(benchmarkTimestampToken())-\(suffix)"
+    }
+
+    static func isoNow() -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: Date())
+    }
+
+    static func toBenchmarkLatencyDistribution(_ source: LatencyDistributionLog?) -> BenchmarkLatencyDistribution? {
+        guard let source else { return nil }
+        return BenchmarkLatencyDistribution(
+            avg: source.avg,
+            p50: source.p50,
+            p95: source.p95,
+            p99: source.p99
+        )
+    }
+
+    static func eventStatus(from caseStatus: BenchmarkCaseStatus) -> BenchmarkEventStatus {
+        switch caseStatus {
+        case .ok:
+            return .ok
+        case .skipped:
+            return .skipped
+        case .error:
+            return .error
         }
-        guard let handle = try? FileHandle(forWritingTo: url) else {
-            throw AppError.io("file open failed: \(path)")
+    }
+
+    static func nowEpochMs() -> Int64 {
+        Int64((Date().timeIntervalSince1970 * 1000).rounded())
+    }
+
+    static func defaultBenchmarkWorkers() -> Int {
+        max(1, min(4, ProcessInfo.processInfo.activeProcessorCount))
+    }
+
+    static func resolveBenchmarkWorkers(_ requested: Int?) -> Int {
+        guard let requested else {
+            return defaultBenchmarkWorkers()
         }
-        return handle
+        return max(1, min(32, requested))
     }
 
-    static func appendJSONLine<T: Encodable>(_ value: T, to handle: FileHandle) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = try encoder.encode(value)
-        try handle.write(contentsOf: data)
-        try handle.write(contentsOf: Data([0x0A]))
-    }
+    static func runBenchmarkCaseWorkers<Result: Sendable>(
+        cases: [ManualBenchmarkCase],
+        workers requestedWorkers: Int?,
+        operation: @escaping @Sendable (_ index: Int, _ item: ManualBenchmarkCase) async throws -> Result
+    ) async throws -> [Result] {
+        let workers = resolveBenchmarkWorkers(requestedWorkers)
+        guard !cases.isEmpty else { return [] }
+        let queue = BenchmarkCaseWorkQueue(items: cases)
 
-    static func writeJSONFile<T: Encodable>(_ value: T, path: String) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(value)
-        try data.write(to: URL(fileURLWithPath: path), options: [.atomic])
-    }
-
-    static func prepareComponentBenchmarkLogPaths(
-        customDir: String?,
-        defaultPrefix: String,
-        rowsFilename: String,
-        summaryFilename: String
-    ) throws -> ComponentBenchmarkLogPaths {
-        let basePath: String
-        if let customDir {
-            let trimmed = customDir.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty {
-                throw AppError.invalidArgument("--benchmark-log-dir が空です")
+        return try await withThrowingTaskGroup(of: [(Int, Result)].self, returning: [Result].self) { group in
+            for _ in 0..<workers {
+                group.addTask {
+                    var bucket: [(Int, Result)] = []
+                    while let payload = await queue.pop() {
+                        bucket.append((payload.index, try await operation(payload.index, payload.item)))
+                    }
+                    return bucket
+                }
             }
-            basePath = trimmed
-        } else {
-            basePath = "/tmp/\(defaultPrefix)-\(benchmarkTimestampToken())"
+
+            var rows: [(Int, Result)] = []
+            for try await chunk in group {
+                rows.append(contentsOf: chunk)
+            }
+            rows.sort { $0.0 < $1.0 }
+            return rows.map(\.1)
         }
-        try FileManager.default.createDirectory(
-            at: URL(fileURLWithPath: basePath, isDirectory: true),
-            withIntermediateDirectories: true
+    }
+
+    static func makeEventBase(
+        runID: String,
+        caseID: String,
+        stage: BenchmarkEventStage,
+        status: BenchmarkEventStatus,
+        startedAtMs: Int64? = nil,
+        endedAtMs: Int64? = nil
+    ) -> BenchmarkCaseEventBase {
+        let measuredEnd = endedAtMs ?? nowEpochMs()
+        let measuredStart = startedAtMs ?? max(Int64(0), measuredEnd - 1)
+        let start = min(measuredStart, measuredEnd)
+        let end = max(measuredEnd, start + 1)
+        let recorded = max(end, nowEpochMs())
+        return BenchmarkCaseEventBase(
+            runID: runID,
+            caseID: caseID,
+            stage: stage,
+            status: status,
+            startedAtMs: start,
+            endedAtMs: end,
+            recordedAtMs: recorded
         )
-        return ComponentBenchmarkLogPaths(
-            baseDir: basePath,
-            rowsPath: URL(fileURLWithPath: basePath).appendingPathComponent(rowsFilename).path,
-            summaryPath: URL(fileURLWithPath: basePath).appendingPathComponent(summaryFilename).path
+    }
+
+    static func makeEventBase(
+        runID: String,
+        caseID: String,
+        stage: BenchmarkEventStage,
+        status: BenchmarkEventStatus,
+        seed: Int
+    ) -> BenchmarkCaseEventBase {
+        let seedValue = Int64(seed)
+        let caseStart = seedValue > 1_000_000_000_000 ? seedValue : nowEpochMs()
+        return makeEventBase(
+            runID: runID,
+            caseID: caseID,
+            stage: stage,
+            status: status,
+            startedAtMs: caseStart,
+            endedAtMs: nowEpochMs()
         )
+    }
+
+    @discardableResult
+    static func saveBenchmarkRun(
+        runID: String,
+        kind: BenchmarkKind,
+        options: BenchmarkRunOptions,
+        metrics: BenchmarkRunMetrics,
+        caseResults: [BenchmarkCaseResult],
+        events: [BenchmarkCaseEvent],
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> BenchmarkRunRecord {
+        let recorder = try BenchmarkRunRecorder(
+            runID: runID,
+            kind: kind,
+            options: options,
+            initialMetrics: metrics,
+            environment: environment
+        )
+        for result in caseResults {
+            try recorder.appendCaseResult(result)
+        }
+        try recorder.appendEvents(events)
+        return try recorder.finalize(metrics: metrics, options: options, status: .completed)
     }
 
     static func benchmarkCacheRootURL() -> URL {
@@ -211,36 +437,13 @@ extension WhispCLI {
             .lowercased()
     }
 
-    @discardableResult
-    static func importLegacyBenchmarkLogs(
-        kind: BenchmarkKind,
-        rowsPath: String,
-        summaryPath: String,
-        logDirectoryPath: String,
-        options: BenchmarkRunOptions
-    ) -> String? {
-        do {
-            let store = BenchmarkStore()
-            let importer = BenchmarkLegacyImporter(store: store)
-            let run = try importer.importRun(
-                input: BenchmarkLegacyImportInput(
-                    kind: kind,
-                    rowsPath: rowsPath,
-                    summaryPath: summaryPath,
-                    logDirectoryPath: logDirectoryPath,
-                    options: options
-                )
-            )
-            print("benchmark_run_id: \(run.id)")
-            let manifestPath = URL(fileURLWithPath: store.runsDirectoryPath, isDirectory: true)
-                .appendingPathComponent(run.id, isDirectory: true)
-                .appendingPathComponent("manifest.json", isDirectory: false)
-                .path
-            print("benchmark_manifest: \(manifestPath)")
-            return run.id
-        } catch {
-            print("benchmark_import_error: \(error.localizedDescription)")
-            return nil
-        }
+    static func benchmarkManifestPath(
+        runID: String,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String {
+        URL(fileURLWithPath: BenchmarkStore(environment: environment).runsDirectoryPath, isDirectory: true)
+            .appendingPathComponent(runID, isDirectory: true)
+            .appendingPathComponent("manifest.json", isDirectory: false)
+            .path
     }
 }
