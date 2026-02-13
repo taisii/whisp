@@ -320,7 +320,8 @@ extension WhispCLI {
             modelOverride: nil,
             promptTemplateOverride: nil,
             promptName: nil,
-            promptHash: nil
+            promptHash: nil,
+            candidateSnapshot: nil
         )
     }
 

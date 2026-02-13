@@ -277,7 +277,8 @@ extension WhispCLI {
             modelOverride: parsedModel,
             promptTemplateOverride: promptTemplate,
             promptName: candidate.promptName,
-            promptHash: candidate.generationPromptHash ?? promptTemplateHash(promptTemplate)
+            promptHash: candidate.generationPromptHash ?? promptTemplateHash(promptTemplate),
+            candidateSnapshot: makeCandidateSnapshot(candidate)
         )
     }
 
@@ -366,7 +367,9 @@ extension WhispCLI {
             runtimeOptionsHash: runtimeHash,
             evaluatorVersion: benchmarkKey.evaluatorVersion,
             codeVersion: benchmarkKey.codeVersion,
-            benchmarkKey: benchmarkKey
+            benchmarkKey: benchmarkKey,
+            pairCandidateASnapshot: makeCandidateSnapshot(candidateA),
+            pairCandidateBSnapshot: makeCandidateSnapshot(candidateB)
         )
     }
 
@@ -561,5 +564,17 @@ extension WhispCLI {
             throw AppError.invalidArgument("candidate option \(key) は数値で指定してください")
         }
         return value
+    }
+
+    private static func makeCandidateSnapshot(_ candidate: BenchmarkCandidate) -> BenchmarkCandidateSnapshot {
+        BenchmarkCandidateSnapshot(
+            id: candidate.id,
+            model: candidate.model,
+            promptName: candidate.promptName,
+            generationPromptHash: candidate.generationPromptHash,
+            generationPromptTemplate: candidate.generationPromptTemplate,
+            options: candidate.options,
+            capturedAt: WhispTime.isoNow()
+        )
     }
 }

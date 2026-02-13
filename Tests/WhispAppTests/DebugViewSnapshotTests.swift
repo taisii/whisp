@@ -270,6 +270,38 @@ final class DebugViewSnapshotTests: XCTestCase {
             try store.appendLog(captureID: captureID, log: log)
         }
 
+        let failedCaptureID = try store.saveRecording(
+            runID: "run-snapshot-failed",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 2, count: 1600),
+            llmModel: "gpt-5-nano",
+            appName: "Xcode",
+            accessibilitySnapshot: snapshot
+        )
+        try store.updateResult(
+            captureID: failedCaptureID,
+            sttText: "失敗したSTT",
+            outputText: nil,
+            status: "failed",
+            errorMessage: "network timeout"
+        )
+
+        let skippedCaptureID = try store.saveRecording(
+            runID: "run-snapshot-skipped",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 3, count: 1600),
+            llmModel: "gpt-5-nano",
+            appName: "Xcode",
+            accessibilitySnapshot: snapshot
+        )
+        try store.updateResult(
+            captureID: skippedCaptureID,
+            sttText: nil,
+            outputText: nil,
+            status: "skipped",
+            skipReason: "empty_stt"
+        )
+
         return SnapshotSource(store: store, captureID: captureID)
     }
 }

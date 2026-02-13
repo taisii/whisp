@@ -40,6 +40,34 @@ public struct BenchmarkCandidate: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+public struct BenchmarkCandidateSnapshot: Codable, Equatable, Sendable {
+    public let id: String
+    public let model: String
+    public let promptName: String?
+    public let generationPromptHash: String?
+    public let generationPromptTemplate: String?
+    public let options: [String: String]
+    public let capturedAt: String
+
+    public init(
+        id: String,
+        model: String,
+        promptName: String? = nil,
+        generationPromptHash: String? = nil,
+        generationPromptTemplate: String? = nil,
+        options: [String: String],
+        capturedAt: String
+    ) {
+        self.id = id
+        self.model = model
+        self.promptName = promptName
+        self.generationPromptHash = generationPromptHash
+        self.generationPromptTemplate = generationPromptTemplate
+        self.options = options
+        self.capturedAt = capturedAt
+    }
+}
+
 public struct BenchmarkKey: Codable, Equatable, Hashable, Sendable {
     public let task: BenchmarkKind
     public let datasetPath: String
@@ -477,6 +505,7 @@ public struct BenchmarkGenerationRunOptions: Codable, Equatable, Sendable {
     public var llmEvalEnabled: Bool?
     public var llmEvalModel: String?
     public var llmModel: String?
+    public var candidateSnapshot: BenchmarkCandidateSnapshot?
 
     public init(
         common: BenchmarkRunCommonOptions,
@@ -486,7 +515,8 @@ public struct BenchmarkGenerationRunOptions: Codable, Equatable, Sendable {
         requireContext: Bool? = nil,
         llmEvalEnabled: Bool? = nil,
         llmEvalModel: String? = nil,
-        llmModel: String? = nil
+        llmModel: String? = nil,
+        candidateSnapshot: BenchmarkCandidateSnapshot? = nil
     ) {
         self.common = common
         self.candidateID = candidateID
@@ -496,6 +526,7 @@ public struct BenchmarkGenerationRunOptions: Codable, Equatable, Sendable {
         self.llmEvalEnabled = llmEvalEnabled
         self.llmEvalModel = llmEvalModel
         self.llmModel = llmModel
+        self.candidateSnapshot = candidateSnapshot
     }
 }
 
@@ -505,19 +536,25 @@ public struct BenchmarkGenerationPairwiseRunOptions: Codable, Equatable, Sendabl
     public var pairCandidateBID: String
     public var pairJudgeModel: String
     public var llmModel: String?
+    public var pairCandidateASnapshot: BenchmarkCandidateSnapshot?
+    public var pairCandidateBSnapshot: BenchmarkCandidateSnapshot?
 
     public init(
         common: BenchmarkRunCommonOptions,
         pairCandidateAID: String,
         pairCandidateBID: String,
         pairJudgeModel: String,
-        llmModel: String? = nil
+        llmModel: String? = nil,
+        pairCandidateASnapshot: BenchmarkCandidateSnapshot? = nil,
+        pairCandidateBSnapshot: BenchmarkCandidateSnapshot? = nil
     ) {
         self.common = common
         self.pairCandidateAID = pairCandidateAID
         self.pairCandidateBID = pairCandidateBID
         self.pairJudgeModel = pairJudgeModel
         self.llmModel = llmModel
+        self.pairCandidateASnapshot = pairCandidateASnapshot
+        self.pairCandidateBSnapshot = pairCandidateBSnapshot
     }
 }
 

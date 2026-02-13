@@ -400,6 +400,7 @@ struct GenerationBenchmarkOptions {
     let promptTemplateOverride: String?
     let promptName: String?
     let promptHash: String?
+    let candidateSnapshot: BenchmarkCandidateSnapshot?
 }
 
 enum BenchmarkCompareFlow: String, Codable, CaseIterable, Sendable {
@@ -447,6 +448,8 @@ struct GenerationPairwiseCompareOptions {
     let evaluatorVersion: String?
     let codeVersion: String?
     let benchmarkKey: BenchmarkKey?
+    let pairCandidateASnapshot: BenchmarkCandidateSnapshot?
+    let pairCandidateBSnapshot: BenchmarkCandidateSnapshot?
 }
 
 struct BenchmarkIntegrityScanOptions {

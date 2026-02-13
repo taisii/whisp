@@ -21,6 +21,8 @@ struct BenchmarkWorkspaceView: View {
                         GenerationSingleBenchmarkView(viewModel: viewModel)
                     case .generationBattle:
                         GenerationBattleBenchmarkView(viewModel: viewModel)
+                    case .candidateManagement:
+                        CandidateManagementView(viewModel: viewModel)
                     case .integrity:
                         IntegrityBenchmarkView(viewModel: viewModel)
                     }
@@ -35,6 +37,7 @@ struct BenchmarkWorkspaceView: View {
             if viewModel.isCaseDetailPresented
                 || viewModel.isPairwiseCaseDetailPresented
                 || viewModel.isPromptCandidateModalPresented
+                || viewModel.isCandidateDetailModalPresented
                 || viewModel.isIntegrityCaseDetailPresented
             {
                 BenchmarkGlobalModalOverlay(viewModel: viewModel)
@@ -49,6 +52,7 @@ struct BenchmarkWorkspaceView: View {
         .animation(.easeInOut(duration: 0.15), value: viewModel.isCaseDetailPresented)
         .animation(.easeInOut(duration: 0.15), value: viewModel.isPairwiseCaseDetailPresented)
         .animation(.easeInOut(duration: 0.15), value: viewModel.isPromptCandidateModalPresented)
+        .animation(.easeInOut(duration: 0.15), value: viewModel.isCandidateDetailModalPresented)
         .animation(.easeInOut(duration: 0.15), value: viewModel.isIntegrityCaseDetailPresented)
         .frame(minWidth: 1420, minHeight: 860)
     }

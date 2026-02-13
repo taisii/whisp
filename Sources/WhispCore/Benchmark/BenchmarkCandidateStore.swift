@@ -5,6 +5,7 @@ public final class BenchmarkCandidateStore: @unchecked Sendable {
     let fileManager = FileManager.default
     let directoryURL: URL
     let fileURL: URL
+    let initialSeedMarkerURL: URL
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let paths = try? WhispPaths(environment: environment, allowTemporaryFallback: true)
@@ -13,9 +14,26 @@ public final class BenchmarkCandidateStore: @unchecked Sendable {
             ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("whisp-benchmark-candidates", isDirectory: true)
         fileURL = directoryURL.appendingPathComponent("candidates.json", isDirectory: false)
+        initialSeedMarkerURL = directoryURL.appendingPathComponent("initial_seed_done", isDirectory: false)
     }
 
     public var candidatesFilePath: String { fileURL.path }
+
+    public func hasCompletedInitialSeed() throws -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        try ensureDirectoryExists()
+        return fileManager.fileExists(atPath: initialSeedMarkerURL.path)
+    }
+
+    public func markInitialSeedCompleted() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try ensureDirectoryExists()
+        if !fileManager.fileExists(atPath: initialSeedMarkerURL.path) {
+            try Data("done".utf8).write(to: initialSeedMarkerURL, options: [.atomic])
+        }
+    }
 
     public func listCandidates() throws -> [BenchmarkCandidate] {
         lock.lock()

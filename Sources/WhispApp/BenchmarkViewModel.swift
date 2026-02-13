@@ -8,6 +8,7 @@ enum BenchmarkDashboardTab: String, CaseIterable, Identifiable {
     case stt = "STT"
     case generationSingle = "Generation"
     case generationBattle = "Generation対戦"
+    case candidateManagement = "候補管理"
     case integrity = "Case Integrity"
 
     var id: String { rawValue }
@@ -16,7 +17,7 @@ enum BenchmarkDashboardTab: String, CaseIterable, Identifiable {
         switch self {
         case .stt, .integrity:
             return .stt
-        case .generationSingle, .generationBattle:
+        case .generationSingle, .generationBattle, .candidateManagement:
             return .generation
         }
     }
@@ -29,10 +30,22 @@ enum BenchmarkDashboardTab: String, CaseIterable, Identifiable {
             return .generationSingle
         case .generationBattle:
             return .generationBattle
+        case .candidateManagement:
+            return nil
         case .integrity:
             return nil
         }
     }
+}
+
+struct BenchmarkCandidateManagementRow: Identifiable, Equatable {
+    let candidate: BenchmarkCandidate
+    let wins: Int
+    let losses: Int
+    let ties: Int
+    let winRate: Double?
+
+    var id: String { candidate.id }
 }
 
 struct BenchmarkComparisonRow: Identifiable, Equatable {
@@ -174,6 +187,12 @@ enum PromptCandidateModalMode {
     case edit
 }
 
+enum CandidateDetailModalMode {
+    case view
+    case edit
+    case create
+}
+
 struct PromptVariableItem: Identifiable, Equatable {
     let id: String
     let token: String
@@ -236,6 +255,11 @@ final class BenchmarkViewModel: ObservableObject {
     @Published var promptCandidateDraftRequireContext = false
     @Published var promptCandidateDraftUseCache = true
     @Published var promptCandidateDraftValidationError = ""
+    @Published var candidateManagementRows: [BenchmarkCandidateManagementRow] = []
+    @Published var selectedCandidateManagementID: String?
+    @Published var isCandidateDetailModalPresented = false
+    @Published var candidateDetailModalMode: CandidateDetailModalMode = .view
+    @Published var isCandidateDeleteConfirmationPresented = false
 
     private let store: BenchmarkStore
     private let candidateStore: BenchmarkCandidateStore
@@ -341,6 +365,14 @@ final class BenchmarkViewModel: ObservableObject {
 
     var promptVariableItems: [PromptVariableItem] {
         Self.generationPromptVariables
+    }
+
+    var isCandidateDetailEditable: Bool {
+        candidateDetailModalMode == .edit || candidateDetailModalMode == .create
+    }
+
+    var canDeleteCandidateInDetail: Bool {
+        candidateDetailModalMode == .view || candidateDetailModalMode == .edit
     }
 
     func refresh() {
@@ -814,6 +846,111 @@ final class BenchmarkViewModel: ObservableObject {
         )
     }
 
+    func openCreateCandidateDetailModal() {
+        let baseCandidate = generationPairCandidateA
+        let defaultModel = resolveDefaultPromptCandidateModel(baseCandidate: baseCandidate)
+        let candidateID = makeAutoPromptCandidateID(model: defaultModel)
+        candidateDetailModalMode = .create
+        isCandidateDeleteConfirmationPresented = false
+        presentCandidateDraft(
+            candidateID: candidateID,
+            model: defaultModel,
+            promptName: baseCandidate?.promptName ?? "New Prompt",
+            promptTemplate: baseCandidate?.generationPromptTemplate,
+            options: baseCandidate?.options
+        )
+        selectedCandidateManagementID = candidateID
+        isCandidateDetailModalPresented = true
+    }
+
+    func openCandidateDetailModal(candidateID: String) {
+        guard let candidate = generationCandidates.first(where: { $0.id == candidateID }) else {
+            setStatus("候補が見つかりません。", isError: true)
+            return
+        }
+        guard let parsedModel = LLMModelCatalog.resolveRegistered(rawValue: candidate.model) else {
+            setStatus("candidate model が不正です: \(candidate.model)", isError: true)
+            return
+        }
+        candidateDetailModalMode = .view
+        isCandidateDeleteConfirmationPresented = false
+        selectedCandidateManagementID = candidate.id
+        presentCandidateDraft(
+            candidateID: candidate.id,
+            model: parsedModel,
+            promptName: candidate.promptName ?? candidate.id,
+            promptTemplate: candidate.generationPromptTemplate,
+            options: candidate.options
+        )
+        isCandidateDetailModalPresented = true
+    }
+
+    func beginCandidateDetailEditing() {
+        guard candidateDetailModalMode == .view else { return }
+        candidateDetailModalMode = .edit
+    }
+
+    func cancelCandidateDetailEditing() {
+        if candidateDetailModalMode == .create {
+            dismissCandidateDetailModal()
+            return
+        }
+        guard let selectedCandidateManagementID,
+              let candidate = generationCandidates.first(where: { $0.id == selectedCandidateManagementID }),
+              let parsedModel = LLMModelCatalog.resolveRegistered(rawValue: candidate.model)
+        else {
+            dismissCandidateDetailModal()
+            return
+        }
+        candidateDetailModalMode = .view
+        presentCandidateDraft(
+            candidateID: candidate.id,
+            model: parsedModel,
+            promptName: candidate.promptName ?? candidate.id,
+            promptTemplate: candidate.generationPromptTemplate,
+            options: candidate.options
+        )
+    }
+
+    func dismissCandidateDetailModal() {
+        isCandidateDetailModalPresented = false
+        isCandidateDeleteConfirmationPresented = false
+        promptCandidateDraftValidationError = ""
+    }
+
+    func requestCandidateDeleteConfirmation() {
+        guard canDeleteCandidateInDetail else { return }
+        isCandidateDeleteConfirmationPresented = true
+    }
+
+    func deleteCandidateFromDetail() {
+        guard let selectedCandidateManagementID else {
+            setStatus("削除対象が見つかりません。", isError: true)
+            return
+        }
+        do {
+            try candidateStore.deleteCandidate(id: selectedCandidateManagementID)
+            selectedCandidateIDs.remove(selectedCandidateManagementID)
+            if selectedGenerationSingleCandidateID == selectedCandidateManagementID {
+                selectedGenerationSingleCandidateID = nil
+            }
+            if generationPairCandidateAID == selectedCandidateManagementID {
+                generationPairCandidateAID = nil
+            }
+            if generationPairCandidateBID == selectedCandidateManagementID {
+                generationPairCandidateBID = nil
+            }
+            if selectedComparisonCandidateID == selectedCandidateManagementID {
+                selectedComparisonCandidateID = nil
+            }
+            dismissCandidateDetailModal()
+            try reloadAll()
+            setStatus("候補を削除しました。", isError: false, clearErrorLog: true)
+        } catch {
+            setStatus("候補削除に失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
+        }
+    }
+
     func openEditPromptCandidateModal(candidateID: String? = nil) {
         guard selectedTask == .generation else { return }
         let targetID = candidateID ?? generationPairCandidateAID
@@ -855,6 +992,49 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     func savePromptCandidateModal() {
+        saveGenerationCandidate(mode: promptCandidateModalMode) { saved in
+            isPromptCandidateModalPresented = false
+            applySavedCandidateSelection(saved)
+            setStatus("Prompt candidate を保存しました。", isError: false, clearErrorLog: true)
+        }
+    }
+
+    func saveCandidateDetailModal() {
+        let mode: PromptCandidateModalMode
+        switch candidateDetailModalMode {
+        case .create:
+            mode = .create
+        case .edit:
+            mode = .edit
+        case .view:
+            return
+        }
+        saveGenerationCandidate(mode: mode) { saved in
+            selectedCandidateManagementID = saved.id
+            applySavedCandidateSelection(saved)
+            candidateDetailModalMode = .view
+            isCandidateDeleteConfirmationPresented = false
+            setStatus("候補を保存しました。", isError: false, clearErrorLog: true)
+        }
+    }
+
+    private func applySavedCandidateSelection(_ saved: BenchmarkCandidate) {
+        selectedTask = .generation
+        selectedCandidateIDs.insert(saved.id)
+        selectedGenerationSingleCandidateID = saved.id
+        selectedComparisonCandidateID = saved.id
+        if generationPairCandidateAID == nil {
+            generationPairCandidateAID = saved.id
+        } else if generationPairCandidateBID == nil, generationPairCandidateAID != saved.id {
+            generationPairCandidateBID = saved.id
+        }
+        try? reloadGenerationPairwiseState()
+    }
+
+    private func saveGenerationCandidate(
+        mode: PromptCandidateModalMode,
+        onSuccess: (BenchmarkCandidate) -> Void
+    ) {
         let candidateID = promptCandidateDraftCandidateID.trimmingCharacters(in: .whitespacesAndNewlines)
         let promptName = promptCandidateDraftName.trimmingCharacters(in: .whitespacesAndNewlines)
         let promptTemplate = canonicalPromptTemplate(promptCandidateDraftTemplate)
@@ -873,11 +1053,11 @@ final class BenchmarkViewModel: ObservableObject {
         do {
             let all = try candidateStore.listCandidates()
             let existing = all.first { $0.id == candidateID }
-            if promptCandidateModalMode == .create, existing != nil {
+            if mode == .create, existing != nil {
                 promptCandidateDraftValidationError = "candidate_id が重複しています: \(candidateID)"
                 return
             }
-            if promptCandidateModalMode == .edit, existing == nil {
+            if mode == .edit, existing == nil {
                 promptCandidateDraftValidationError = "編集対象candidateが見つかりません。"
                 return
             }
@@ -900,22 +1080,11 @@ final class BenchmarkViewModel: ObservableObject {
             )
             _ = try candidateStore.upsertCandidate(saved)
             try reloadAll()
-            selectedTask = .generation
-            selectedCandidateIDs.insert(saved.id)
-            selectedGenerationSingleCandidateID = saved.id
-            selectedComparisonCandidateID = saved.id
-            if generationPairCandidateAID == nil {
-                generationPairCandidateAID = saved.id
-            } else if generationPairCandidateBID == nil, generationPairCandidateAID != saved.id {
-                generationPairCandidateBID = saved.id
-            }
-            try? reloadGenerationPairwiseState()
             promptCandidateDraftValidationError = ""
-            isPromptCandidateModalPresented = false
-            setStatus("Prompt candidate を保存しました。", isError: false, clearErrorLog: true)
+            onSuccess(saved)
         } catch {
             promptCandidateDraftValidationError = error.localizedDescription
-            setStatus("Prompt candidate 保存に失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
+            setStatus("候補保存に失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
         }
     }
 
@@ -934,9 +1103,11 @@ final class BenchmarkViewModel: ObservableObject {
         clearCaseDetail()
         clearPairwiseCaseDetail()
         clearIntegrityCaseDetail()
+        dismissCandidateDetailModal()
         do {
             try loadComparisonRows()
             try reloadGenerationPairwiseState()
+            try loadCandidateManagementRows()
             try loadIntegrityIssues()
             try loadIntegrityCaseRows()
         } catch {
@@ -956,6 +1127,7 @@ final class BenchmarkViewModel: ObservableObject {
         }
         try loadComparisonRows()
         try reloadGenerationPairwiseState()
+        try loadCandidateManagementRows()
         try loadIntegrityIssues()
         try loadIntegrityCaseRows()
     }
@@ -970,6 +1142,9 @@ final class BenchmarkViewModel: ObservableObject {
             selectedTask = .generation
             ensureGenerationSingleCandidateSelection()
         case .generationBattle:
+            clearIntegrityCaseDetail()
+            selectedTask = .generation
+        case .candidateManagement:
             clearIntegrityCaseDetail()
             selectedTask = .generation
         case .integrity:
@@ -990,6 +1165,9 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     private func ensureDefaultCandidatesIfNeeded() throws {
+        if try candidateStore.hasCompletedInitialSeed() {
+            return
+        }
         let existing = try candidateStore.listCandidates()
         let now = WhispTime.isoNow()
         let defaultGenerationModel = LLMModelCatalog.defaultModel(for: .benchmarkPromptCandidate)
@@ -1040,18 +1218,17 @@ final class BenchmarkViewModel: ObservableObject {
 
         if existing.isEmpty {
             try candidateStore.saveCandidates(defaults)
-            return
+        } else {
+            var merged = existing
+            let existingIDs = Set(existing.map(\.id))
+            for candidate in defaults where !existingIDs.contains(candidate.id) {
+                merged.append(candidate)
+            }
+            if merged.count != existing.count {
+                try candidateStore.saveCandidates(merged)
+            }
         }
-
-        var merged = existing
-        let existingIDs = Set(existing.map(\.id))
-        for candidate in defaults where !existingIDs.contains(candidate.id) {
-            merged.append(candidate)
-        }
-
-        if merged.count != existing.count {
-            try candidateStore.saveCandidates(merged)
-        }
+        try candidateStore.markInitialSeedCompleted()
     }
 
     private func normalizeGenerationCandidatesIfNeeded() throws {
@@ -1112,7 +1289,7 @@ final class BenchmarkViewModel: ObservableObject {
 
     private func loadComparisonRows() throws {
         let allRuns = try store.listRuns(limit: 2_000)
-        let normalizedDatasetPath = benchmarkDatasetPath
+        let normalizedDatasetPath = normalizePath(benchmarkDatasetPath)
         let currentDatasetHash = datasetHashIfExists(path: normalizedDatasetPath)
 
         comparisonRows = taskCandidates.map { candidate in
@@ -1170,6 +1347,88 @@ final class BenchmarkViewModel: ObservableObject {
             selectedComparisonCandidateID = comparisonRows.first?.candidate.id
             reloadCaseBreakdown()
         }
+    }
+
+    private func loadCandidateManagementRows() throws {
+        let generation = generationCandidates
+        guard !generation.isEmpty else {
+            candidateManagementRows = []
+            selectedCandidateManagementID = nil
+            return
+        }
+
+        struct CandidateWinStats {
+            var wins = 0
+            var losses = 0
+            var ties = 0
+        }
+
+        var statsMap: [String: CandidateWinStats] = [:]
+        let runs = try store.listRuns(limit: 5_000)
+        let pairwiseRuns = runs.filter {
+            $0.kind == .generation &&
+            $0.status == .completed &&
+            $0.options.compareMode == .pairwise
+        }
+
+        for run in pairwiseRuns {
+            guard let candidateAID = run.options.pairCandidateAID,
+                  let candidateBID = run.options.pairCandidateBID,
+                  let summary = run.metrics.pairwiseSummary
+            else {
+                continue
+            }
+            var aStats = statsMap[candidateAID] ?? CandidateWinStats()
+            aStats.wins += summary.overallAWins
+            aStats.losses += summary.overallBWins
+            aStats.ties += summary.overallTies
+            statsMap[candidateAID] = aStats
+
+            var bStats = statsMap[candidateBID] ?? CandidateWinStats()
+            bStats.wins += summary.overallBWins
+            bStats.losses += summary.overallAWins
+            bStats.ties += summary.overallTies
+            statsMap[candidateBID] = bStats
+        }
+
+        candidateManagementRows = generation.map { candidate in
+            let stats = statsMap[candidate.id] ?? CandidateWinStats()
+            let total = stats.wins + stats.losses + stats.ties
+            let winRate = total > 0 ? Double(stats.wins) / Double(total) : nil
+            return BenchmarkCandidateManagementRow(
+                candidate: candidate,
+                wins: stats.wins,
+                losses: stats.losses,
+                ties: stats.ties,
+                winRate: winRate
+            )
+        }
+        .sorted { lhs, rhs in
+            switch (lhs.winRate, rhs.winRate) {
+            case let (.some(left), .some(right)):
+                if left != right { return left > right }
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            case (.none, .none):
+                break
+            }
+            if lhs.wins != rhs.wins {
+                return lhs.wins > rhs.wins
+            }
+            if lhs.candidate.updatedAt != rhs.candidate.updatedAt {
+                return lhs.candidate.updatedAt > rhs.candidate.updatedAt
+            }
+            return lhs.candidate.id < rhs.candidate.id
+        }
+
+        if let selectedCandidateManagementID,
+           candidateManagementRows.contains(where: { $0.id == selectedCandidateManagementID })
+        {
+            return
+        }
+        selectedCandidateManagementID = candidateManagementRows.first?.id
     }
 
     private func reloadCaseBreakdown() {
@@ -1955,8 +2214,25 @@ final class BenchmarkViewModel: ObservableObject {
         promptTemplate: String?,
         options: [String: String]?
     ) {
-        let template = canonicalPromptTemplate(promptTemplate ?? defaultPostProcessPromptTemplate)
         promptCandidateModalMode = mode
+        presentCandidateDraft(
+            candidateID: candidateID,
+            model: model,
+            promptName: promptName,
+            promptTemplate: promptTemplate,
+            options: options
+        )
+        isPromptCandidateModalPresented = true
+    }
+
+    private func presentCandidateDraft(
+        candidateID: String,
+        model: LLMModel,
+        promptName: String,
+        promptTemplate: String?,
+        options: [String: String]?
+    ) {
+        let template = canonicalPromptTemplate(promptTemplate ?? defaultPostProcessPromptTemplate)
         promptCandidateDraftCandidateID = candidateID
         promptCandidateDraftModel = model
         promptCandidateDraftName = promptName
@@ -1964,7 +2240,6 @@ final class BenchmarkViewModel: ObservableObject {
         promptCandidateDraftRequireContext = boolOption(options, key: "require_context", defaultValue: false)
         promptCandidateDraftUseCache = boolOption(options, key: "use_cache", defaultValue: true)
         promptCandidateDraftValidationError = ""
-        isPromptCandidateModalPresented = true
     }
 
     private func resolveDefaultPromptCandidateModel(baseCandidate: BenchmarkCandidate?) -> LLMModel {

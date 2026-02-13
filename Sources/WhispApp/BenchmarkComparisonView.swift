@@ -166,14 +166,17 @@ struct BenchmarkComparisonView: View {
                 Button {
                     viewModel.openCreatePromptCandidateModal()
                 } label: {
-                    Label("新規Prompt Candidate", systemImage: "plus")
+                    Label("クイック作成", systemImage: "plus")
                 }
                 .buttonStyle(.bordered)
                 .disabled(viewModel.isExecutingBenchmark)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .background(Color(NSColor.windowBackgroundColor))
+        .zIndex(1)
     }
 
     private var generationPairwiseBody: some View {
@@ -256,14 +259,6 @@ struct BenchmarkComparisonView: View {
                     detailLine("prompt_hash", row.candidate.generationPromptHash ?? "-")
                     detailLine("latest_run", row.latestRunID ?? "-")
                     detailLine("last_run_at", row.lastRunAt ?? "-")
-                    if row.candidate.task == .generation {
-                        Button {
-                            viewModel.openEditPromptCandidateModal()
-                        } label: {
-                            Label("プロンプト編集", systemImage: "square.and.pencil")
-                        }
-                        .buttonStyle(.bordered)
-                    }
 
                     Divider()
                     Text("options")
@@ -813,12 +808,7 @@ struct BenchmarkComparisonView: View {
     private func candidateDisplayLabel(_ candidate: BenchmarkCandidate) -> String {
         let promptName = (candidate.promptName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = promptName.isEmpty ? candidate.id : promptName
-        return "\(displayName)（\(candidate.model)）#\(shortCandidateID(candidate.id))"
-    }
-
-    private func shortCandidateID(_ candidateID: String) -> String {
-        let rawID = candidateID.trimmingCharacters(in: .whitespacesAndNewlines)
-        return rawID.isEmpty ? "-" : String(rawID.prefix(8))
+        return "\(displayName)（\(candidate.model)）"
     }
 
     @ViewBuilder
@@ -893,6 +883,16 @@ struct BenchmarkGlobalModalOverlay: View {
                 ) {
                     BenchmarkPromptCandidateModal(viewModel: viewModel)
                 }
+            } else if viewModel.isCandidateDetailModalPresented {
+                BenchmarkOverlayModalCard(
+                    minWidth: 760,
+                    idealWidth: 820,
+                    maxWidth: 920,
+                    minHeight: 600,
+                    maxHeight: 760
+                ) {
+                    CandidateDetailModal(viewModel: viewModel)
+                }
             } else if viewModel.isPairwiseCaseDetailPresented {
                 BenchmarkOverlayModalCard(
                     minWidth: 980,
@@ -930,6 +930,10 @@ struct BenchmarkGlobalModalOverlay: View {
     private func dismissOnBackgroundTap() {
         if viewModel.isPromptCandidateModalPresented {
             viewModel.dismissPromptCandidateModal()
+            return
+        }
+        if viewModel.isCandidateDetailModalPresented {
+            viewModel.dismissCandidateDetailModal()
             return
         }
         if viewModel.isPairwiseCaseDetailPresented {
@@ -990,8 +994,6 @@ private struct BenchmarkOverlayModalCard<Content: View>: View {
 private struct BenchmarkPromptCandidateModal: View {
     @ObservedObject var viewModel: BenchmarkViewModel
 
-    private let models: [LLMModel] = LLMModelCatalog.selectableModelIDs(for: .benchmarkPromptCandidate)
-
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -999,59 +1001,19 @@ private struct BenchmarkPromptCandidateModal: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    groupBox {
-                        row("candidate_id") {
-                            Text(viewModel.promptCandidateDraftCandidateID)
-                                .font(.system(size: 12, design: .monospaced))
-                                .textSelection(.enabled)
+                    CandidateFormFields(
+                        candidateID: $viewModel.promptCandidateDraftCandidateID,
+                        model: $viewModel.promptCandidateDraftModel,
+                        promptName: $viewModel.promptCandidateDraftName,
+                        promptTemplate: $viewModel.promptCandidateDraftTemplate,
+                        requireContext: $viewModel.promptCandidateDraftRequireContext,
+                        useCache: $viewModel.promptCandidateDraftUseCache,
+                        variableItems: viewModel.promptVariableItems,
+                        editable: true,
+                        onAppendVariable: { token in
+                            viewModel.appendPromptVariableToDraft(token)
                         }
-                        row("model") {
-                            Picker("model", selection: $viewModel.promptCandidateDraftModel) {
-                                ForEach(models, id: \.self) { model in
-                                    Text(model.rawValue).tag(model)
-                                }
-                            }
-                            .labelsHidden()
-                            .frame(width: 260)
-                        }
-                        row("prompt_name") {
-                            TextField("例: concise", text: $viewModel.promptCandidateDraftName)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(size: 12, design: .monospaced))
-                        }
-                    }
-
-                    groupBox {
-                        Text("prompt_template")
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        TextEditor(text: $viewModel.promptCandidateDraftTemplate)
-                            .font(.system(size: 12, design: .monospaced))
-                            .frame(minHeight: 260)
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                            }
-                    }
-
-                    groupBox {
-                        Text("利用可能な変数")
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-
-                        ForEach(viewModel.promptVariableItems) { item in
-                            variableRow(item)
-                        }
-
-                        Text("未取得データは空文字で置換されます。")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
-
-                    groupBox {
-                        Toggle("require_context", isOn: $viewModel.promptCandidateDraftRequireContext)
-                        Toggle("use_cache", isOn: $viewModel.promptCandidateDraftUseCache)
-                    }
+                    )
 
                     if !viewModel.promptCandidateDraftValidationError.isEmpty {
                         Text(viewModel.promptCandidateDraftValidationError)
@@ -1097,50 +1059,6 @@ private struct BenchmarkPromptCandidateModal: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
-    }
-
-    private func row<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(label)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 130, alignment: .leading)
-            content()
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func groupBox<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            content()
-        }
-        .padding(12)
-        .background(Color(NSColor.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-        }
-    }
-
-    private func variableRow(_ item: PromptVariableItem) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.token)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                Text(item.description)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                Text("例: \(item.sample)")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            Button("挿入") {
-                viewModel.appendPromptVariableToDraft(item.token)
-            }
-            .buttonStyle(.bordered)
-        }
     }
 }
 
@@ -1238,12 +1156,7 @@ struct BenchmarkPairwiseCaseDetailModal: View {
     private func candidateDisplayLabel(_ candidate: BenchmarkCandidate) -> String {
         let promptName = (candidate.promptName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = promptName.isEmpty ? candidate.id : promptName
-        return "\(displayName)（\(candidate.model)）#\(shortCandidateID(candidate.id))"
-    }
-
-    private func shortCandidateID(_ candidateID: String) -> String {
-        let rawID = candidateID.trimmingCharacters(in: .whitespacesAndNewlines)
-        return rawID.isEmpty ? "-" : String(rawID.prefix(8))
+        return "\(displayName)（\(candidate.model)）"
     }
 
     private func outputComparisonTab(_ detail: BenchmarkPairwiseCaseDetail) -> some View {

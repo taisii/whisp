@@ -150,7 +150,7 @@ final class DebugViewModel: ObservableObject {
     func refresh() {
         do {
             eventAnalysisCache.removeAll()
-            records = try store.listRecords(limit: 200)
+            records = filterVisibleRecords(try store.listRecords(limit: 200))
             let detailLoadSucceeded = syncSelectionForCurrentFilter()
             if detailLoadSucceeded {
                 setStatus("最新のデータを読み込みました。", isError: false)
@@ -200,7 +200,9 @@ final class DebugViewModel: ObservableObject {
                 }
             }
 
-            records = (try? store.listRecords(limit: 200)) ?? records
+            if let loadedRecords = try? store.listRecords(limit: 200) {
+                records = filterVisibleRecords(loadedRecords)
+            }
             _ = loadDetails(captureID: captureID)
             if hasGroundTruth(details?.record), recordFilter == .missingGroundTruth {
                 _ = syncSelectionForCurrentFilter()
@@ -239,7 +241,9 @@ final class DebugViewModel: ObservableObject {
             stopAudioPlayback(showMessage: false)
             try store.deleteCapture(captureID: captureID)
             eventAnalysisCache.removeValue(forKey: captureID)
-            records = (try? store.listRecords(limit: 200)) ?? records
+            if let loadedRecords = try? store.listRecords(limit: 200) {
+                records = filterVisibleRecords(loadedRecords)
+            }
             _ = syncSelectionForCurrentFilter()
             setStatus("ログを削除しました。", isError: false)
         } catch {
@@ -437,6 +441,13 @@ final class DebugViewModel: ObservableObject {
     private func hasGroundTruth(_ record: DebugCaptureRecord?) -> Bool {
         guard let text = record?.groundTruthText else { return false }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func filterVisibleRecords(_ source: [DebugCaptureRecord]) -> [DebugCaptureRecord] {
+        source.filter { record in
+            let normalizedStatus = record.status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return normalizedStatus != "failed" && normalizedStatus != "skipped"
+        }
     }
 
     private func playAudio() {

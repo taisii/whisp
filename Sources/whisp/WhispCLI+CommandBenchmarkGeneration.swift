@@ -46,7 +46,8 @@ extension WhispCLI {
                 requireContext: options.requireContext,
                 llmEvalEnabled: options.llmEvalEnabled,
                 llmEvalModel: resolvedLLMEvalModel ?? options.llmEvalModel?.rawValue,
-                llmModel: model.rawValue
+                llmModel: model.rawValue,
+                candidateSnapshot: options.candidateSnapshot
             ))
         }
 
@@ -174,7 +175,9 @@ extension WhispCLI {
             pairCandidateAID: descriptorA.id,
             pairCandidateBID: descriptorB.id,
             pairJudgeModel: judgeContext.model.rawValue,
-            llmModel: "\(descriptorA.model.rawValue)|\(descriptorB.model.rawValue)"
+            llmModel: "\(descriptorA.model.rawValue)|\(descriptorB.model.rawValue)",
+            pairCandidateASnapshot: options.pairCandidateASnapshot,
+            pairCandidateBSnapshot: options.pairCandidateBSnapshot
         ))
         let recorder = try BenchmarkRunRecorder(
             runID: runID,
