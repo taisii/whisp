@@ -22,7 +22,7 @@ final class OpenAILLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
         switch model {
         case .gpt4oMini, .gpt5Nano:
             return true
-        case .gemini25FlashLite, .gemini25FlashLiteAudio:
+        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
             return false
         }
     }

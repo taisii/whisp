@@ -94,6 +94,33 @@ struct ManualBenchmarkLabels: Decodable {
     }
 }
 
+struct ManualBenchmarkAccessibilityTextRange: Decodable {
+    let location: Int?
+    let length: Int?
+}
+
+struct ManualBenchmarkAccessibilityFocusedElement: Decodable {
+    let selectedText: String?
+    let selectedRange: ManualBenchmarkAccessibilityTextRange?
+    let caretContext: String?
+    let caretContextRange: ManualBenchmarkAccessibilityTextRange?
+
+    enum CodingKeys: String, CodingKey {
+        case selectedText
+        case selectedRange
+        case caretContext
+        case caretContextRange
+    }
+}
+
+struct ManualBenchmarkAccessibilitySnapshot: Decodable {
+    let focusedElement: ManualBenchmarkAccessibilityFocusedElement?
+
+    enum CodingKeys: String, CodingKey {
+        case focusedElement
+    }
+}
+
 struct ManualBenchmarkCase: Decodable {
     let id: String
     let runID: String?
@@ -105,6 +132,7 @@ struct ManualBenchmarkCase: Decodable {
     let llmModel: String?
     let appName: String?
     let context: ContextInfo?
+    let accessibility: ManualBenchmarkAccessibilitySnapshot?
     let visionImageFile: String?
     let visionImageMimeType: String?
     let intentGold: IntentLabel?
@@ -123,6 +151,7 @@ struct ManualBenchmarkCase: Decodable {
         case llmModel = "llm_model"
         case appName = "app_name"
         case context
+        case accessibility
         case visionImageFile = "vision_image_file"
         case visionImageMimeType = "vision_image_mime_type"
         case intentGold = "intent_gold"
@@ -412,6 +441,7 @@ struct GenerationPairwiseCompareOptions {
     let candidateA: BenchmarkCandidate
     let candidateB: BenchmarkCandidate
     let judgeModel: LLMModel
+    let judgeAPIKey: String?
     let datasetHash: String?
     let runtimeOptionsHash: String?
     let evaluatorVersion: String?
@@ -477,4 +507,95 @@ struct OpenAITextMessage: Encodable {
 struct OpenAITextRequest: Encodable {
     let model: String
     let messages: [OpenAITextMessage]
+}
+
+struct GeminiInlineData: Encodable {
+    let mimeType: String
+    let data: String
+}
+
+enum GeminiMultimodalPart: Encodable {
+    case text(String)
+    case inlineData(GeminiInlineData)
+
+    private enum CodingKeys: String, CodingKey {
+        case text
+        case inlineData
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .text(value):
+            try container.encode(value, forKey: .text)
+        case let .inlineData(value):
+            try container.encode(value, forKey: .inlineData)
+        }
+    }
+}
+
+struct GeminiMultimodalContent: Encodable {
+    let role: String
+    let parts: [GeminiMultimodalPart]
+}
+
+struct GeminiMultimodalRequest: Encodable {
+    let contents: [GeminiMultimodalContent]
+}
+
+struct OpenAIImageURLContent: Encodable {
+    let url: String
+}
+
+enum OpenAIChatContentPart: Encodable {
+    case text(String)
+    case imageURL(OpenAIImageURLContent)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case text
+        case imageURL = "image_url"
+    }
+
+    private enum ContentType: String, Encodable {
+        case text
+        case imageURL = "image_url"
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .text(value):
+            try container.encode(ContentType.text, forKey: .type)
+            try container.encode(value, forKey: .text)
+        case let .imageURL(value):
+            try container.encode(ContentType.imageURL, forKey: .type)
+            try container.encode(value, forKey: .imageURL)
+        }
+    }
+}
+
+enum OpenAIChatMessageContent: Encodable {
+    case text(String)
+    case parts([OpenAIChatContentPart])
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case let .text(value):
+            try container.encode(value)
+        case let .parts(value):
+            try container.encode(value)
+        }
+    }
+}
+
+struct OpenAIChatMessage: Encodable {
+    let role: String
+    let content: OpenAIChatMessageContent
+}
+
+struct OpenAIChatRequest: Encodable {
+    let model: String
+    let messages: [OpenAIChatMessage]
 }

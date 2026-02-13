@@ -101,6 +101,20 @@ struct BenchmarkPairwiseCaseDetail: Equatable {
     let judgeResponseRound2: String
     let judgeDecisionJSON: String
     let judgeError: String?
+    let judgeInputImagePath: String?
+    let judgeInputImageMissingReason: String?
+}
+
+private struct PairwiseJudgeInputMeta: Decodable {
+    let visionImagePath: String?
+    let imageMissing: Bool?
+    let imageMissingReason: String?
+
+    enum CodingKeys: String, CodingKey {
+        case visionImagePath = "vision_image_path"
+        case imageMissing = "image_missing"
+        case imageMissingReason = "image_missing_reason"
+    }
 }
 
 struct BenchmarkCaseDetail: Identifiable, Equatable {
@@ -128,17 +142,31 @@ struct BenchmarkCaseDetail: Identifiable, Equatable {
 
 struct BenchmarkIntegrityCaseRow: Identifiable, Equatable {
     let id: String
-    let audioFile: String
     let sttPreview: String
     let referencePreview: String
+    let status: BenchmarkIntegrityStatusBadge
     let issueCount: Int
     let activeIssueCount: Int
-    let excludedIssueCount: Int
-    let issueTypesSummary: String
-    let missingInDataset: Bool
 
-    var hasActiveIssues: Bool { activeIssueCount > 0 }
-    var hasOnlyExcludedIssues: Bool { issueCount > 0 && activeIssueCount == 0 }
+    var isMissingInDataset: Bool { status == .datasetMissing }
+}
+
+enum BenchmarkIntegrityStatusBadge: Equatable {
+    case ok
+    case issue
+    case excluded
+    case datasetMissing
+}
+
+struct BenchmarkIntegrityCaseDetail: Identifiable, Equatable {
+    let id: String
+    let audioFilePath: String?
+    let visionImageFilePath: String?
+    let visionImageMimeType: String?
+    let sttText: String
+    let groundTruthText: String
+    let outputText: String
+    let status: BenchmarkIntegrityStatusBadge
 }
 
 enum PromptCandidateModalMode {
@@ -188,6 +216,12 @@ final class BenchmarkViewModel: ObservableObject {
     @Published var integrityCaseRows: [BenchmarkIntegrityCaseRow] = []
     @Published var selectedIntegrityIssueID: String?
     @Published var selectedIntegrityCaseID: String?
+    @Published var isIntegrityCaseDetailPresented = false
+    @Published var selectedIntegrityCaseDetail: BenchmarkIntegrityCaseDetail?
+    @Published var isIntegrityCaseEditing = false
+    @Published var integrityCaseDraftSTTText = ""
+    @Published var integrityCaseDraftGroundTruthText = ""
+    @Published var isIntegrityCaseDeleteConfirmationPresented = false
 
     @Published var statusMessage = ""
     @Published var statusIsError = false
@@ -206,20 +240,24 @@ final class BenchmarkViewModel: ObservableObject {
     private let store: BenchmarkStore
     private let candidateStore: BenchmarkCandidateStore
     private let integrityStore: BenchmarkIntegrityStore
+    private let integrityScanRunner: @Sendable (_ task: BenchmarkKind, _ datasetPath: String) throws -> String
     private let benchmarkDatasetPath: String
     private let caseEventAnalyzer = BenchmarkCaseEventAnalyzer()
     private var caseAudioPlayer: AVAudioPlayer?
     private var caseAudioPollingTimer: Timer?
+    private var integrityRecordsByCaseID: [String: IntegrityDatasetCaseRecord] = [:]
 
     init(
         store: BenchmarkStore,
         candidateStore: BenchmarkCandidateStore = BenchmarkCandidateStore(),
         integrityStore: BenchmarkIntegrityStore = BenchmarkIntegrityStore(),
-        datasetPathOverride: String? = nil
+        datasetPathOverride: String? = nil,
+        integrityScanRunner: @escaping @Sendable (_ task: BenchmarkKind, _ datasetPath: String) throws -> String = BenchmarkViewModel.defaultIntegrityScanRunner
     ) {
         self.store = store
         self.candidateStore = candidateStore
         self.integrityStore = integrityStore
+        self.integrityScanRunner = integrityScanRunner
         benchmarkDatasetPath = Self.resolveDatasetPath(pathOverride: datasetPathOverride)
         synchronizeSelectionForCurrentTab()
     }
@@ -413,6 +451,7 @@ final class BenchmarkViewModel: ObservableObject {
         guard !isExecutingBenchmark else { return }
         let task = selectedTask
         let dataset = benchmarkDatasetPath
+        let scanRunner = integrityScanRunner
         isExecutingBenchmark = true
         setStatus("ケース不備スキャンを開始しました。", isError: false, clearErrorLog: true)
 
@@ -420,7 +459,7 @@ final class BenchmarkViewModel: ObservableObject {
             defer { isExecutingBenchmark = false }
             do {
                 _ = try await Task.detached(priority: .userInitiated) {
-                    try Self.runIntegrityScanCommand(task: task, datasetPath: dataset)
+                    try scanRunner(task, dataset)
                 }.value
                 try loadIntegrityIssues()
                 try loadIntegrityCaseRows()
@@ -555,6 +594,10 @@ final class BenchmarkViewModel: ObservableObject {
         clearPairwiseCaseDetail()
     }
 
+    func dismissIntegrityCaseDetail() {
+        clearIntegrityCaseDetail()
+    }
+
     func toggleCaseAudioPlayback() {
         if isCaseAudioPlaying {
             stopCaseAudioPlayback(showMessage: false)
@@ -578,6 +621,99 @@ final class BenchmarkViewModel: ObservableObject {
             selectedIntegrityIssueID = integrityIssues.first(where: { $0.caseID == caseID })?.id
         } else {
             selectedIntegrityIssueID = nil
+        }
+    }
+
+    func openIntegrityCaseDetail(caseID: String) {
+        selectIntegrityCase(caseID)
+        guard let detail = buildIntegrityCaseDetail(caseID: caseID) else {
+            setStatus("ケース詳細の読み込み対象が見つかりません。", isError: true)
+            return
+        }
+        selectedIntegrityCaseDetail = detail
+        integrityCaseDraftSTTText = detail.sttText
+        integrityCaseDraftGroundTruthText = detail.groundTruthText
+        isIntegrityCaseEditing = false
+        isIntegrityCaseDeleteConfirmationPresented = false
+        isIntegrityCaseDetailPresented = true
+    }
+
+    func beginIntegrityCaseEditing() {
+        guard let detail = selectedIntegrityCaseDetail else { return }
+        integrityCaseDraftSTTText = detail.sttText
+        integrityCaseDraftGroundTruthText = detail.groundTruthText
+        isIntegrityCaseEditing = true
+    }
+
+    func cancelIntegrityCaseEditing() {
+        guard let detail = selectedIntegrityCaseDetail else {
+            isIntegrityCaseEditing = false
+            return
+        }
+        integrityCaseDraftSTTText = detail.sttText
+        integrityCaseDraftGroundTruthText = detail.groundTruthText
+        isIntegrityCaseEditing = false
+    }
+
+    func saveIntegrityCaseEdits() {
+        guard let detail = selectedIntegrityCaseDetail else {
+            setStatus("保存対象のケースが選択されていません。", isError: true)
+            return
+        }
+        let targetCaseID = detail.id
+        do {
+            var records = try loadAllIntegrityDatasetCaseRecords(path: benchmarkDatasetPath)
+            var updated = false
+            for index in records.indices where records[index].id == targetCaseID {
+                records[index].sttText = integrityCaseDraftSTTText
+                records[index].groundTruthText = integrityCaseDraftGroundTruthText
+                updated = true
+            }
+            guard updated else {
+                throw AppError.invalidArgument("編集対象の case_id がJSONLに見つかりません: \(targetCaseID)")
+            }
+            try saveIntegrityDatasetCaseRecords(path: benchmarkDatasetPath, records: records)
+            isIntegrityCaseEditing = false
+            runIntegrityScanAfterMutation(successPrefix: "ケースを更新しました。")
+            if let refreshed = buildIntegrityCaseDetail(caseID: targetCaseID) {
+                selectedIntegrityCaseDetail = refreshed
+                integrityCaseDraftSTTText = refreshed.sttText
+                integrityCaseDraftGroundTruthText = refreshed.groundTruthText
+            }
+        } catch {
+            setStatus("ケース更新に失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
+        }
+    }
+
+    func requestIntegrityCaseDelete() {
+        guard selectedIntegrityCaseDetail != nil else {
+            setStatus("削除対象のケースが選択されていません。", isError: true)
+            return
+        }
+        isIntegrityCaseDeleteConfirmationPresented = true
+    }
+
+    func cancelIntegrityCaseDelete() {
+        isIntegrityCaseDeleteConfirmationPresented = false
+    }
+
+    func confirmIntegrityCaseDelete() {
+        guard let detail = selectedIntegrityCaseDetail else {
+            setStatus("削除対象のケースが選択されていません。", isError: true)
+            return
+        }
+        let targetCaseID = detail.id
+        do {
+            let records = try loadAllIntegrityDatasetCaseRecords(path: benchmarkDatasetPath)
+            let filtered = records.filter { $0.id != targetCaseID }
+            guard filtered.count != records.count else {
+                throw AppError.invalidArgument("削除対象の case_id がJSONLに見つかりません: \(targetCaseID)")
+            }
+            try saveIntegrityDatasetCaseRecords(path: benchmarkDatasetPath, records: filtered)
+            clearIntegrityCaseDetail()
+            runIntegrityScanAfterMutation(successPrefix: "ケースを削除しました。")
+        } catch {
+            setStatus("ケース削除に失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
         }
     }
 
@@ -797,6 +933,7 @@ final class BenchmarkViewModel: ObservableObject {
     private func handleTaskChanged() {
         clearCaseDetail()
         clearPairwiseCaseDetail()
+        clearIntegrityCaseDetail()
         do {
             try loadComparisonRows()
             try reloadGenerationPairwiseState()
@@ -826,14 +963,19 @@ final class BenchmarkViewModel: ObservableObject {
     func synchronizeSelectionForCurrentTab() {
         switch selectedTab {
         case .stt:
+            clearIntegrityCaseDetail()
             selectedTask = .stt
         case .generationSingle:
+            clearIntegrityCaseDetail()
             selectedTask = .generation
             ensureGenerationSingleCandidateSelection()
         case .generationBattle:
+            clearIntegrityCaseDetail()
             selectedTask = .generation
         case .integrity:
-            selectedTask = .stt
+            if selectedTask == .vision {
+                selectedTask = .stt
+            }
         }
     }
 
@@ -1164,6 +1306,7 @@ final class BenchmarkViewModel: ObservableObject {
                 return
             }
             let pairwise = result.metrics.pairwise
+            let judgeInputMeta = readPairwiseJudgeInputMeta(runID: runID, caseID: caseID)
             generationPairwiseCaseDetail = BenchmarkPairwiseCaseDetail(
                 caseID: caseID,
                 status: result.status,
@@ -1189,7 +1332,9 @@ final class BenchmarkViewModel: ObservableObject {
                 judgeResponseRound1: readCaseIOText(runID: runID, caseID: caseID, fileName: "pairwise_round1_response.json"),
                 judgeResponseRound2: readCaseIOText(runID: runID, caseID: caseID, fileName: "pairwise_round2_response.json"),
                 judgeDecisionJSON: readCaseIOText(runID: runID, caseID: caseID, fileName: "pairwise_decision.json"),
-                judgeError: result.status == .error ? result.reason : nil
+                judgeError: result.status == .error ? result.reason : nil,
+                judgeInputImagePath: normalizedOptionalPath(judgeInputMeta?.visionImagePath),
+                judgeInputImageMissingReason: pairwiseJudgeImageMissingReason(meta: judgeInputMeta)
             )
         } catch {
             generationPairwiseCaseDetail = nil
@@ -1218,6 +1363,34 @@ final class BenchmarkViewModel: ObservableObject {
             return ""
         }
         return text
+    }
+
+    private func readPairwiseJudgeInputMeta(runID: String, caseID: String) -> PairwiseJudgeInputMeta? {
+        let raw = readCaseIOText(runID: runID, caseID: caseID, fileName: "pairwise_judge_input_meta.json")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty, let data = raw.data(using: .utf8) else {
+            return nil
+        }
+        return try? JSONDecoder().decode(PairwiseJudgeInputMeta.self, from: data)
+    }
+
+    private func pairwiseJudgeImageMissingReason(meta: PairwiseJudgeInputMeta?) -> String? {
+        guard let meta, meta.imageMissing == true else {
+            return nil
+        }
+        let trimmedReason = (meta.imageMissingReason ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedReason.isEmpty {
+            return trimmedReason
+        }
+        return "judge入力画像は見つかりませんでした"
+    }
+
+    private func normalizedOptionalPath(_ raw: String?) -> String? {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     private func caseBreakdownSort(_ lhs: BenchmarkCaseBreakdownRow, _ rhs: BenchmarkCaseBreakdownRow) -> Bool {
@@ -1259,57 +1432,54 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     private func loadIntegrityCaseRows() throws {
-        let cases = try loadIntegrityDatasetCases(path: benchmarkDatasetPath)
+        let allRecords = try loadAllIntegrityDatasetCaseRecords(path: benchmarkDatasetPath)
+        var latestRecordByCaseID: [String: IntegrityDatasetCaseRecord] = [:]
+        var caseOrder: [String] = []
+        for record in allRecords {
+            if latestRecordByCaseID[record.id] == nil {
+                caseOrder.append(record.id)
+            }
+            latestRecordByCaseID[record.id] = record
+        }
+        integrityRecordsByCaseID = latestRecordByCaseID
+
         let issuesByCase = Dictionary(grouping: integrityIssues, by: \.caseID)
-        let knownCaseIDs = Set(cases.map(\.id))
+        let knownCaseIDs = Set(caseOrder)
 
-        var rows: [BenchmarkIntegrityCaseRow] = cases.map { item in
-            let caseIssues = issuesByCase[item.id] ?? []
+        var rows: [BenchmarkIntegrityCaseRow] = caseOrder.compactMap { caseID in
+            guard let item = latestRecordByCaseID[caseID] else {
+                return nil
+            }
+            let caseIssues = issuesByCase[caseID] ?? []
             let activeIssueCount = caseIssues.filter { !$0.excluded }.count
-            let excludedIssueCount = caseIssues.count - activeIssueCount
-            let issueTypes = caseIssues
-                .filter { !$0.excluded }
-                .map(\.issueType)
-            let issueTypesFallback = caseIssues.map(\.issueType)
-            let summary = (issueTypes.isEmpty ? issueTypesFallback : issueTypes)
-                .sorted()
-                .joined(separator: ", ")
-
             return BenchmarkIntegrityCaseRow(
-                id: item.id,
-                audioFile: shortFileName(item.audioFile),
+                id: caseID,
                 sttPreview: preview(item.sttText),
                 referencePreview: preview(item.referenceText),
+                status: integrityStatusBadge(
+                    activeIssueCount: activeIssueCount,
+                    issueCount: caseIssues.count,
+                    missingInDataset: false
+                ),
                 issueCount: caseIssues.count,
-                activeIssueCount: activeIssueCount,
-                excludedIssueCount: excludedIssueCount,
-                issueTypesSummary: summary.isEmpty ? "-" : summary,
-                missingInDataset: false
+                activeIssueCount: activeIssueCount
             )
         }
 
         for (caseID, caseIssues) in issuesByCase where !knownCaseIDs.contains(caseID) {
             let activeIssueCount = caseIssues.filter { !$0.excluded }.count
-            let excludedIssueCount = caseIssues.count - activeIssueCount
-            let issueTypes = caseIssues
-                .filter { !$0.excluded }
-                .map(\.issueType)
-            let issueTypesFallback = caseIssues.map(\.issueType)
-            let summary = (issueTypes.isEmpty ? issueTypesFallback : issueTypes)
-                .sorted()
-                .joined(separator: ", ")
-
             rows.append(
                 BenchmarkIntegrityCaseRow(
                     id: caseID,
-                    audioFile: "-",
                     sttPreview: "-",
                     referencePreview: "-",
+                    status: integrityStatusBadge(
+                        activeIssueCount: activeIssueCount,
+                        issueCount: caseIssues.count,
+                        missingInDataset: true
+                    ),
                     issueCount: caseIssues.count,
-                    activeIssueCount: activeIssueCount,
-                    excludedIssueCount: excludedIssueCount,
-                    issueTypesSummary: summary.isEmpty ? "-" : summary,
-                    missingInDataset: true
+                    activeIssueCount: activeIssueCount
                 )
             )
         }
@@ -1322,40 +1492,172 @@ final class BenchmarkViewModel: ObservableObject {
             if let issue = integrityIssues.first(where: { $0.caseID == selectedIntegrityCaseID }) {
                 selectedIntegrityIssueID = issue.id
             }
-            return
+        } else {
+            selectedIntegrityCaseID = integrityCaseRows.first?.id
+            if let selectedIntegrityCaseID {
+                selectedIntegrityIssueID = integrityIssues.first(where: { $0.caseID == selectedIntegrityCaseID })?.id
+            } else {
+                selectedIntegrityIssueID = nil
+            }
         }
 
-        selectedIntegrityCaseID = integrityCaseRows.first?.id
-        if let selectedIntegrityCaseID {
-            selectedIntegrityIssueID = integrityIssues.first(where: { $0.caseID == selectedIntegrityCaseID })?.id
-        } else {
-            selectedIntegrityIssueID = nil
+        refreshIntegrityCaseDetailAfterReload()
+    }
+
+    private func integrityStatusBadge(
+        activeIssueCount: Int,
+        issueCount: Int,
+        missingInDataset: Bool
+    ) -> BenchmarkIntegrityStatusBadge {
+        if missingInDataset {
+            return .datasetMissing
         }
+        if activeIssueCount > 0 {
+            return .issue
+        }
+        if issueCount > 0 {
+            return .excluded
+        }
+        return .ok
     }
 
     private func integrityCaseSort(_ lhs: BenchmarkIntegrityCaseRow, _ rhs: BenchmarkIntegrityCaseRow) -> Bool {
-        let lhsRank: Int
-        if lhs.hasActiveIssues {
-            lhsRank = 0
-        } else if lhs.hasOnlyExcludedIssues {
-            lhsRank = 1
-        } else {
-            lhsRank = 2
-        }
-
-        let rhsRank: Int
-        if rhs.hasActiveIssues {
-            rhsRank = 0
-        } else if rhs.hasOnlyExcludedIssues {
-            rhsRank = 1
-        } else {
-            rhsRank = 2
-        }
-
+        let rank: [BenchmarkIntegrityStatusBadge: Int] = [
+            .issue: 0,
+            .datasetMissing: 1,
+            .excluded: 2,
+            .ok: 3,
+        ]
+        let lhsRank = rank[lhs.status, default: 4]
+        let rhsRank = rank[rhs.status, default: 4]
         if lhsRank != rhsRank {
             return lhsRank < rhsRank
         }
         return lhs.id < rhs.id
+    }
+
+    private func buildIntegrityCaseDetail(caseID: String) -> BenchmarkIntegrityCaseDetail? {
+        guard let record = integrityRecordsByCaseID[caseID] else {
+            return nil
+        }
+        let status = integrityCaseRows.first(where: { $0.id == caseID })?.status
+            ?? integrityStatusBadge(
+                activeIssueCount: selectedIntegrityCaseIssues.filter { !$0.excluded }.count,
+                issueCount: selectedIntegrityCaseIssues.count,
+                missingInDataset: false
+            )
+        return BenchmarkIntegrityCaseDetail(
+            id: caseID,
+            audioFilePath: normalizedOptionalPath(record.audioFile),
+            visionImageFilePath: normalizedOptionalPath(record.visionImageFile),
+            visionImageMimeType: normalizedOptionalPath(record.visionImageMimeType),
+            sttText: record.sttText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            groundTruthText: record.groundTruthText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            outputText: record.outputText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "",
+            status: status
+        )
+    }
+
+    private func refreshIntegrityCaseDetailAfterReload() {
+        guard isIntegrityCaseDetailPresented else {
+            return
+        }
+        let caseID = selectedIntegrityCaseDetail?.id ?? selectedIntegrityCaseID
+        guard let caseID else {
+            clearIntegrityCaseDetail()
+            return
+        }
+        guard let detail = buildIntegrityCaseDetail(caseID: caseID) else {
+            clearIntegrityCaseDetail()
+            return
+        }
+        selectedIntegrityCaseDetail = detail
+        if !isIntegrityCaseEditing {
+            integrityCaseDraftSTTText = detail.sttText
+            integrityCaseDraftGroundTruthText = detail.groundTruthText
+        }
+    }
+
+    private func runIntegrityScanAfterMutation(successPrefix: String) {
+        do {
+            try loadIntegrityIssues()
+            try loadIntegrityCaseRows()
+            setStatus("\(successPrefix) 不備を再計算しています。", isError: false, clearErrorLog: true)
+        } catch {
+            setStatus(
+                "\(successPrefix) 一覧更新に失敗: \(error.localizedDescription)",
+                isError: true,
+                errorLog: error.localizedDescription
+            )
+            return
+        }
+
+        let task = selectedTask
+        let dataset = benchmarkDatasetPath
+        let scanRunner = integrityScanRunner
+        Task {
+            do {
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try scanRunner(task, dataset)
+                }.value
+                try loadIntegrityIssues()
+                try loadIntegrityCaseRows()
+                setStatus("\(successPrefix) 不備を再計算しました。", isError: false, clearErrorLog: true)
+            } catch {
+                let detail = "\(successPrefix) JSONL更新は成功しましたが、不備の再計算に失敗: \(error.localizedDescription)"
+                setStatus(detail, isError: true, errorLog: detail)
+            }
+        }
+    }
+
+    private func loadAllIntegrityDatasetCaseRecords(path: String) throws -> [IntegrityDatasetCaseRecord] {
+        let normalizedPath = normalizePath(path)
+        guard !normalizedPath.isEmpty else {
+            return []
+        }
+        guard FileManager.default.fileExists(atPath: normalizedPath) else {
+            return []
+        }
+
+        let content = try String(contentsOfFile: normalizedPath, encoding: .utf8)
+        let decoder = JSONDecoder()
+        var results: [IntegrityDatasetCaseRecord] = []
+        for (index, rawLine) in content.components(separatedBy: .newlines).enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty {
+                continue
+            }
+            guard let data = line.data(using: .utf8) else {
+                throw AppError.invalidArgument("ケース一覧の読み込みに失敗しました(line=\(index + 1))")
+            }
+            do {
+                let item = try decoder.decode(IntegrityDatasetCaseRecord.self, from: data)
+                results.append(item)
+            } catch {
+                throw AppError.invalidArgument("ケース一覧JSONLのデコードに失敗しました(line=\(index + 1)): \(error.localizedDescription)")
+            }
+        }
+        return results
+    }
+
+    private func saveIntegrityDatasetCaseRecords(path: String, records: [IntegrityDatasetCaseRecord]) throws {
+        let normalizedPath = normalizePath(path)
+        guard !normalizedPath.isEmpty else {
+            throw AppError.invalidArgument("保存先ケースファイルが不正です。")
+        }
+        let url = URL(fileURLWithPath: normalizedPath, isDirectory: false)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let lines: [String] = try records.map { record in
+            let data = try encoder.encode(record)
+            guard let line = String(data: data, encoding: .utf8) else {
+                throw AppError.encode("ケース一覧JSONLのエンコードに失敗しました。")
+            }
+            return line
+        }
+        let payload = lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
+        try payload.write(to: url, atomically: true, encoding: .utf8)
     }
 
     private func findRelatedRunID(task: BenchmarkKind, sourcePath: String, caseID: String) throws -> String? {
@@ -1374,7 +1676,8 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     private func playCaseAudio() {
-        guard let path = selectedCaseDetail?.audioFilePath,
+        let selectedPath = selectedIntegrityCaseDetail?.audioFilePath ?? selectedCaseDetail?.audioFilePath
+        guard let path = selectedPath,
               !path.isEmpty
         else {
             setStatus("音声ファイルが見つかりません。", isError: true)
@@ -1474,6 +1777,16 @@ final class BenchmarkViewModel: ObservableObject {
         isCaseDetailPresented = false
     }
 
+    private func clearIntegrityCaseDetail() {
+        stopCaseAudioPlayback(showMessage: false)
+        selectedIntegrityCaseDetail = nil
+        isIntegrityCaseDetailPresented = false
+        isIntegrityCaseEditing = false
+        integrityCaseDraftSTTText = ""
+        integrityCaseDraftGroundTruthText = ""
+        isIntegrityCaseDeleteConfirmationPresented = false
+    }
+
     private func clearPairwiseCaseDetail() {
         generationPairwiseCaseDetail = nil
         isPairwiseCaseDetailPresented = false
@@ -1522,30 +1835,67 @@ final class BenchmarkViewModel: ObservableObject {
         return "\(firstLine.prefix(maxChars - 3))..."
     }
 
-    private struct IntegrityCaseLabels: Decodable {
+    private struct IntegrityCaseLabels: Codable, Equatable {
         let transcriptGold: String?
         let transcriptSilver: String?
+        let intentGold: IntegrityIntentLabel?
+        let intentSilver: IntegrityIntentLabel?
+        let labelConfidence: Double?
 
         enum CodingKeys: String, CodingKey {
             case transcriptGold = "transcript_gold"
             case transcriptSilver = "transcript_silver"
+            case intentGold = "intent_gold"
+            case intentSilver = "intent_silver"
+            case labelConfidence = "label_confidence"
         }
     }
 
-    private struct IntegrityDatasetCase: Decodable {
+    private struct IntegrityIntentLabel: Codable, Equatable {
+        let intent: String
+        let slots: [String: String]
+    }
+
+    private struct IntegrityDatasetCaseRecord: Codable, Equatable {
         let id: String
+        let runID: String?
+        let runDir: String?
         let audioFile: String?
-        let sttText: String?
-        let groundTruthText: String?
+        let eventsFile: String?
+        var sttText: String?
+        var outputText: String?
+        var groundTruthText: String?
         let createdAt: String?
+        let llmModel: String?
+        let appName: String?
+        let context: ContextInfo?
+        let accessibility: AccessibilitySnapshot?
+        let visionImageFile: String?
+        let visionImageMimeType: String?
+        let intentGold: IntegrityIntentLabel?
+        let intentSilver: IntegrityIntentLabel?
+        let labelConfidence: Double?
         let labels: IntegrityCaseLabels?
 
         enum CodingKeys: String, CodingKey {
             case id
+            case runID = "run_id"
+            case runDir = "run_dir"
             case audioFile = "audio_file"
+            case eventsFile = "events_file"
             case sttText = "stt_text"
+            case outputText = "output_text"
             case groundTruthText = "ground_truth_text"
             case createdAt = "created_at"
+            case llmModel = "llm_model"
+            case appName = "app_name"
+            case context
+            case accessibility
+            case visionImageFile = "vision_image_file"
+            case visionImageMimeType = "vision_image_mime_type"
+            case intentGold = "intent_gold"
+            case intentSilver = "intent_silver"
+            case labelConfidence = "label_confidence"
             case labels
         }
 
@@ -1564,50 +1914,6 @@ final class BenchmarkViewModel: ObservableObject {
             }
             return nil
         }
-    }
-
-    private func loadIntegrityDatasetCases(path: String) throws -> [IntegrityDatasetCase] {
-        let normalizedPath = normalizePath(path)
-        guard !normalizedPath.isEmpty else {
-            return []
-        }
-        guard FileManager.default.fileExists(atPath: normalizedPath) else {
-            return []
-        }
-
-        let content = try String(contentsOfFile: normalizedPath, encoding: .utf8)
-        let decoder = JSONDecoder()
-        var uniqueByID: [String: IntegrityDatasetCase] = [:]
-        var order: [String] = []
-
-        for (index, rawLine) in content.components(separatedBy: .newlines).enumerated() {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty {
-                continue
-            }
-            guard let data = line.data(using: .utf8) else {
-                throw AppError.invalidArgument("ケース一覧の読み込みに失敗しました(line=\(index + 1))")
-            }
-            do {
-                let item = try decoder.decode(IntegrityDatasetCase.self, from: data)
-                if uniqueByID[item.id] == nil {
-                    order.append(item.id)
-                }
-                uniqueByID[item.id] = item
-            } catch {
-                throw AppError.invalidArgument("ケース一覧JSONLのデコードに失敗しました(line=\(index + 1)): \(error.localizedDescription)")
-            }
-        }
-
-        return order.compactMap { uniqueByID[$0] }
-    }
-
-    private func shortFileName(_ path: String?) -> String {
-        let trimmed = (path ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return "-"
-        }
-        return URL(fileURLWithPath: trimmed).lastPathComponent
     }
 
     private func preview(_ text: String?, maxLength: Int = 56) -> String {
@@ -1767,6 +2073,13 @@ final class BenchmarkViewModel: ObservableObject {
             args.append("--force")
         }
         return try runWhispCLI(args)
+    }
+
+    nonisolated private static func defaultIntegrityScanRunner(
+        task: BenchmarkKind,
+        datasetPath: String
+    ) throws -> String {
+        try runIntegrityScanCommand(task: task, datasetPath: datasetPath)
     }
 
     nonisolated private static func runIntegrityScanCommand(task: BenchmarkKind, datasetPath: String) throws -> String {

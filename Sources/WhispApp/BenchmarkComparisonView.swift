@@ -1,10 +1,11 @@
+import AppKit
 import SwiftUI
 import WhispCore
 
 struct BenchmarkComparisonView: View {
     @ObservedObject var viewModel: BenchmarkViewModel
     let mode: BenchmarkComparisonMode
-    private let judgeModels: [LLMModel] = [.gemini25FlashLite, .gpt4oMini, .gpt5Nano]
+    private let judgeModels: [LLMModel] = [.gemini3FlashPreview, .gemini25FlashLite, .gpt4oMini, .gpt5Nano]
 
     private struct ComparisonColumn: Identifiable {
         let id: String
@@ -912,6 +913,16 @@ struct BenchmarkGlobalModalOverlay: View {
                 ) {
                     BenchmarkCaseDetailModal(viewModel: viewModel)
                 }
+            } else if viewModel.isIntegrityCaseDetailPresented {
+                BenchmarkOverlayModalCard(
+                    minWidth: 920,
+                    idealWidth: 980,
+                    maxWidth: 1080,
+                    minHeight: 620,
+                    maxHeight: 780
+                ) {
+                    BenchmarkIntegrityCaseDetailModal(viewModel: viewModel)
+                }
             }
         }
     }
@@ -927,6 +938,10 @@ struct BenchmarkGlobalModalOverlay: View {
         }
         if viewModel.isCaseDetailPresented {
             viewModel.dismissCaseDetail()
+            return
+        }
+        if viewModel.isIntegrityCaseDetailPresented {
+            viewModel.dismissIntegrityCaseDetail()
         }
     }
 }
@@ -975,7 +990,7 @@ private struct BenchmarkOverlayModalCard<Content: View>: View {
 private struct BenchmarkPromptCandidateModal: View {
     @ObservedObject var viewModel: BenchmarkViewModel
 
-    private let models: [LLMModel] = [.gemini25FlashLite, .gpt4oMini, .gpt5Nano]
+    private let models: [LLMModel] = [.gemini3FlashPreview, .gemini25FlashLite, .gpt4oMini, .gpt5Nano]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1129,7 +1144,7 @@ private struct BenchmarkPromptCandidateModal: View {
     }
 }
 
-private struct BenchmarkPairwiseCaseDetailModal: View {
+struct BenchmarkPairwiseCaseDetailModal: View {
     @ObservedObject var viewModel: BenchmarkViewModel
     @State private var selectedPairwiseTab: PairwiseCaseDetailTab = .output
     @State private var selectedJudgeTab: PairwiseJudgeTab = .round1
@@ -1144,6 +1159,11 @@ private struct BenchmarkPairwiseCaseDetailModal: View {
         case round1
         case round2
         case overall
+    }
+
+    init(viewModel: BenchmarkViewModel, startsInJudgeTab: Bool = false) {
+        self.viewModel = viewModel
+        _selectedPairwiseTab = State(initialValue: startsInJudgeTab ? .judge : .output)
     }
 
     var body: some View {
@@ -1277,6 +1297,8 @@ private struct BenchmarkPairwiseCaseDetailModal: View {
             }
             .padding(.horizontal, 2)
 
+            judgeInputImageSection(detail)
+
             Picker("judge_view", selection: $selectedJudgeTab) {
                 Text("1件目:プロンプト/応答").tag(PairwiseJudgeTab.round1)
                 Text("2件目:プロンプト/応答").tag(PairwiseJudgeTab.round2)
@@ -1313,6 +1335,46 @@ private struct BenchmarkPairwiseCaseDetailModal: View {
             }
         }
         .padding(12)
+    }
+
+    private func judgeInputImageSection(_ detail: BenchmarkPairwiseCaseDetail) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            blockLabel("judge入力スクリーンショット")
+            if let image = judgeInputImage(path: detail.judgeInputImagePath) {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, minHeight: 160, maxHeight: 280)
+                    .background(Color(NSColor.windowBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+                    }
+            } else {
+                textValueBlock(
+                    text: detail.judgeInputImageMissingReason ?? "judge入力画像はありません"
+                )
+            }
+            if let path = detail.judgeInputImagePath {
+                Text(path)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .padding(.horizontal, 2)
+            }
+        }
+    }
+
+    private func judgeInputImage(path: String?) -> NSImage? {
+        let trimmed = (path ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              FileManager.default.fileExists(atPath: trimmed)
+        else {
+            return nil
+        }
+        return NSImage(contentsOfFile: trimmed)
     }
 
     private func judgeRoundSection(title: String, prompt: String, response: String) -> some View {

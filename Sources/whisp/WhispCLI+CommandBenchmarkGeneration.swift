@@ -132,7 +132,16 @@ extension WhispCLI {
         let config = try loadConfig()
         let descriptorA = try makePairwiseCandidateDescriptor(candidate: options.candidateA, config: config)
         let descriptorB = try makePairwiseCandidateDescriptor(candidate: options.candidateB, config: config)
-        let judgeContext = try APIKeyResolver.resolveIntentJudgeContext(config: config, preferredModel: options.judgeModel)
+        let judgeContext: (model: LLMModel, apiKey: String)
+        if let judgeAPIKey = options.judgeAPIKey {
+            judgeContext = (model: options.judgeModel, apiKey: judgeAPIKey)
+        } else {
+            judgeContext = try APIKeyResolver.resolveIntentJudgeContext(
+                config: config,
+                preferredModel: options.judgeModel,
+                requiresVision: true
+            )
+        }
         let allCases = try loadManualBenchmarkCases(path: options.jsonlPath)
         let selectedCases = options.limit.map { Array(allCases.prefix($0)) } ?? allCases
         let runID = defaultBenchmarkRunID(kind: .generation)
@@ -258,6 +267,32 @@ extension WhispCLI {
         let cacheKey: String
     }
 
+    private struct PairwiseJudgeImageInput: Sendable {
+        let path: String?
+        let mimeType: String?
+        let data: Data?
+        let imageMissing: Bool
+        let missingReason: String?
+    }
+
+    private struct PairwiseJudgeInputMeta: Codable {
+        let visionImagePath: String?
+        let visionImageMimeType: String?
+        let imageAttached: Bool
+        let imageMissing: Bool
+        let imageMissingReason: String?
+        let sttInputTextPresent: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case visionImagePath = "vision_image_path"
+            case visionImageMimeType = "vision_image_mime_type"
+            case imageAttached = "image_attached"
+            case imageMissing = "image_missing"
+            case imageMissingReason = "image_missing_reason"
+            case sttInputTextPresent = "stt_input_text_present"
+        }
+    }
+
     private struct PairwiseCaseWorkerOutcome: Sendable {
         let displayLine: String
         let result: BenchmarkCaseResult
@@ -375,6 +410,7 @@ extension WhispCLI {
             let reference = item.resolvedGenerationReferenceText()?.text
             let contextHash = sha256Hex(text: canonicalContextString(item.context))
             let inputHash = sha256Hex(text: input.text)
+            let judgeImageInput = resolvePairwiseJudgeImageInput(item: item)
             let generationA = try await generateForPairwiseCandidate(
                 descriptor: descriptorA,
                 config: config,
@@ -399,17 +435,21 @@ extension WhispCLI {
                     model: judgeModel,
                     apiKey: judgeAPIKey,
                     referenceText: reference,
-                    context: item.context,
+                    sttInputText: input.text,
                     candidateAText: generationA.text,
-                    candidateBText: generationB.text
+                    candidateBText: generationB.text,
+                    visionImageData: judgeImageInput.data,
+                    visionImageMimeType: judgeImageInput.mimeType
                 )
                 judgeRound2 = try await runPairwiseJudge(
                     model: judgeModel,
                     apiKey: judgeAPIKey,
                     referenceText: reference,
-                    context: item.context,
+                    sttInputText: input.text,
                     candidateAText: generationB.text,
-                    candidateBText: generationA.text
+                    candidateBText: generationA.text,
+                    visionImageData: judgeImageInput.data,
+                    visionImageMimeType: judgeImageInput.mimeType
                 )
             } catch {
                 throw AppError.io("pairwise_judge_failed: \(error.localizedDescription)")
@@ -500,7 +540,7 @@ extension WhispCLI {
                 hallucinationRate: nil,
                 requestRef: nil,
                 responseRef: nil,
-                error: nil
+                error: judgeImageInput.imageMissing ? "image_missing: fallback_to_text_only" : nil
             )))
             events.append(.aggregate(BenchmarkAggregateLog(
                 base: makeEventBase(runID: runID, caseID: item.id, stage: .aggregate, status: .ok),
@@ -527,6 +567,24 @@ extension WhispCLI {
                 GenerationCaseIOWrite(fileName: "pairwise_round1_response.json", text: judgeRound1.responseJSON),
                 GenerationCaseIOWrite(fileName: "pairwise_round2_response.json", text: judgeRound2.responseJSON),
                 GenerationCaseIOWrite(fileName: "pairwise_decision.json", text: decisionJSON),
+                GenerationCaseIOWrite(
+                    fileName: "pairwise_judge_input_meta.json",
+                    text: encodePairwiseJudgeInputMeta(
+                        PairwiseJudgeInputMeta(
+                            visionImagePath: judgeImageInput.path,
+                            visionImageMimeType: judgeImageInput.mimeType,
+                            imageAttached: WhispCLI.pairwiseJudgeHasImagePayload(
+                                visionImageData: judgeImageInput.data,
+                                visionImageMimeType: judgeImageInput.mimeType
+                            ),
+                            imageMissing: judgeImageInput.imageMissing,
+                            imageMissingReason: judgeImageInput.missingReason,
+                            sttInputTextPresent: !input.text
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                                .isEmpty
+                        )
+                    )
+                ),
             ]
             if let reference, !reference.isEmpty {
                 ioWrites.append(GenerationCaseIOWrite(fileName: "reference.txt", text: reference))
@@ -671,6 +729,69 @@ extension WhispCLI {
             pairwise: nil,
             judgeError: false
         )
+    }
+
+    private static func resolvePairwiseJudgeImageInput(item: ManualBenchmarkCase) -> PairwiseJudgeImageInput {
+        let trimmedPath = (item.visionImageFile ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else {
+            return PairwiseJudgeImageInput(
+                path: nil,
+                mimeType: nil,
+                data: nil,
+                imageMissing: false,
+                missingReason: nil
+            )
+        }
+        guard FileManager.default.fileExists(atPath: trimmedPath) else {
+            return PairwiseJudgeImageInput(
+                path: trimmedPath,
+                mimeType: nil,
+                data: nil,
+                imageMissing: true,
+                missingReason: "画像ファイルが見つかりません: \(trimmedPath)"
+            )
+        }
+
+        do {
+            let data = try Data(contentsOf: URL(fileURLWithPath: trimmedPath))
+            guard !data.isEmpty else {
+                return PairwiseJudgeImageInput(
+                    path: trimmedPath,
+                    mimeType: nil,
+                    data: nil,
+                    imageMissing: true,
+                    missingReason: "画像ファイルが空です: \(trimmedPath)"
+                )
+            }
+            let trimmedMime = (item.visionImageMimeType ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let mimeType = trimmedMime.isEmpty ? inferImageMimeType(path: trimmedPath) : trimmedMime
+            return PairwiseJudgeImageInput(
+                path: trimmedPath,
+                mimeType: mimeType,
+                data: data,
+                imageMissing: false,
+                missingReason: nil
+            )
+        } catch {
+            return PairwiseJudgeImageInput(
+                path: trimmedPath,
+                mimeType: nil,
+                data: nil,
+                imageMissing: true,
+                missingReason: "画像ファイルの読み込みに失敗: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private static func encodePairwiseJudgeInputMeta(_ meta: PairwiseJudgeInputMeta) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(meta),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return "{\"image_missing\":\(meta.imageMissing ? "true" : "false")}"
+        }
+        return text
     }
 
     private static func generateForPairwiseCandidate(

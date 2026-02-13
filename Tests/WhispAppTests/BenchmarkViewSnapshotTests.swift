@@ -333,6 +333,80 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
     }
 
+    func testRenderBenchmarkIntegrityCaseModalBeforeAfter() throws {
+        let artifactDir = try makeArtifactDirectory()
+        let home = try makeTempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let imagePath = home.appendingPathComponent("vision.png", isDirectory: false)
+        try makeSampleImage(path: imagePath.path)
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"STT入力","output_text":"出力ログ","ground_truth_text":"期待出力","vision_image_file":"\(imagePath.path)","vision_image_mime_type":"image/png"}
+        """
+        try Data((jsonl + "\n").utf8).write(to: casesPath, options: .atomic)
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
+        viewModel.selectedTab = .integrity
+        viewModel.selectedTask = .generation
+        viewModel.refresh()
+
+        let before = try renderSnapshot(viewModel: viewModel)
+        let beforeURL = artifactDir.appendingPathComponent("benchmark_integrity_case_modal_before.png")
+        try pngData(from: before).write(to: beforeURL, options: .atomic)
+
+        viewModel.openIntegrityCaseDetail(caseID: "case-1")
+        let after = try renderSnapshot(viewModel: viewModel)
+        let afterURL = artifactDir.appendingPathComponent("benchmark_integrity_case_modal_after.png")
+        try pngData(from: after).write(to: afterURL, options: .atomic)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
+    func testRenderBenchmarkIntegrityCaseModalEditAfter() throws {
+        let artifactDir = try makeArtifactDirectory()
+        let home = try makeTempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"STT入力","ground_truth_text":"期待出力"}
+        """
+        try Data((jsonl + "\n").utf8).write(to: casesPath, options: .atomic)
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
+        viewModel.selectedTab = .integrity
+        viewModel.selectedTask = .generation
+        viewModel.refresh()
+        viewModel.openIntegrityCaseDetail(caseID: "case-1")
+        viewModel.beginIntegrityCaseEditing()
+        viewModel.integrityCaseDraftSTTText = "編集後STT"
+        viewModel.integrityCaseDraftGroundTruthText = "編集後期待出力"
+
+        let edit = try renderSnapshot(viewModel: viewModel)
+        let editURL = artifactDir.appendingPathComponent("benchmark_integrity_case_modal_edit_after.png")
+        try pngData(from: edit).write(to: editURL, options: .atomic)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: editURL.path))
+    }
+
     func testRenderBenchmarkTabsUpdatedUI() throws {
         let artifactDir = try makeArtifactDirectory()
         let home = try makeTempHome()
@@ -625,18 +699,71 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         viewModel.selectedTab = .generationBattle
         viewModel.selectedTask = .generation
         viewModel.refresh()
+        viewModel.setGenerationPairCandidateA(generationA.id)
+        viewModel.setGenerationPairCandidateB(generationB.id)
+        viewModel.setGenerationPairJudgeModel(.gpt5Nano)
         viewModel.selectGenerationPairwiseCase("case-1")
         viewModel.isPairwiseCaseDetailPresented = true
+        XCTAssertNotNil(viewModel.generationPairwiseCaseDetail)
 
-        let image = try renderSnapshot(viewModel: viewModel)
-        let url = artifactDir.appendingPathComponent("benchmark_pairwise_modal.png")
-        try pngData(from: image).write(to: url, options: .atomic)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        let before = try renderPairwiseModalSnapshot(viewModel: viewModel, startsInJudgeTab: true)
+        let beforeURL = artifactDir.appendingPathComponent("benchmark_pairwise_modal_before_judge_image.png")
+        try pngData(from: before).write(to: beforeURL, options: .atomic)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
+
+        let judgeImagePath = home.appendingPathComponent("judge-input.png", isDirectory: false)
+        try makeSampleImage(path: judgeImagePath.path)
+        _ = try store.writeCaseIOText(
+            runID: runID,
+            caseID: "case-1",
+            fileName: "pairwise_judge_input_meta.json",
+            text: """
+            {
+              "vision_image_path": "\(judgeImagePath.path)",
+              "vision_image_mime_type": "image/png",
+              "image_attached": true,
+              "image_missing": false
+            }
+            """
+        )
+
+        viewModel.refresh()
+        viewModel.setGenerationPairCandidateA(generationA.id)
+        viewModel.setGenerationPairCandidateB(generationB.id)
+        viewModel.setGenerationPairJudgeModel(.gpt5Nano)
+        viewModel.selectGenerationPairwiseCase("case-1")
+        viewModel.isPairwiseCaseDetailPresented = true
+        XCTAssertNotNil(viewModel.generationPairwiseCaseDetail)
+
+        let after = try renderPairwiseModalSnapshot(viewModel: viewModel, startsInJudgeTab: true)
+        let afterURL = artifactDir.appendingPathComponent("benchmark_pairwise_modal_after_judge_image.png")
+        try pngData(from: after).write(to: afterURL, options: .atomic)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
     }
 
     private func renderSnapshot(viewModel: BenchmarkViewModel) throws -> NSBitmapImageRep {
         let root = BenchmarkView(viewModel: viewModel, autoRefreshOnAppear: false)
             .frame(width: CGFloat(width), height: CGFloat(height))
+        let hosting = NSHostingView(rootView: root)
+        hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        hosting.layoutSubtreeIfNeeded()
+
+        guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
+            throw AppError.io("failed to create bitmap")
+        }
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        return bitmap
+    }
+
+    private func renderPairwiseModalSnapshot(
+        viewModel: BenchmarkViewModel,
+        startsInJudgeTab: Bool
+    ) throws -> NSBitmapImageRep {
+        let root = BenchmarkPairwiseCaseDetailModal(
+            viewModel: viewModel,
+            startsInJudgeTab: startsInJudgeTab
+        )
+        .frame(width: CGFloat(width), height: CGFloat(height))
         let hosting = NSHostingView(rootView: root)
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
         hosting.layoutSubtreeIfNeeded()
@@ -675,5 +802,49 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func makeSampleImage(path: String) throws {
+        let width = 520
+        let height = 260
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: width,
+            pixelsHigh: height,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else {
+            throw AppError.io("failed to allocate bitmap")
+        }
+        let size = NSSize(width: width, height: height)
+        NSGraphicsContext.saveGraphicsState()
+        guard let context = NSGraphicsContext(bitmapImageRep: rep) else {
+            NSGraphicsContext.restoreGraphicsState()
+            throw AppError.io("failed to create graphics context")
+        }
+        NSGraphicsContext.current = context
+
+        NSColor(calibratedRed: 0.95, green: 0.97, blue: 1.0, alpha: 1).setFill()
+        NSBezierPath(rect: NSRect(origin: .zero, size: size)).fill()
+
+        NSColor(calibratedRed: 0.15, green: 0.30, blue: 0.75, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 20, y: 184, width: 220, height: 52), xRadius: 10, yRadius: 10).fill()
+
+        NSColor(calibratedRed: 0.98, green: 0.76, blue: 0.14, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 280, y: 72, width: 210, height: 132), xRadius: 10, yRadius: 10).fill()
+
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let png = rep.representation(using: .png, properties: [:])
+        else {
+            throw AppError.io("failed to make sample image")
+        }
+        try png.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 }

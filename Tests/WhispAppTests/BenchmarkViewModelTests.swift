@@ -113,6 +113,7 @@ final class BenchmarkViewModelTests: XCTestCase {
         try integrityStore.saveIssues(task: .generation, issues: [issue])
 
         let viewModel = BenchmarkViewModel(store: store, candidateStore: candidateStore, integrityStore: integrityStore)
+        viewModel.selectedTab = .integrity
         viewModel.selectedTask = .generation
         viewModel.refresh()
 
@@ -159,6 +160,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
+        viewModel.selectedTab = .integrity
         viewModel.selectedTask = .generation
         viewModel.refresh()
 
@@ -166,10 +168,136 @@ final class BenchmarkViewModelTests: XCTestCase {
         let case1 = try XCTUnwrap(viewModel.integrityCaseRows.first(where: { $0.id == "case-1" }))
         let case2 = try XCTUnwrap(viewModel.integrityCaseRows.first(where: { $0.id == "case-2" }))
 
-        XCTAssertTrue(case1.hasActiveIssues)
+        XCTAssertEqual(case1.status, .issue)
         XCTAssertEqual(case1.issueCount, 1)
-        XCTAssertFalse(case2.hasActiveIssues)
+        XCTAssertEqual(case2.status, .ok)
         XCTAssertEqual(case2.issueCount, 0)
+    }
+
+    func testOpenIntegrityCaseDetailLoadsRecordFields() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"元入力","output_text":"生成済み","ground_truth_text":"期待出力","vision_image_file":"/tmp/v.png","vision_image_mime_type":"image/png"}
+        """
+        try Data(jsonl.utf8).write(to: casesPath, options: .atomic)
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
+        viewModel.selectedTab = .integrity
+        viewModel.selectedTask = .generation
+        viewModel.refresh()
+        viewModel.openIntegrityCaseDetail(caseID: "case-1")
+
+        XCTAssertTrue(viewModel.isIntegrityCaseDetailPresented)
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.id, "case-1")
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.audioFilePath, "/tmp/a.wav")
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.visionImageFilePath, "/tmp/v.png")
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.visionImageMimeType, "image/png")
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.sttText, "元入力")
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.groundTruthText, "期待出力")
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.outputText, "生成済み")
+    }
+
+    func testSaveIntegrityCaseEditsUpdatesJSONLAndRecomputesStatus() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"","ground_truth_text":"旧期待出力"}
+        """
+        try Data(jsonl.utf8).write(to: casesPath, options: .atomic)
+
+        let issue = BenchmarkIntegrityIssue(
+            id: "issue-case-1",
+            caseID: "case-1",
+            task: .generation,
+            issueType: "missing_stt_text",
+            missingFields: ["stt_text"],
+            sourcePath: casesPath.path,
+            excluded: false,
+            detectedAt: "2026-02-12T00:00:00.000Z"
+        )
+        try integrityStore.saveIssues(task: .generation, issues: [issue])
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path,
+            integrityScanRunner: { _, _ in
+                try integrityStore.saveIssues(task: .generation, issues: [])
+                return "ok"
+            }
+        )
+        viewModel.selectedTab = .integrity
+        viewModel.selectedTask = .generation
+        viewModel.refresh()
+        viewModel.openIntegrityCaseDetail(caseID: "case-1")
+        viewModel.beginIntegrityCaseEditing()
+        viewModel.integrityCaseDraftSTTText = "更新後STT"
+        viewModel.integrityCaseDraftGroundTruthText = "更新後期待出力"
+        viewModel.saveIntegrityCaseEdits()
+
+        waitForCondition {
+            viewModel.integrityCaseRows.first(where: { $0.id == "case-1" })?.status == .ok
+        }
+
+        let saved = try String(contentsOf: casesPath, encoding: .utf8)
+        XCTAssertTrue(saved.contains("\"stt_text\":\"更新後STT\""))
+        XCTAssertTrue(saved.contains("\"ground_truth_text\":\"更新後期待出力\""))
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.sttText, "更新後STT")
+        XCTAssertEqual(viewModel.selectedIntegrityCaseDetail?.groundTruthText, "更新後期待出力")
+    }
+
+    func testConfirmIntegrityCaseDeleteRemovesCaseFromJSONL() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"入力1","ground_truth_text":"正解1"}
+        {"id":"case-2","audio_file":"/tmp/b.wav","stt_text":"入力2","ground_truth_text":"正解2"}
+        """
+        try Data((jsonl + "\n").utf8).write(to: casesPath, options: .atomic)
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path,
+            integrityScanRunner: { _, _ in "ok" }
+        )
+        viewModel.selectedTab = .integrity
+        viewModel.selectedTask = .generation
+        viewModel.refresh()
+        viewModel.openIntegrityCaseDetail(caseID: "case-1")
+        viewModel.requestIntegrityCaseDelete()
+        viewModel.confirmIntegrityCaseDelete()
+
+        waitForCondition {
+            !viewModel.integrityCaseRows.contains(where: { $0.id == "case-1" })
+        }
+
+        let saved = try String(contentsOf: casesPath, encoding: .utf8)
+        XCTAssertFalse(saved.contains("\"id\":\"case-1\""))
+        XCTAssertTrue(saved.contains("\"id\":\"case-2\""))
     }
 
     func testOpenCaseDetailLoadsTimelineAndAttempts() throws {
@@ -452,6 +580,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
+        viewModel.selectedTab = .generationSingle
         viewModel.selectedTask = .generation
         viewModel.refresh()
         viewModel.openCreatePromptCandidateModal()
@@ -485,6 +614,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
+        viewModel.selectedTab = .generationSingle
         viewModel.selectedTask = .generation
         viewModel.refresh()
         viewModel.openCreatePromptCandidateModal()
@@ -523,6 +653,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             candidateStore: candidateStore,
             integrityStore: integrityStore
         )
+        viewModel.selectedTab = .generationBattle
         viewModel.selectedTask = .generation
         viewModel.refresh()
 
@@ -663,6 +794,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
+        viewModel.selectedTab = .generationBattle
         viewModel.selectedTask = .generation
         viewModel.refresh()
         viewModel.setGenerationPairJudgeModel(.gpt5Nano)
@@ -781,6 +913,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
+        viewModel.selectedTab = .generationBattle
         viewModel.selectedTask = .generation
         viewModel.refresh()
 
@@ -867,5 +1000,22 @@ final class BenchmarkViewModelTests: XCTestCase {
             endedAtMs: ended,
             recordedAtMs: ended + 1
         )
+    }
+
+    private func waitForCondition(
+        timeout: TimeInterval = 2.0,
+        pollInterval: TimeInterval = 0.02,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        _ condition: () -> Bool
+    ) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(pollInterval))
+        }
+        XCTFail("condition timeout", file: file, line: line)
     }
 }

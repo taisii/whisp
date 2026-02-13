@@ -267,11 +267,11 @@ extension WhispCLI {
 
         let responseText: String
         switch model {
-        case .gemini25FlashLite, .gemini25FlashLiteAudio:
+        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
             let body = GeminiTextRequest(contents: [
                 GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
             ])
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(LLMModel.gemini25FlashLite.modelName):generateContent?key=\(apiKey)"
+            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
             guard let url = URL(string: endpoint) else {
                 throw AppError.invalidArgument("Gemini URL生成に失敗")
             }
@@ -329,11 +329,11 @@ extension WhispCLI {
 
         let responseText: String
         switch model {
-        case .gemini25FlashLite, .gemini25FlashLiteAudio:
+        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
             let body = GeminiTextRequest(contents: [
                 GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
             ])
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(LLMModel.gemini25FlashLite.modelName):generateContent?key=\(apiKey)"
+            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
             guard let url = URL(string: endpoint) else {
                 throw AppError.invalidArgument("Gemini URL生成に失敗")
             }
@@ -367,46 +367,38 @@ extension WhispCLI {
         model: LLMModel,
         apiKey: String,
         referenceText: String?,
-        context: ContextInfo?,
+        sttInputText: String,
         candidateAText: String,
-        candidateBText: String
+        candidateBText: String,
+        visionImageData: Data?,
+        visionImageMimeType: String?
     ) async throws -> (result: PairwiseJudgeResult, prompt: String, responseJSON: String) {
-        let contextSnippet = llmEvalContextSnippet(context: context)
-        let referenceBlock = referenceText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? (referenceText ?? "")
-            : "(none)"
-        let prompt = """
-        あなたは音声入力ベンチマークの比較審査員です。候補A/Bを比較し、必ずJSONのみを返してください。
-
-        出力スキーマ:
-        {"overall_winner":"a|b|tie","intent_winner":"a|b|tie","hallucination_winner":"a|b|tie","style_context_winner":"a|b|tie","overall_reason":"短い理由","intent_reason":"短い理由","hallucination_reason":"短い理由","style_context_reason":"短い理由","confidence":"high|medium|low"}
-
-        判定軸:
-        - intent_winner: 入力の意図保持
-        - hallucination_winner: 根拠のない追加情報の少なさ
-        - style_context_winner: 文体・文脈への適合
-        - overall_winner: 上記3軸の多数決。多数がなければ tie
-
-        reference_text:
-        \(referenceBlock)
-
-        context_excerpt:
-        \(contextSnippet)
-
-        candidate_a_text:
-        \(candidateAText)
-
-        candidate_b_text:
-        \(candidateBText)
-        """
+        let prompt = buildPairwiseJudgePrompt(
+            referenceText: referenceText,
+            sttInputText: sttInputText,
+            candidateAText: candidateAText,
+            candidateBText: candidateBText
+        )
+        let mimeType = normalizedImageMimeType(visionImageMimeType)
+        let hasImage = pairwiseJudgeHasImagePayload(
+            visionImageData: visionImageData,
+            normalizedMimeType: mimeType
+        )
 
         let responseText: String
         switch model {
-        case .gemini25FlashLite, .gemini25FlashLiteAudio:
-            let body = GeminiTextRequest(contents: [
-                GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
+        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
+            var parts: [GeminiMultimodalPart] = [.text(prompt)]
+            if hasImage, let visionImageData, let mimeType {
+                parts.append(.inlineData(GeminiInlineData(
+                    mimeType: mimeType,
+                    data: visionImageData.base64EncodedString()
+                )))
+            }
+            let body = GeminiMultimodalRequest(contents: [
+                GeminiMultimodalContent(role: "user", parts: parts),
             ])
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(LLMModel.gemini25FlashLite.modelName):generateContent?key=\(apiKey)"
+            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
             guard let url = URL(string: endpoint) else {
                 throw AppError.invalidArgument("Gemini URL生成に失敗")
             }
@@ -414,7 +406,17 @@ extension WhispCLI {
             let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
             responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         case .gpt4oMini, .gpt5Nano:
-            let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
+            let content: OpenAIChatMessageContent
+            if hasImage, let visionImageData, let mimeType {
+                let dataURL = "data:\(mimeType);base64,\(visionImageData.base64EncodedString())"
+                content = .parts([
+                    .text(prompt),
+                    .imageURL(OpenAIImageURLContent(url: dataURL)),
+                ])
+            } else {
+                content = .text(prompt)
+            }
+            let body = OpenAIChatRequest(model: model.modelName, messages: [OpenAIChatMessage(role: "user", content: content)])
             guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
                 throw AppError.invalidArgument("OpenAI URL生成に失敗")
             }
@@ -441,6 +443,71 @@ extension WhispCLI {
             confidence: decoded.confidence?.trimmingCharacters(in: .whitespacesAndNewlines)
         )
         return (result, prompt, jsonText)
+    }
+
+    static func buildPairwiseJudgePrompt(
+        referenceText: String?,
+        sttInputText: String,
+        candidateAText: String,
+        candidateBText: String
+    ) -> String {
+        let trimmedReference = (referenceText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let referenceBlock = trimmedReference.isEmpty ? "(none)" : trimmedReference
+        let trimmedSTTInput = sttInputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sttInputBlock = trimmedSTTInput.isEmpty ? "(none)" : trimmedSTTInput
+
+        return """
+        [role]
+        あなたは音声入力ベンチマークの比較審査員です。候補A/Bを比較し、必ずJSONのみを返してください。
+
+        [output_schema]
+        {"overall_winner":"a|b|tie","intent_winner":"a|b|tie","hallucination_winner":"a|b|tie","style_context_winner":"a|b|tie","overall_reason":"短い理由","intent_reason":"短い理由","hallucination_reason":"短い理由","style_context_reason":"短い理由","confidence":"high|medium|low"}
+
+        [evaluation_principles]
+        - reference_text を主基準に、stt_input_text と添付画像（ある場合）を根拠として比較する。
+        - STT入力は音声認識結果であり、誤認識を含む可能性がある前提で判断する。
+        - intent_winner は、reference_text と添付画像（カーソル位置を含む）を手掛かりに、ユーザーが意図したであろう文を最も正しく再現できている候補を勝者とする。
+        - hallucination_winner は、ユーザーが喋っていない内容を追加していない候補を勝者とする。stt_input_text / reference_text / 添付画像で裏付けできない情報、またはプレースホルダー由来の情報を付け加えた場合は減点する。
+        - style_context_winner は、添付画像から推定できる敬語レベル・文体（丁寧/常体、業務/カジュアル等）により適合している候補を勝者とする。
+        - overall_winner は上記3軸の多数決。多数がなければ tie。
+
+        [reference_text]
+        \(referenceBlock)
+
+        [stt_input_text]
+        \(sttInputBlock)
+
+        [candidate_a_text]
+        \(candidateAText)
+
+        [candidate_b_text]
+        \(candidateBText)
+        """
+    }
+
+    static func pairwiseJudgeHasImagePayload(
+        visionImageData: Data?,
+        visionImageMimeType: String?
+    ) -> Bool {
+        pairwiseJudgeHasImagePayload(
+            visionImageData: visionImageData,
+            normalizedMimeType: normalizedImageMimeType(visionImageMimeType)
+        )
+    }
+
+    static func normalizedImageMimeType(_ raw: String?) -> String? {
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty, trimmed.hasPrefix("image/") else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func pairwiseJudgeHasImagePayload(
+        visionImageData: Data?,
+        normalizedMimeType: String?
+    ) -> Bool {
+        (visionImageData?.isEmpty == false) && (normalizedMimeType?.isEmpty == false)
     }
 
     static func extractedJSONObjectText(from raw: String) -> String {
@@ -503,11 +570,11 @@ extension WhispCLI {
         )
 
         switch model {
-        case .gemini25FlashLite, .gemini25FlashLiteAudio:
+        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
             let body = GeminiTextRequest(contents: [
                 GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
             ])
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(LLMModel.gemini25FlashLite.modelName):generateContent?key=\(apiKey)"
+            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
             guard let url = URL(string: endpoint) else {
                 throw AppError.invalidArgument("Gemini URL生成に失敗")
             }
@@ -516,7 +583,7 @@ extension WhispCLI {
             let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let usage = decoded.usageMetadata.map {
                 LLMUsage(
-                    model: LLMModel.gemini25FlashLite.modelName,
+                    model: model.modelName,
                     promptTokens: $0.promptTokenCount,
                     completionTokens: $0.candidatesTokenCount,
                     provider: "gemini"

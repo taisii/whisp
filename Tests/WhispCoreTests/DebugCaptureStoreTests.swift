@@ -3,6 +3,36 @@ import XCTest
 @testable import WhispCore
 
 final class DebugCaptureStoreTests: XCTestCase {
+    private struct ManualCaseLine: Decodable {
+        struct Labels: Decodable {
+            let transcriptGold: String
+
+            enum CodingKeys: String, CodingKey {
+                case transcriptGold = "transcript_gold"
+            }
+        }
+
+        let id: String
+        let groundTruthText: String
+        let llmModel: String
+        let audioDurationSec: Double?
+        let audioFile: String
+        let visionImageFile: String?
+        let labels: Labels?
+        let context: ContextInfo?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case groundTruthText = "ground_truth_text"
+            case llmModel = "llm_model"
+            case audioDurationSec = "audio_duration_sec"
+            case audioFile = "audio_file"
+            case visionImageFile = "vision_image_file"
+            case labels
+            case context
+        }
+    }
+
     private func tempHome() -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -224,21 +254,23 @@ final class DebugCaptureStoreTests: XCTestCase {
         let path = try store.appendManualTestCase(captureID: captureID)
         let content = try String(contentsOfFile: path, encoding: .utf8)
         guard let line = content.components(separatedBy: .newlines).first(where: { !$0.isEmpty }),
-              let data = line.data(using: .utf8),
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let data = line.data(using: .utf8)
         else {
             return XCTFail("manual case JSONL parse failed")
         }
+        let payload = try JSONDecoder().decode(ManualCaseLine.self, from: data)
 
-        XCTAssertEqual(json["id"] as? String, captureID)
-        XCTAssertEqual(json["ground_truth_text"] as? String, "正解")
-        XCTAssertEqual(json["llm_model"] as? String, "gemini-2.5-flash-lite")
-        XCTAssertNotNil(json["audio_duration_sec"] as? Double)
-        XCTAssertNotNil(json["vision_image_file"] as? String)
-        let labels = json["labels"] as? [String: Any]
-        XCTAssertEqual(labels?["transcript_gold"] as? String, "stt正解")
-        let context = json["context"] as? [String: Any]
-        XCTAssertEqual(context?["visionSummary"] as? String, "editor")
+        XCTAssertEqual(payload.id, captureID)
+        XCTAssertEqual(payload.groundTruthText, "正解")
+        XCTAssertEqual(payload.llmModel, "gemini-2.5-flash-lite")
+        XCTAssertNotNil(payload.audioDurationSec)
+        XCTAssertTrue(payload.audioFile.contains("/manual_case_assets/\(captureID)/audio."))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: payload.audioFile))
+        let visionImageFile = try XCTUnwrap(payload.visionImageFile)
+        XCTAssertTrue(visionImageFile.contains("/manual_case_assets/\(captureID)/vision."))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: visionImageFile))
+        XCTAssertEqual(payload.labels?.transcriptGold, "stt正解")
+        XCTAssertEqual(payload.context?.visionSummary, "editor")
     }
 
     func testDeleteCaptureRemovesRecordAndAudio() throws {

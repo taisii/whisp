@@ -186,42 +186,52 @@ extension WhispCLI {
             throw AppError.invalidArgument("generation compare は異なる candidate を2件指定してください")
         }
 
-        let config = try loadConfig()
-        let judgeModel = options.judgeModel ?? APIKeyResolver.effectivePostProcessModel(config.llmModel)
-        let runtimeHash = try buildGenerationPairwiseRuntimeOptionsHash(
+        let lookupCandidates = try buildGenerationPairwiseLookupCandidates(
             candidateA: candidateA,
             candidateB: candidateB,
-            judgeModel: judgeModel
-        )
-        let pairKey = "pair:\(candidateA.id)__vs__\(candidateB.id)"
-        let key = BenchmarkKey(
-            task: .generation,
             datasetPath: datasetPath,
             datasetHash: datasetHash,
-            candidateID: pairKey,
-            runtimeOptionsHash: runtimeHash,
-            evaluatorVersion: "pairwise-v1",
-            codeVersion: ProcessInfo.processInfo.environment["WHISP_CODE_VERSION"] ?? "dev"
+            preferredJudgeModel: options.judgeModel
         )
-
-        print("pair_candidate_a: \(candidateA.id)")
-        print("pair_candidate_b: \(candidateB.id)")
-        print("judge_model: \(judgeModel.rawValue)")
-
         if !options.force,
-           let existing = try benchmarkStore.findLatestCompletedRun(matching: key)
+           let existing = try findLatestCompletedPairwiseRun(
+               lookupCandidates: lookupCandidates,
+               benchmarkStore: benchmarkStore
+           )
         {
+            print("pair_candidate_a: \(candidateA.id)")
+            print("pair_candidate_b: \(candidateB.id)")
+            print("judge_model: \(existing.judgeModel.rawValue)")
             print("pair: \(candidateA.id) vs \(candidateB.id)\tstatus: skipped_existing\trun_id: \(existing.id)")
             return
         }
 
+        let config = try loadConfig()
+        let judgeContext = try APIKeyResolver.resolveIntentJudgeContext(
+            config: config,
+            preferredModel: options.judgeModel,
+            requiresVision: true
+        )
+        let key = try makeGenerationPairwiseBenchmarkKey(
+            candidateA: candidateA,
+            candidateB: candidateB,
+            datasetPath: datasetPath,
+            datasetHash: datasetHash,
+            judgeModel: judgeContext.model
+        )
+
+        print("pair_candidate_a: \(candidateA.id)")
+        print("pair_candidate_b: \(candidateB.id)")
+        print("judge_model: \(judgeContext.model.rawValue)")
+
         let generationOptions = try makeGenerationPairwiseCompareOptions(
             candidateA: candidateA,
             candidateB: candidateB,
-            judgeModel: judgeModel,
+            judgeModel: judgeContext.model,
+            judgeAPIKey: judgeContext.apiKey,
             datasetPath: datasetPath,
             datasetHash: datasetHash,
-            runtimeHash: runtimeHash,
+            runtimeHash: key.runtimeOptionsHash,
             benchmarkKey: key,
             benchmarkWorkers: options.benchmarkWorkers
         )
@@ -318,6 +328,7 @@ extension WhispCLI {
         candidateA: BenchmarkCandidate,
         candidateB: BenchmarkCandidate,
         judgeModel: LLMModel,
+        judgeAPIKey: String,
         datasetPath: String,
         datasetHash: String,
         runtimeHash: String,
@@ -350,6 +361,7 @@ extension WhispCLI {
             candidateA: candidateA,
             candidateB: candidateB,
             judgeModel: judgeModel,
+            judgeAPIKey: judgeAPIKey,
             datasetHash: datasetHash,
             runtimeOptionsHash: runtimeHash,
             evaluatorVersion: benchmarkKey.evaluatorVersion,
@@ -421,6 +433,86 @@ extension WhispCLI {
             "judge_model=\(judgeModel.rawValue)",
         ].joined(separator: "\n")
         return sha256Hex(text: material)
+    }
+
+    private struct PairwiseSkipLookupCandidate {
+        let judgeModel: LLMModel
+        let key: BenchmarkKey
+    }
+
+    private static func buildGenerationPairwiseLookupCandidates(
+        candidateA: BenchmarkCandidate,
+        candidateB: BenchmarkCandidate,
+        datasetPath: String,
+        datasetHash: String,
+        preferredJudgeModel: LLMModel?
+    ) throws -> [PairwiseSkipLookupCandidate] {
+        let judgeModels: [LLMModel]
+        if let preferredJudgeModel {
+            judgeModels = [preferredJudgeModel]
+        } else {
+            judgeModels = [.gpt4oMini, .gemini3FlashPreview, .gemini25FlashLite]
+        }
+
+        return try judgeModels.map { judgeModel in
+            PairwiseSkipLookupCandidate(
+                judgeModel: judgeModel,
+                key: try makeGenerationPairwiseBenchmarkKey(
+                    candidateA: candidateA,
+                    candidateB: candidateB,
+                    datasetPath: datasetPath,
+                    datasetHash: datasetHash,
+                    judgeModel: judgeModel
+                )
+            )
+        }
+    }
+
+    private static func findLatestCompletedPairwiseRun(
+        lookupCandidates: [PairwiseSkipLookupCandidate],
+        benchmarkStore: BenchmarkStore
+    ) throws -> (id: String, judgeModel: LLMModel)? {
+        var latest: (run: BenchmarkRunRecord, judgeModel: LLMModel)?
+        for candidate in lookupCandidates {
+            guard let run = try benchmarkStore.findLatestCompletedRun(matching: candidate.key) else {
+                continue
+            }
+            guard let current = latest else {
+                latest = (run, candidate.judgeModel)
+                continue
+            }
+            if run.updatedAt > current.run.updatedAt {
+                latest = (run, candidate.judgeModel)
+            }
+        }
+        guard let latest else {
+            return nil
+        }
+        return (latest.run.id, latest.judgeModel)
+    }
+
+    static func makeGenerationPairwiseBenchmarkKey(
+        candidateA: BenchmarkCandidate,
+        candidateB: BenchmarkCandidate,
+        datasetPath: String,
+        datasetHash: String,
+        judgeModel: LLMModel
+    ) throws -> BenchmarkKey {
+        let runtimeHash = try buildGenerationPairwiseRuntimeOptionsHash(
+            candidateA: candidateA,
+            candidateB: candidateB,
+            judgeModel: judgeModel
+        )
+        let pairKey = "pair:\(candidateA.id)__vs__\(candidateB.id)"
+        return BenchmarkKey(
+            task: .generation,
+            datasetPath: datasetPath,
+            datasetHash: datasetHash,
+            candidateID: pairKey,
+            runtimeOptionsHash: runtimeHash,
+            evaluatorVersion: "pairwise-v1",
+            codeVersion: ProcessInfo.processInfo.environment["WHISP_CODE_VERSION"] ?? "dev"
+        )
     }
 
     private static func normalizePath(_ raw: String) -> String {

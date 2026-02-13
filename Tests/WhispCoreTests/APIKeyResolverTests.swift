@@ -26,4 +26,48 @@ final class APIKeyResolverTests: XCTestCase {
         XCTAssertEqual(resolved.model, .gemini25FlashLite)
         XCTAssertEqual(resolved.apiKey, "gm")
     }
+
+    func testResolveIntentJudgeContextRequiresVisionRejectsUnsupportedModel() {
+        let config = Config(apiKeys: APIKeys(deepgram: "", gemini: "gm", openai: "oa"))
+        XCTAssertThrowsError(
+            try APIKeyResolver.resolveIntentJudgeContext(
+                config: config,
+                preferredModel: .gpt5Nano,
+                requiresVision: true
+            )
+        )
+    }
+
+    func testResolveIntentJudgeContextRequiresVisionRejectsGeminiAudioModel() {
+        let config = Config(apiKeys: APIKeys(deepgram: "", gemini: "gm", openai: "oa"))
+        XCTAssertThrowsError(
+            try APIKeyResolver.resolveIntentJudgeContext(
+                config: config,
+                preferredModel: .gemini25FlashLiteAudio,
+                requiresVision: true
+            )
+        )
+    }
+
+    func testResolveIntentJudgeContextRequiresVisionAutoSelectsOpenAI() throws {
+        let config = Config(apiKeys: APIKeys(deepgram: "", gemini: "gm", openai: "oa"))
+        let resolved = try APIKeyResolver.resolveIntentJudgeContext(
+            config: config,
+            preferredModel: nil,
+            requiresVision: true
+        )
+        XCTAssertEqual(resolved.model, .gpt4oMini)
+        XCTAssertEqual(resolved.apiKey, "oa")
+    }
+
+    func testResolveIntentJudgeContextRequiresVisionFallsBackToGemini() throws {
+        let config = Config(apiKeys: APIKeys(deepgram: "", gemini: "gm", openai: ""))
+        let resolved = try APIKeyResolver.resolveIntentJudgeContext(
+            config: config,
+            preferredModel: nil,
+            requiresVision: true
+        )
+        XCTAssertEqual(resolved.model, .gemini25FlashLite)
+        XCTAssertEqual(resolved.apiKey, "gm")
+    }
 }

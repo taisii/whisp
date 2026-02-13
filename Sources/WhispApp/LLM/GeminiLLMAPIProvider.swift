@@ -47,7 +47,7 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
 
     func supports(model: LLMModel) -> Bool {
         switch model {
-        case .gemini25FlashLite, .gemini25FlashLiteAudio:
+        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
             return true
         case .gpt4oMini, .gpt5Nano:
             return false
@@ -56,7 +56,7 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
 
     func postProcess(
         apiKey: String,
-        model _: LLMModel,
+        model: LLMModel,
         prompt: String
     ) async throws -> PostProcessResult {
         let requestBody = GeminiRequest(
@@ -65,7 +65,7 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
             ]
         )
 
-        guard let url = URL(string: endpoint(apiKey: apiKey)) else {
+        guard let url = URL(string: endpoint(apiKey: apiKey, model: model)) else {
             throw AppError.invalidArgument("Gemini URL生成に失敗")
         }
 
@@ -74,7 +74,7 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
 
         let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let usage = decoded.usageMetadata.map {
-            LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount, provider: "gemini")
+            LLMUsage(model: model.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount, provider: "gemini")
         }
 
         return PostProcessResult(text: text, usage: usage)
@@ -82,7 +82,7 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
 
     func transcribeAudio(
         apiKey: String,
-        model _: LLMModel,
+        model: LLMModel,
         prompt: String,
         wavData: Data,
         mimeType: String
@@ -99,7 +99,7 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
             ]
         )
 
-        guard let url = URL(string: endpoint(apiKey: apiKey)) else {
+        guard let url = URL(string: endpoint(apiKey: apiKey, model: model)) else {
             throw AppError.invalidArgument("Gemini URL生成に失敗")
         }
 
@@ -108,13 +108,13 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
 
         let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let usage = decoded.usageMetadata.map {
-            LLMUsage(model: LLMModel.gemini25FlashLite.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount, provider: "gemini")
+            LLMUsage(model: model.modelName, promptTokens: $0.promptTokenCount, completionTokens: $0.candidatesTokenCount, provider: "gemini")
         }
 
         return PostProcessResult(text: text, usage: usage)
     }
 
-    private func endpoint(apiKey: String) -> String {
-        "https://generativelanguage.googleapis.com/v1beta/models/\(LLMModel.gemini25FlashLite.modelName):generateContent?key=\(apiKey)"
+    private func endpoint(apiKey: String, model: LLMModel) -> String {
+        "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
     }
 }

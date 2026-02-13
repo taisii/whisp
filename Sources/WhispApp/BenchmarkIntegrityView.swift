@@ -33,7 +33,7 @@ struct BenchmarkIntegrityView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(viewModel.integrityCaseRows) { row in
                                 Button {
-                                    viewModel.selectIntegrityCase(row.id)
+                                    viewModel.openIntegrityCaseDetail(caseID: row.id)
                                 } label: {
                                     caseRow(row)
                                         .padding(.vertical, 4)
@@ -92,13 +92,10 @@ struct BenchmarkIntegrityView: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            headerText("case_id", width: 190)
-            headerText("audio_file", width: 170)
-            headerText("stt_text", width: 260)
-            headerText("reference", width: 260)
-            headerText("issues", width: 90)
-            headerText("status", width: 120)
-            headerText("issue_types", width: 260)
+            headerText("case_id", width: 240)
+            headerText("stt_text", width: 420)
+            headerText("reference", width: 420)
+            headerText("status", width: 170)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 10)
@@ -108,13 +105,11 @@ struct BenchmarkIntegrityView: View {
 
     private func caseRow(_ row: BenchmarkIntegrityCaseRow) -> some View {
         HStack(spacing: 10) {
-            cellText(row.id, width: 190, color: row.missingInDataset ? .orange : .primary)
-            cellText(row.audioFile, width: 170, color: .secondary)
-            cellText(row.sttPreview, width: 260)
-            cellText(row.referencePreview, width: 260)
-            cellText("\(row.activeIssueCount)/\(row.issueCount)", width: 90, color: issueCountColor(row))
-            cellText(statusText(row), width: 120, color: issueCountColor(row))
-            cellText(row.issueTypesSummary, width: 260, color: row.hasActiveIssues ? .red : .secondary)
+            cellText(row.id, width: 240, color: row.isMissingInDataset ? .orange : .primary)
+            cellText(row.sttPreview, width: 420)
+            cellText(row.referencePreview, width: 420)
+            statusBadge(row)
+                .frame(width: 170, alignment: .leading)
             Spacer(minLength: 0)
         }
         .font(.system(size: 11, design: .monospaced))
@@ -122,9 +117,9 @@ struct BenchmarkIntegrityView: View {
 
     @ViewBuilder
     private func rowBackground(_ row: BenchmarkIntegrityCaseRow) -> some View {
-        if row.hasActiveIssues {
+        if row.status == .issue {
             Color.red.opacity(0.12)
-        } else if row.hasOnlyExcludedIssues || row.missingInDataset {
+        } else if row.status == .excluded || row.status == .datasetMissing {
             Color.orange.opacity(0.12)
         } else {
             Color.clear
@@ -147,26 +142,32 @@ struct BenchmarkIntegrityView: View {
             .truncationMode(.tail)
     }
 
-    private func statusText(_ row: BenchmarkIntegrityCaseRow) -> String {
-        if row.missingInDataset {
-            return "dataset_missing"
+    private func statusBadge(_ row: BenchmarkIntegrityCaseRow) -> some View {
+        let style = statusStyle(row.status)
+        return HStack(spacing: 6) {
+            Text(style.text)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(style.color.opacity(0.16))
+                .foregroundStyle(style.color)
+                .clipShape(Capsule())
+            Text("\(row.activeIssueCount)/\(row.issueCount)")
+                .font(.system(size: 10, design: .monospaced))
+                .foregroundStyle(.secondary)
         }
-        if row.hasActiveIssues {
-            return "issue"
-        }
-        if row.hasOnlyExcludedIssues {
-            return "excluded"
-        }
-        return "ok"
     }
 
-    private func issueCountColor(_ row: BenchmarkIntegrityCaseRow) -> Color {
-        if row.hasActiveIssues {
-            return .red
+    private func statusStyle(_ status: BenchmarkIntegrityStatusBadge) -> (text: String, color: Color) {
+        switch status {
+        case .ok:
+            return ("OK", .green)
+        case .issue:
+            return ("ISSUE", .red)
+        case .excluded:
+            return ("EXCLUDED", .orange)
+        case .datasetMissing:
+            return ("DATASET_MISSING", .orange)
         }
-        if row.hasOnlyExcludedIssues || row.missingInDataset {
-            return .orange
-        }
-        return .secondary
     }
 }

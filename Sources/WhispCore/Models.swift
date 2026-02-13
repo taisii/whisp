@@ -24,6 +24,7 @@ public enum RecordingMode: String, Codable, Equatable, Sendable {
 }
 
 public enum LLMModel: String, Codable, Equatable, Sendable {
+    case gemini3FlashPreview = "gemini-3-flash-preview"
     case gemini25FlashLite = "gemini-2.5-flash-lite"
     case gemini25FlashLiteAudio = "gemini-2.5-flash-lite-audio"
     case gpt4oMini = "gpt-4o-mini"
@@ -31,6 +32,8 @@ public enum LLMModel: String, Codable, Equatable, Sendable {
 
     public var modelName: String {
         switch self {
+        case .gemini3FlashPreview:
+            return "gemini-3-flash-preview"
         case .gemini25FlashLite:
             return "gemini-2.5-flash-lite"
         case .gemini25FlashLiteAudio:

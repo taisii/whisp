@@ -360,4 +360,130 @@ final class CLICommandTests: XCTestCase {
             )
         )
     }
+
+    func testBuildPairwiseJudgePromptIncludesSTTAndReferencePrinciples() {
+        let prompt = WhispCLI.buildPairwiseJudgePrompt(
+            referenceText: "期待される文",
+            sttInputText: "すってぃー入力",
+            candidateAText: "候補A",
+            candidateBText: "候補B"
+        )
+
+        XCTAssertTrue(prompt.contains("[evaluation_principles]"))
+        XCTAssertTrue(prompt.contains("reference_text を主基準"))
+        XCTAssertTrue(prompt.contains("STT入力は音声認識結果"))
+        XCTAssertTrue(prompt.contains("[stt_input_text]"))
+        XCTAssertTrue(prompt.contains("すってぃー入力"))
+        XCTAssertFalse(prompt.contains("[cursor_context_text]"))
+        XCTAssertFalse(prompt.contains("[screen_context_text]"))
+    }
+
+    func testManualBenchmarkCaseDecodesAccessibilityFocusedElement() throws {
+        let data = Data("""
+        {
+          "id": "case-a",
+          "audio_file": "/tmp/a.wav",
+          "stt_text": "input",
+          "accessibility": {
+            "focusedElement": {
+              "selectedText": "選択中",
+              "selectedRange": { "location": 3, "length": 2 },
+              "caretContext": "abc|def"
+            }
+          }
+        }
+        """.utf8)
+        let item = try JSONDecoder().decode(ManualBenchmarkCase.self, from: data)
+        XCTAssertEqual(item.accessibility?.focusedElement?.selectedText, "選択中")
+        XCTAssertEqual(item.accessibility?.focusedElement?.selectedRange?.location, 3)
+        XCTAssertEqual(item.accessibility?.focusedElement?.selectedRange?.length, 2)
+        XCTAssertEqual(item.accessibility?.focusedElement?.caretContext, "abc|def")
+    }
+
+    func testMultimodalPayloadsEncodeImageParts() throws {
+        let openAI = OpenAIChatRequest(
+            model: "gpt-4o-mini",
+            messages: [
+                OpenAIChatMessage(
+                    role: "user",
+                    content: .parts([
+                        .text("prompt"),
+                        .imageURL(OpenAIImageURLContent(url: "data:image/png;base64,AAAA")),
+                    ])
+                ),
+            ]
+        )
+        let openAIJSON = String(data: try JSONEncoder().encode(openAI), encoding: .utf8) ?? ""
+        let normalizedOpenAIJSON = openAIJSON.replacingOccurrences(of: "\\/", with: "/")
+        XCTAssertTrue(normalizedOpenAIJSON.contains("\"image_url\""))
+        XCTAssertTrue(normalizedOpenAIJSON.contains("\"data:image/png;base64,AAAA\""))
+
+        let gemini = GeminiMultimodalRequest(contents: [
+            GeminiMultimodalContent(role: "user", parts: [
+                .text("prompt"),
+                .inlineData(GeminiInlineData(mimeType: "image/png", data: "BBBB")),
+            ]),
+        ])
+        let geminiJSON = String(data: try JSONEncoder().encode(gemini), encoding: .utf8) ?? ""
+        let normalizedGeminiJSON = geminiJSON.replacingOccurrences(of: "\\/", with: "/")
+        XCTAssertTrue(normalizedGeminiJSON.contains("\"inlineData\""))
+        XCTAssertTrue(normalizedGeminiJSON.contains("\"mimeType\""))
+        XCTAssertTrue(normalizedGeminiJSON.contains("\"image/png\""))
+        XCTAssertTrue(normalizedGeminiJSON.contains("\"data\":\"BBBB\""))
+    }
+
+    func testPairwiseJudgeHasImagePayloadRequiresImageMimePrefix() {
+        let bytes = Data([0x00, 0x01, 0x02])
+        XCTAssertTrue(WhispCLI.pairwiseJudgeHasImagePayload(
+            visionImageData: bytes,
+            visionImageMimeType: "image/png"
+        ))
+        XCTAssertFalse(WhispCLI.pairwiseJudgeHasImagePayload(
+            visionImageData: bytes,
+            visionImageMimeType: "png"
+        ))
+        XCTAssertFalse(WhispCLI.pairwiseJudgeHasImagePayload(
+            visionImageData: bytes,
+            visionImageMimeType: nil
+        ))
+        XCTAssertFalse(WhispCLI.pairwiseJudgeHasImagePayload(
+            visionImageData: nil,
+            visionImageMimeType: "image/png"
+        ))
+    }
+
+    func testMakeGenerationPairwiseBenchmarkKeyDoesNotRequireJudgeAPIKey() throws {
+        let now = WhispTime.isoNow()
+        let candidateA = BenchmarkCandidate(
+            id: "gen-a",
+            task: .generation,
+            model: "gpt-4o-mini",
+            generationPromptTemplate: "A",
+            options: [:],
+            createdAt: now,
+            updatedAt: now
+        )
+        let candidateB = BenchmarkCandidate(
+            id: "gen-b",
+            task: .generation,
+            model: "gemini-2.5-flash-lite",
+            generationPromptTemplate: "B",
+            options: [:],
+            createdAt: now,
+            updatedAt: now
+        )
+
+        let key = try WhispCLI.makeGenerationPairwiseBenchmarkKey(
+            candidateA: candidateA,
+            candidateB: candidateB,
+            datasetPath: "/tmp/manual.jsonl",
+            datasetHash: "dataset-hash",
+            judgeModel: .gpt5Nano
+        )
+        XCTAssertEqual(key.task, .generation)
+        XCTAssertEqual(key.datasetPath, "/tmp/manual.jsonl")
+        XCTAssertEqual(key.datasetHash, "dataset-hash")
+        XCTAssertEqual(key.candidateID, "pair:gen-a__vs__gen-b")
+        XCTAssertFalse(key.runtimeOptionsHash.isEmpty)
+    }
 }
