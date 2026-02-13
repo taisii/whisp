@@ -12,6 +12,16 @@ struct BenchmarkComparisonView: View {
         let width: CGFloat
     }
 
+    private struct PairwiseSummaryRow: Identifiable {
+        let id: String
+        let axis: String
+        let a: Int
+        let b: Int
+        let tie: Int
+
+        var total: Int { a + b + tie }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             controlBar
@@ -49,7 +59,10 @@ struct BenchmarkComparisonView: View {
                     set: { viewModel.setGenerationPairCandidateA($0) }
                 )) {
                     ForEach(viewModel.generationCandidates, id: \.id) { candidate in
-                        Text(candidate.id).tag(candidate.id)
+                        Text(candidateDisplayLabel(candidate))
+                            .lineLimit(1)
+                            .help(candidate.id)
+                            .tag(candidate.id)
                     }
                 }
                 .frame(width: 240)
@@ -59,7 +72,10 @@ struct BenchmarkComparisonView: View {
                     set: { viewModel.setGenerationPairCandidateB($0) }
                 )) {
                     ForEach(viewModel.generationCandidates, id: \.id) { candidate in
-                        Text(candidate.id).tag(candidate.id)
+                        Text(candidateDisplayLabel(candidate))
+                            .lineLimit(1)
+                            .help(candidate.id)
+                            .tag(candidate.id)
                     }
                 }
                 .frame(width: 240)
@@ -79,7 +95,10 @@ struct BenchmarkComparisonView: View {
                     set: { viewModel.setGenerationSingleCandidate($0) }
                 )) {
                     ForEach(viewModel.generationCandidates, id: \.id) { candidate in
-                        Text(candidate.id).tag(candidate.id)
+                        Text(candidateDisplayLabel(candidate))
+                            .lineLimit(1)
+                            .help(candidate.id)
+                            .tag(candidate.id)
                     }
                 }
                 .frame(width: 280)
@@ -228,6 +247,7 @@ struct BenchmarkComparisonView: View {
 
             if let row = viewModel.selectedComparisonRow {
                 VStack(alignment: .leading, spacing: 8) {
+                    detailLine("candidate", candidateDisplayLabel(row.candidate))
                     detailLine("candidate_id", row.candidate.id)
                     detailLine("task", row.candidate.task.rawValue)
                     detailLine("model", row.candidate.model)
@@ -308,11 +328,16 @@ struct BenchmarkComparisonView: View {
             Text("Pairwise Summary")
                 .font(.system(size: 13, weight: .semibold))
             if let summary = viewModel.generationPairwiseSummary {
-                HStack(spacing: 10) {
-                    summaryChip("overall", a: summary.overallAWins, b: summary.overallBWins, tie: summary.overallTies)
-                    summaryChip("intent", a: summary.intentAWins, b: summary.intentBWins, tie: summary.intentTies)
-                    summaryChip("hallucination", a: summary.hallucinationAWins, b: summary.hallucinationBWins, tie: summary.hallucinationTies)
-                    summaryChip("style_context", a: summary.styleContextAWins, b: summary.styleContextBWins, tie: summary.styleContextTies)
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 8) {
+                        pairwiseCandidateChip("A", candidate: viewModel.generationPairCandidateA)
+                        pairwiseCandidateChip("B", candidate: viewModel.generationPairCandidateB)
+                        Spacer(minLength: 0)
+                    }
+                    pairwiseSummaryTable(summary)
+                    Text("judge_model=\(viewModel.generationPairJudgeModel.rawValue)")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
                 Text("judged_cases=\(summary.judgedCases) / judge_error_cases=\(summary.judgeErrorCases)")
                     .font(.system(size: 11, design: .monospaced))
@@ -469,6 +494,120 @@ struct BenchmarkComparisonView: View {
         }
     }
 
+    private func pairwiseSummaryRows(_ summary: PairwiseRunSummary) -> [PairwiseSummaryRow] {
+        [
+            PairwiseSummaryRow(
+                id: "overall",
+                axis: "overall",
+                a: summary.overallAWins,
+                b: summary.overallBWins,
+                tie: summary.overallTies
+            ),
+            PairwiseSummaryRow(
+                id: "intent",
+                axis: "intent",
+                a: summary.intentAWins,
+                b: summary.intentBWins,
+                tie: summary.intentTies
+            ),
+            PairwiseSummaryRow(
+                id: "hallucination",
+                axis: "hallucination",
+                a: summary.hallucinationAWins,
+                b: summary.hallucinationBWins,
+                tie: summary.hallucinationTies
+            ),
+            PairwiseSummaryRow(
+                id: "style_context",
+                axis: "style_context",
+                a: summary.styleContextAWins,
+                b: summary.styleContextBWins,
+                tie: summary.styleContextTies
+            ),
+        ]
+    }
+
+    private func pairwiseSummaryTable(_ summary: PairwiseRunSummary) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                pairwiseSummaryHeaderCell("軸", width: 150)
+                pairwiseSummaryHeaderCell("A", width: 110)
+                pairwiseSummaryHeaderCell("B", width: 110)
+                pairwiseSummaryHeaderCell("tie", width: 90)
+                pairwiseSummaryHeaderCell("total", width: 90)
+            }
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color(NSColor.controlBackgroundColor))
+
+            Divider()
+
+            ForEach(pairwiseSummaryRows(summary)) { row in
+                HStack(spacing: 8) {
+                    pairwiseSummaryCell(row.axis, width: 150)
+                    pairwiseSummaryCountCell(row.a, row.total, width: 110)
+                    pairwiseSummaryCountCell(row.b, row.total, width: 110)
+                    pairwiseSummaryCountCell(row.tie, row.total, width: 90)
+                    pairwiseSummaryCell(String(row.total), width: 90)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+            }
+        }
+        .background(Color(NSColor.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+        }
+    }
+
+    private func pairwiseSummaryHeaderCell(_ text: String, width: CGFloat) -> some View {
+        Text(text)
+            .frame(width: width, alignment: .leading)
+    }
+
+    private func pairwiseSummaryCell(_ text: String, width: CGFloat) -> some View {
+        Text(text)
+            .font(.system(size: 11, design: .monospaced))
+            .frame(width: width, alignment: .leading)
+            .lineLimit(1)
+    }
+
+    private func pairwiseSummaryCountCell(_ count: Int, _ total: Int, width: CGFloat) -> some View {
+        let detail = pairwiseCountText(count, total: total)
+        return pairwiseSummaryCell(detail, width: width)
+    }
+
+    private func pairwiseCountText(_ count: Int, total: Int) -> String {
+        guard total > 0 else { return String(count) }
+        let rate = Double(count) / Double(total)
+        return "\(count) (\(Int((rate * 100).rounded()))%)"
+    }
+
+    private func pairwiseCandidateChip(_ kind: String, candidate: BenchmarkCandidate?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(kind)
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            if let candidate {
+                Text(candidateDisplayLabel(candidate))
+                    .font(.system(size: 10, design: .monospaced))
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            } else {
+                Text("-")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
     private func winnerCell(_ winner: PairwiseWinner?, width: CGFloat) -> some View {
         Text(winnerText(winner))
             .font(.system(size: 11, design: .monospaced))
@@ -607,7 +746,7 @@ struct BenchmarkComparisonView: View {
             return columns
         case .generationSingle, .generationBattle:
             var columns = [
-                ComparisonColumn(id: "candidate_id", label: "candidate_id", width: 210),
+                ComparisonColumn(id: "candidate_id", label: "candidate", width: 320),
                 ComparisonColumn(id: "model", label: "model", width: 120),
                 ComparisonColumn(id: "prompt_name", label: "prompt_name", width: 120),
                 ComparisonColumn(id: "avg_cer", label: "avg_cer", width: 90),
@@ -637,6 +776,9 @@ struct BenchmarkComparisonView: View {
     private func renderedValue(columnID: String, row: BenchmarkComparisonRow) -> (text: String, color: Color) {
         switch columnID {
         case "candidate_id":
+            if row.candidate.task == .generation {
+                return (candidateDisplayLabel(row.candidate), .primary)
+            }
             return (row.candidate.id, .primary)
         case "model":
             return (row.candidate.model, .primary)
@@ -665,6 +807,17 @@ struct BenchmarkComparisonView: View {
         default:
             return ("-", .secondary)
         }
+    }
+
+    private func candidateDisplayLabel(_ candidate: BenchmarkCandidate) -> String {
+        let promptName = (candidate.promptName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = promptName.isEmpty ? candidate.id : promptName
+        return "\(displayName)（\(candidate.model)）#\(shortCandidateID(candidate.id))"
+    }
+
+    private func shortCandidateID(_ candidateID: String) -> String {
+        let rawID = candidateID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rawID.isEmpty ? "-" : String(rawID.prefix(8))
     }
 
     @ViewBuilder
@@ -978,70 +1131,42 @@ private struct BenchmarkPromptCandidateModal: View {
 
 private struct BenchmarkPairwiseCaseDetailModal: View {
     @ObservedObject var viewModel: BenchmarkViewModel
-    @State private var selectedSection = 0
+    @State private var selectedPairwiseTab: PairwiseCaseDetailTab = .output
+    @State private var selectedJudgeTab: PairwiseJudgeTab = .round1
+    @State private var outputPromptBlockHeight: CGFloat = 0
+
+    private enum PairwiseCaseDetailTab: Hashable {
+        case output
+        case judge
+    }
+
+    private enum PairwiseJudgeTab: Hashable {
+        case round1
+        case round2
+        case overall
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             if let detail = viewModel.generationPairwiseCaseDetail {
                 modalHeader(detail)
                 Divider()
-                Picker("表示", selection: $selectedSection) {
-                    Text("整形結果").tag(0)
-                    Text("判定結果").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 220)
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 12) {
-                        if selectedSection == 0 {
-                            textBlock(
-                                title: "STT入力",
-                                text: detail.sttText.isEmpty ? "-" : detail.sttText
-                            )
-                            textBlock(
-                                title: "整形結果A",
-                                text: detail.outputA.isEmpty ? "-" : detail.outputA
-                            )
-                            textBlock(
-                                title: "整形結果B",
-                                text: detail.outputB.isEmpty ? "-" : detail.outputB
-                            )
-                            textBlock(
-                                title: "プロンプトA",
-                                text: detail.promptA.isEmpty ? "-" : detail.promptA
-                            )
-                            textBlock(
-                                title: "プロンプトB",
-                                text: detail.promptB.isEmpty ? "-" : detail.promptB
-                            )
-                            if let judgeError = detail.judgeError, !judgeError.isEmpty {
-                                textBlock(title: "judge_error", text: judgeError)
-                            }
-                        } else {
-                            textBlock(
-                                title: "比較プロンプト（round1）",
-                                text: detail.promptPairwiseRound1.isEmpty ? "-" : detail.promptPairwiseRound1
-                            )
-                            textBlock(
-                                title: "比較プロンプト（round2）",
-                                text: detail.promptPairwiseRound2.isEmpty ? "-" : detail.promptPairwiseRound2
-                            )
-                            textBlock(
-                                title: "judge 応答（round1）",
-                                text: detail.judgeResponseRound1.isEmpty ? "-" : detail.judgeResponseRound1
-                            )
-                            textBlock(
-                                title: "judge 応答（round2）",
-                                text: detail.judgeResponseRound2.isEmpty ? "-" : detail.judgeResponseRound2
-                            )
-                            textBlock(
-                                title: "judge決定JSON",
-                                text: detail.judgeDecisionJSON.isEmpty ? "-" : detail.judgeDecisionJSON
-                            )
+                        Picker("表示", selection: $selectedPairwiseTab) {
+                            Text("出力").tag(PairwiseCaseDetailTab.output)
+                            Text("評価").tag(PairwiseCaseDetailTab.judge)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 180)
+                        .padding(.horizontal, 12)
+
+                        switch selectedPairwiseTab {
+                        case .output:
+                            outputComparisonTab(detail)
+                        case .judge:
+                            judgeComparisonTab(detail)
                         }
                     }
                     .padding(12)
@@ -1075,12 +1200,9 @@ private struct BenchmarkPairwiseCaseDetailModal: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Generation対戦 ケース詳細")
                 .font(.system(size: 15, weight: .semibold))
-            HStack(spacing: 6) {
-                Text("case_id: \(detail.caseID)")
-                    .font(.system(size: 11, design: .monospaced))
-                Text("status: \(detail.status.rawValue)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                copyableCaseIDChip(detail.caseID)
+                pairwiseStatusBadge(detail.status)
             }
             HStack(spacing: 8) {
                 verdictChip("overall", winnerText(detail.overallWinner))
@@ -1091,6 +1213,270 @@ private struct BenchmarkPairwiseCaseDetailModal: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    private func candidateDisplayLabel(_ candidate: BenchmarkCandidate) -> String {
+        let promptName = (candidate.promptName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = promptName.isEmpty ? candidate.id : promptName
+        return "\(displayName)（\(candidate.model)）#\(shortCandidateID(candidate.id))"
+    }
+
+    private func shortCandidateID(_ candidateID: String) -> String {
+        let rawID = candidateID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return rawID.isEmpty ? "-" : String(rawID.prefix(8))
+    }
+
+    private func outputComparisonTab(_ detail: BenchmarkPairwiseCaseDetail) -> some View {
+        let promptMinHeight = outputPromptBlockHeight > 0 ? outputPromptBlockHeight : nil
+        return VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("出力")
+            labeledTextBlock(label: "STT入力（共通）", text: detail.sttText)
+            splitOutputColumns(
+                left: outputPanel(
+                    kind: "A",
+                    model: viewModel.generationPairCandidateA?.model,
+                    prompt: detail.promptA,
+                    output: detail.outputA,
+                    promptHeightID: "output_prompt_a",
+                    promptMinHeight: promptMinHeight
+                ),
+                right: outputPanel(
+                    kind: "B",
+                    model: viewModel.generationPairCandidateB?.model,
+                    prompt: detail.promptB,
+                    output: detail.outputB,
+                    promptHeightID: "output_prompt_b",
+                    promptMinHeight: promptMinHeight
+                )
+            )
+        }
+        .padding(12)
+        .onPreferenceChange(PairwiseBlockHeightPreferenceKey.self) { heights in
+            let maxHeight = max(
+                heights["output_prompt_a"] ?? 0,
+                heights["output_prompt_b"] ?? 0
+            )
+            guard maxHeight > 0 else { return }
+            if abs(maxHeight - outputPromptBlockHeight) > 0.5 {
+                outputPromptBlockHeight = maxHeight
+            }
+        }
+    }
+
+    private func judgeComparisonTab(_ detail: BenchmarkPairwiseCaseDetail) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionTitle("判定")
+            HStack(spacing: 6) {
+                Text("Judge Model")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text(viewModel.generationPairJudgeModel.rawValue)
+                    .font(.system(size: 10, design: .monospaced))
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+            .padding(.horizontal, 2)
+
+            Picker("judge_view", selection: $selectedJudgeTab) {
+                Text("1件目:プロンプト/応答").tag(PairwiseJudgeTab.round1)
+                Text("2件目:プロンプト/応答").tag(PairwiseJudgeTab.round2)
+                Text("全体:判定結果").tag(PairwiseJudgeTab.overall)
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 220)
+
+            switch selectedJudgeTab {
+            case .round1:
+                judgeRoundSection(
+                    title: "1件目",
+                    prompt: detail.promptPairwiseRound1,
+                    response: detail.judgeResponseRound1
+                )
+            case .round2:
+                judgeRoundSection(
+                    title: "2件目",
+                    prompt: detail.promptPairwiseRound2,
+                    response: detail.judgeResponseRound2
+                )
+            case .overall:
+                VStack(spacing: 8) {
+                    labeledTextBlock(label: "judge決定JSON", text: detail.judgeDecisionJSON)
+                    labeledTextBlock(
+                        label: "判定結果",
+                        text: "overall: \(winnerText(detail.overallWinner)) / intent: \(winnerText(detail.intentWinner)) / hallucination: \(winnerText(detail.hallucinationWinner)) / style_context: \(winnerText(detail.styleContextWinner))"
+                    )
+                }
+            }
+
+            if let judgeError = detail.judgeError, !judgeError.isEmpty {
+                labeledTextBlock(label: "judge_error", text: judgeError)
+            }
+        }
+        .padding(12)
+    }
+
+    private func judgeRoundSection(title: String, prompt: String, response: String) -> some View {
+        VStack(spacing: 8) {
+            labeledTextBlock(label: "\(title)の比較プロンプト", text: prompt)
+            labeledTextBlock(label: "\(title)のjudge応答", text: response)
+        }
+    }
+
+    private func outputPanel(
+        kind: String,
+        model: String?,
+        prompt: String,
+        output: String,
+        promptHeightID: String,
+        promptMinHeight: CGFloat?
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            modelLine(kind: kind, model: model)
+            labeledTextBlock(
+                label: "\(kind) プロンプト",
+                text: prompt,
+                minHeight: promptMinHeight,
+                heightID: promptHeightID
+            )
+            labeledTextBlock(label: "\(kind) 整形結果", text: output)
+        }
+    }
+
+    private func splitOutputColumns<Left: View, Right: View>(
+        left: Left,
+        right: Right
+    ) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            left
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            Divider()
+                .padding(.horizontal, 10)
+            right
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func modelLine(kind: String, model: String?) -> some View {
+        HStack(spacing: 6) {
+            Text("\(kind) Model")
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Text((model ?? "-").isEmpty ? "-" : (model ?? "-"))
+                .font(.system(size: 10, design: .monospaced))
+                .lineLimit(1)
+                .textSelection(.enabled)
+        }
+        .padding(.horizontal, 2)
+    }
+
+    private func copyableCaseIDChip(_ caseID: String) -> some View {
+        Button {
+            copyToClipboard(caseID)
+        } label: {
+            HStack(spacing: 5) {
+                Text("case_id")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                Text(shortCaseID(caseID))
+                    .font(.system(size: 10, design: .monospaced))
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(NSColor.controlBackgroundColor))
+            .clipShape(Capsule())
+            .overlay {
+                Capsule()
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("クリックで case_id をコピー\n\(caseID)")
+    }
+
+    private func pairwiseStatusBadge(_ status: BenchmarkCaseStatus) -> some View {
+        let color: Color
+        switch status {
+        case .ok:
+            color = .green
+        case .skipped:
+            color = .orange
+        case .error:
+            color = .red
+        }
+        return Text(status.rawValue)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(color.opacity(0.16))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
+    }
+
+    private func shortCaseID(_ caseID: String) -> String {
+        let trimmed = caseID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "-" }
+        if trimmed.count <= 20 {
+            return trimmed
+        }
+        return "\(trimmed.prefix(10))...\(trimmed.suffix(6))"
+    }
+
+    private func copyToClipboard(_ text: String) {
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(text, forType: .string)
+    }
+
+    private func labeledTextBlock(
+        label: String,
+        text: String,
+        minHeight: CGFloat? = nil,
+        heightID: String? = nil
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            blockLabel(label)
+            textValueBlock(text: text, minHeight: minHeight, heightID: heightID)
+        }
+    }
+
+    private func blockLabel(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 2)
+    }
+
+    private func textValueBlock(
+        text: String,
+        minHeight: CGFloat? = nil,
+        heightID: String? = nil
+    ) -> some View {
+        Text(text.isEmpty ? "-" : text)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(text.isEmpty ? .secondary : .primary)
+            .textSelection(.enabled)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(minHeight: minHeight, alignment: .topLeading)
+        .background(Color(NSColor.windowBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay {
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+        }
+        .background {
+            if let heightID {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: PairwiseBlockHeightPreferenceKey.self,
+                        value: [heightID: proxy.size.height]
+                    )
+                }
+            }
+        }
     }
 
     private func verdictChip(_ title: String, _ value: String) -> some View {
@@ -1130,6 +1516,52 @@ private struct BenchmarkPairwiseCaseDetailModal: View {
         }
     }
 
+    private func sectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+    }
+
+    private func pairwiseComparisonColumns(
+        leftTitle: String,
+        leftText: String,
+        centerTitle: String,
+        centerText: String,
+        rightTitle: String,
+        rightText: String
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            pairwiseTextColumn(title: leftTitle, text: leftText)
+            pairwiseTextColumn(title: centerTitle, text: centerText)
+            pairwiseTextColumn(title: rightTitle, text: rightText)
+        }
+    }
+
+    private func pairwiseTextColumn(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.secondary)
+            ScrollView {
+                Text(text.isEmpty ? "-" : text)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(text.isEmpty ? .secondary : .primary)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+            }
+            .frame(minHeight: 92)
+            .background(Color(NSColor.windowBackgroundColor))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     private func winnerText(_ winner: PairwiseWinner?) -> String {
         guard let winner else { return "-" }
         switch winner {
@@ -1139,6 +1571,16 @@ private struct BenchmarkPairwiseCaseDetailModal: View {
             return "B"
         case .tie:
             return "tie"
+        }
+    }
+}
+
+private struct PairwiseBlockHeightPreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        for (key, height) in nextValue() {
+            value[key] = max(value[key] ?? 0, height)
         }
     }
 }
