@@ -252,11 +252,17 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.judgeModel, .gpt5Nano)
         XCTAssertTrue(options.force)
 
-        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
+        let compareWithoutCases = try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
             "--task", "stt",
             "--candidate-id", "x",
-        ]))
+        ])
+        XCTAssertEqual(compareWithoutCases.task, .stt)
+        XCTAssertEqual(compareWithoutCases.candidateIDs, ["x"])
+        XCTAssertEqual(
+            URL(fileURLWithPath: compareWithoutCases.casesPath).lastPathComponent,
+            "manual_test_cases.jsonl"
+        )
     }
 
     func testParseBenchmarkCompareOptionsRequiresTwoGenerationCandidates() {
