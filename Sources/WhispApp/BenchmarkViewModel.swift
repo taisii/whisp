@@ -201,7 +201,7 @@ final class BenchmarkViewModel: ObservableObject {
     @Published var caseBreakdownRows: [BenchmarkCaseBreakdownRow] = []
     @Published var generationPairCandidateAID: String?
     @Published var generationPairCandidateBID: String?
-    @Published var generationPairJudgeModel: LLMModel = .gemini25FlashLite
+    @Published var generationPairJudgeModel: LLMModel = LLMModelCatalog.defaultModel(for: .benchmarkJudge)
     @Published var generationPairwiseRunID: String?
     @Published var generationPairwiseSummary: PairwiseRunSummary?
     @Published var generationPairwiseCaseRows: [BenchmarkPairwiseCaseRow] = []
@@ -230,7 +230,7 @@ final class BenchmarkViewModel: ObservableObject {
     @Published var isPromptCandidateModalPresented = false
     @Published var promptCandidateModalMode: PromptCandidateModalMode = .create
     @Published var promptCandidateDraftCandidateID = ""
-    @Published var promptCandidateDraftModel: LLMModel = .gemini25FlashLite
+    @Published var promptCandidateDraftModel: LLMModel = LLMModelCatalog.defaultModel(for: .benchmarkPromptCandidate)
     @Published var promptCandidateDraftName = ""
     @Published var promptCandidateDraftTemplate = defaultPostProcessPromptTemplate
     @Published var promptCandidateDraftRequireContext = false
@@ -505,7 +505,7 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     func setGenerationPairJudgeModel(_ model: LLMModel) {
-        generationPairJudgeModel = model
+        generationPairJudgeModel = LLMModelCatalog.resolveOrFallback(model, for: .benchmarkJudge)
         clearPairwiseCaseDetail()
         try? reloadGenerationPairwiseState()
     }
@@ -824,7 +824,7 @@ final class BenchmarkViewModel: ObservableObject {
             return
         }
 
-        guard let parsedModel = LLMModel(rawValue: candidate.model) else {
+        guard let parsedModel = LLMModelCatalog.resolveRegistered(rawValue: candidate.model) else {
             setStatus("candidate model が不正です: \(candidate.model)", isError: true)
             return
         }
@@ -992,6 +992,7 @@ final class BenchmarkViewModel: ObservableObject {
     private func ensureDefaultCandidatesIfNeeded() throws {
         let existing = try candidateStore.listCandidates()
         let now = WhispTime.isoNow()
+        let defaultGenerationModel = LLMModelCatalog.defaultModel(for: .benchmarkPromptCandidate)
         let defaults = [
             BenchmarkCandidate(
                 id: "stt-deepgram-stream-default",
@@ -1022,9 +1023,9 @@ final class BenchmarkViewModel: ObservableObject {
                 updatedAt: now
             ),
             BenchmarkCandidate(
-                id: "generation-gemini-2.5-flash-lite-default",
+                id: "generation-\(defaultGenerationModel.rawValue)-default",
                 task: .generation,
-                model: "gemini-2.5-flash-lite",
+                model: defaultGenerationModel.rawValue,
                 promptName: "default",
                 generationPromptTemplate: defaultPostProcessPromptTemplate,
                 generationPromptHash: promptTemplateHash(defaultPostProcessPromptTemplate),
@@ -1206,6 +1207,7 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     private func reloadGenerationPairwiseState() throws {
+        generationPairJudgeModel = LLMModelCatalog.resolveOrFallback(generationPairJudgeModel, for: .benchmarkJudge)
         guard selectedTask == .generation else {
             generationPairwiseRunID = nil
             generationPairwiseSummary = nil
@@ -1967,14 +1969,17 @@ final class BenchmarkViewModel: ObservableObject {
 
     private func resolveDefaultPromptCandidateModel(baseCandidate: BenchmarkCandidate?) -> LLMModel {
         if let raw = baseCandidate?.model,
-           let parsed = LLMModel(rawValue: raw)
+           let parsed = LLMModelCatalog.resolveRegistered(rawValue: raw),
+           LLMModelCatalog.isSelectable(parsed, for: .benchmarkPromptCandidate)
         {
             return parsed
         }
-        if let configModel = try? ConfigStore().load().llmModel {
+        if let configModel = try? ConfigStore().load().llmModel,
+           LLMModelCatalog.isSelectable(configModel, for: .benchmarkPromptCandidate)
+        {
             return configModel
         }
-        return .gemini25FlashLite
+        return LLMModelCatalog.defaultModel(for: .benchmarkPromptCandidate)
     }
 
     private func makeAutoPromptCandidateID(model: LLMModel) -> String {

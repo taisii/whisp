@@ -289,7 +289,9 @@ extension WhispCLI {
             }
             if item == "--llm-eval-model" {
                 let value = try parser.value(for: "--llm-eval-model")
-                guard let parsed = LLMModel(rawValue: value) else {
+                guard let parsed = LLMModelCatalog.resolveRegistered(rawValue: value),
+                      LLMModelCatalog.isSelectable(parsed, for: .cliLLMEval)
+                else {
                     throw AppError.invalidArgument("--llm-eval-model は有効なモデルIDを指定してください")
                 }
                 llmEvalModel = parsed
@@ -355,7 +357,9 @@ extension WhispCLI {
             }
             if item == "--judge-model" {
                 let raw = try parser.value(for: "--judge-model")
-                guard let parsed = LLMModel(rawValue: raw) else {
+                guard let parsed = LLMModelCatalog.resolveRegistered(rawValue: raw),
+                      LLMModelCatalog.isSelectable(parsed, for: .cliJudge)
+                else {
                     throw AppError.invalidArgument("--judge-model は有効なモデルIDを指定してください")
                 }
                 judgeModel = parsed

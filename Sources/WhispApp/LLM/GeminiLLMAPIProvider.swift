@@ -46,12 +46,7 @@ final class GeminiLLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
     }
 
     func supports(model: LLMModel) -> Bool {
-        switch model {
-        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
-            return true
-        case .gpt4oMini, .gpt5Nano:
-            return false
-        }
+        LLMModelCatalog.spec(for: model)?.provider == .gemini
     }
 
     func postProcess(

@@ -15,7 +15,9 @@ public final class ConfigStore {
         do {
             let data = try Data(contentsOf: path)
             let decoder = JSONDecoder()
-            return try decoder.decode(Config.self, from: data)
+            var config = try decoder.decode(Config.self, from: data)
+            config.llmModel = LLMModelCatalog.resolveOrFallback(config.llmModel, for: .pipelineExecution)
+            return config
         } catch {
             throw AppError.decode(error.localizedDescription)
         }

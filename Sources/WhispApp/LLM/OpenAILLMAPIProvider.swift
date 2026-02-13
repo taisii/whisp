@@ -19,12 +19,7 @@ final class OpenAILLMAPIProvider: LLMAPIProvider, @unchecked Sendable {
     }
 
     func supports(model: LLMModel) -> Bool {
-        switch model {
-        case .gpt4oMini, .gpt5Nano:
-            return true
-        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
-            return false
-        }
+        LLMModelCatalog.spec(for: model)?.provider == .openai
     }
 
     func postProcess(

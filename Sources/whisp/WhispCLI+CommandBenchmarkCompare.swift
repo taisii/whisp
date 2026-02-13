@@ -252,7 +252,7 @@ extension WhispCLI {
         if promptTemplate.isEmpty {
             throw AppError.invalidArgument("candidate \(candidate.id): generation_prompt_template が未設定です")
         }
-        let parsedModel = LLMModel(rawValue: candidate.model)
+        let parsedModel = LLMModelCatalog.resolveRegistered(rawValue: candidate.model)
         if parsedModel == nil {
             throw AppError.invalidArgument("candidate \(candidate.id): generation model が不正です: \(candidate.model)")
         }
@@ -371,7 +371,7 @@ extension WhispCLI {
     }
 
     private static func parseGenerationCandidateDescriptor(_ candidate: BenchmarkCandidate) throws -> (model: LLMModel, promptTemplate: String, promptHash: String) {
-        guard let model = LLMModel(rawValue: candidate.model) else {
+        guard let model = LLMModelCatalog.resolveRegistered(rawValue: candidate.model) else {
             throw AppError.invalidArgument("candidate \(candidate.id): generation model が不正です: \(candidate.model)")
         }
         let trimmedPromptTemplate = (candidate.generationPromptTemplate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -451,7 +451,7 @@ extension WhispCLI {
         if let preferredJudgeModel {
             judgeModels = [preferredJudgeModel]
         } else {
-            judgeModels = [.gpt4oMini, .gemini3FlashPreview, .gemini25FlashLite]
+            judgeModels = LLMModelCatalog.selectableModelIDs(for: .cliJudge)
         }
 
         return try judgeModels.map { judgeModel in

@@ -10,8 +10,8 @@ struct SettingsView: View {
 
     private let recordingModes: [RecordingMode] = [.toggle, .pushToTalk]
     private let sttProviders: [STTProvider] = [.deepgram, .whisper, .appleSpeech]
-    private let llmModels: [LLMModel] = [.gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio, .gpt4oMini, .gpt5Nano]
     private let visionModes: [VisionContextMode] = VisionContextMode.allCases
+    private let llmModels: [LLMModel] = LLMModelCatalog.selectableModelIDs(for: .appSettings)
 
     init(config: Config, onSave: @escaping @MainActor (Config) -> Void, onCancel: @escaping @MainActor () -> Void) {
         _config = State(initialValue: config)

@@ -266,8 +266,10 @@ extension WhispCLI {
         """
 
         let responseText: String
-        switch model {
-        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
+        guard let provider = LLMModelCatalog.spec(for: model)?.provider else {
+            throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
+        }
+        if provider == .gemini {
             let body = GeminiTextRequest(contents: [
                 GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
             ])
@@ -278,7 +280,7 @@ extension WhispCLI {
             let data = try await sendJSONRequest(url: url, headers: [:], body: body)
             let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
             responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        case .gpt4oMini, .gpt5Nano:
+        } else {
             let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
             guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
                 throw AppError.invalidArgument("OpenAI URL生成に失敗")
@@ -328,8 +330,10 @@ extension WhispCLI {
         """
 
         let responseText: String
-        switch model {
-        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
+        guard let provider = LLMModelCatalog.spec(for: model)?.provider else {
+            throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
+        }
+        if provider == .gemini {
             let body = GeminiTextRequest(contents: [
                 GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
             ])
@@ -340,7 +344,7 @@ extension WhispCLI {
             let data = try await sendJSONRequest(url: url, headers: [:], body: body)
             let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
             responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        case .gpt4oMini, .gpt5Nano:
+        } else {
             let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
             guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
                 throw AppError.invalidArgument("OpenAI URL生成に失敗")
@@ -386,8 +390,10 @@ extension WhispCLI {
         )
 
         let responseText: String
-        switch model {
-        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
+        guard let provider = LLMModelCatalog.spec(for: model)?.provider else {
+            throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
+        }
+        if provider == .gemini {
             var parts: [GeminiMultimodalPart] = [.text(prompt)]
             if hasImage, let visionImageData, let mimeType {
                 parts.append(.inlineData(GeminiInlineData(
@@ -405,7 +411,7 @@ extension WhispCLI {
             let data = try await sendJSONRequest(url: url, headers: [:], body: body)
             let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
             responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        case .gpt4oMini, .gpt5Nano:
+        } else {
             let content: OpenAIChatMessageContent
             if hasImage, let visionImageData, let mimeType {
                 let dataURL = "data:\(mimeType);base64,\(visionImageData.base64EncodedString())"
@@ -569,8 +575,10 @@ extension WhispCLI {
             ]
         )
 
-        switch model {
-        case .gemini3FlashPreview, .gemini25FlashLite, .gemini25FlashLiteAudio:
+        guard let provider = LLMModelCatalog.spec(for: model)?.provider else {
+            throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
+        }
+        if provider == .gemini {
             let body = GeminiTextRequest(contents: [
                 GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
             ])
@@ -590,7 +598,9 @@ extension WhispCLI {
                 )
             }
             return PostProcessResult(text: text, usage: usage)
-        case .gpt4oMini, .gpt5Nano:
+        }
+
+        if provider == .openai {
             let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
             guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
                 throw AppError.invalidArgument("OpenAI URL生成に失敗")
@@ -604,6 +614,8 @@ extension WhispCLI {
             }
             return PostProcessResult(text: text, usage: usage)
         }
+
+        throw AppError.invalidArgument("LLM provider が未対応です: \(model.rawValue)")
     }
     static func sendJSONRequest<T: Encodable>(
         url: URL,

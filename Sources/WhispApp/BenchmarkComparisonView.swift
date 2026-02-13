@@ -5,7 +5,7 @@ import WhispCore
 struct BenchmarkComparisonView: View {
     @ObservedObject var viewModel: BenchmarkViewModel
     let mode: BenchmarkComparisonMode
-    private let judgeModels: [LLMModel] = [.gemini3FlashPreview, .gemini25FlashLite, .gpt4oMini, .gpt5Nano]
+    private let judgeModels: [LLMModel] = LLMModelCatalog.selectableModelIDs(for: .benchmarkJudge)
 
     private struct ComparisonColumn: Identifiable {
         let id: String
@@ -990,7 +990,7 @@ private struct BenchmarkOverlayModalCard<Content: View>: View {
 private struct BenchmarkPromptCandidateModal: View {
     @ObservedObject var viewModel: BenchmarkViewModel
 
-    private let models: [LLMModel] = [.gemini3FlashPreview, .gemini25FlashLite, .gpt4oMini, .gpt5Nano]
+    private let models: [LLMModel] = LLMModelCatalog.selectableModelIDs(for: .benchmarkPromptCandidate)
 
     var body: some View {
         VStack(spacing: 0) {

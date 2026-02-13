@@ -720,7 +720,7 @@ final class BenchmarkViewModelTests: XCTestCase {
                     ),
                     pairCandidateAID: candidateA.id,
                     pairCandidateBID: candidateB.id,
-                    pairJudgeModel: "gpt-5-nano"
+                    pairJudgeModel: LLMModel.gpt4oMini.rawValue
                 )),
                 benchmarkKey: BenchmarkKey(
                     task: .generation,
@@ -797,7 +797,7 @@ final class BenchmarkViewModelTests: XCTestCase {
         viewModel.selectedTab = .generationBattle
         viewModel.selectedTask = .generation
         viewModel.refresh()
-        viewModel.setGenerationPairJudgeModel(.gpt5Nano)
+        viewModel.setGenerationPairJudgeModel(.gpt4oMini)
 
         let row = try XCTUnwrap(viewModel.generationPairwiseCaseRows.first(where: { $0.id == "case-1" }))
         XCTAssertEqual(row.overallWinner, .a)
@@ -879,7 +879,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             )
         )
 
-        let gptRunID = "generation-20260212-100500-gpt5"
+        let gptRunID = "generation-20260212-100500-gpt4o"
         try store.saveRun(
             BenchmarkRunRecord(
                 id: gptRunID,
@@ -891,7 +891,7 @@ final class BenchmarkViewModelTests: XCTestCase {
                     common: BenchmarkRunCommonOptions(sourceCasesPath: casesPath.path),
                     pairCandidateAID: candidateA.id,
                     pairCandidateBID: candidateB.id,
-                    pairJudgeModel: LLMModel.gpt5Nano.rawValue
+                    pairJudgeModel: LLMModel.gpt4oMini.rawValue
                 )),
                 metrics: .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(
                     counts: BenchmarkRunCounts(
@@ -921,7 +921,7 @@ final class BenchmarkViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.generationPairwiseRunID, geminiRunID)
         XCTAssertEqual(viewModel.generationPairwiseSummary?.overallAWins, 1)
 
-        viewModel.setGenerationPairJudgeModel(.gpt5Nano)
+        viewModel.setGenerationPairJudgeModel(.gpt4oMini)
         XCTAssertEqual(viewModel.generationPairwiseRunID, gptRunID)
         XCTAssertEqual(viewModel.generationPairwiseSummary?.overallBWins, 1)
     }

@@ -855,7 +855,7 @@ extension WhispCLI {
     }
 
     private static func makePairwiseCandidateDescriptor(candidate: BenchmarkCandidate, config: Config) throws -> PairwiseCandidateDescriptor {
-        guard let parsed = LLMModel(rawValue: candidate.model) else {
+        guard let parsed = LLMModelCatalog.resolveRegistered(rawValue: candidate.model) else {
             throw AppError.invalidArgument("candidate \(candidate.id): generation model が不正です: \(candidate.model)")
         }
         let model = APIKeyResolver.effectivePostProcessModel(parsed)

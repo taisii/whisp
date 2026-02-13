@@ -243,13 +243,13 @@ final class CLICommandTests: XCTestCase {
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",
-            "--judge-model", "gpt-5-nano",
+            "--judge-model", "gpt-4o-mini",
             "--force",
         ])
         XCTAssertEqual(options.task, .generationBattle)
         XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
         XCTAssertEqual(options.candidateIDs, ["gen-a", "gen-b"])
-        XCTAssertEqual(options.judgeModel, .gpt5Nano)
+        XCTAssertEqual(options.judgeModel, .gpt4oMini)
         XCTAssertTrue(options.force)
 
         let compareWithoutCases = try WhispCLI.parseBenchmarkCompareOptions(args: [

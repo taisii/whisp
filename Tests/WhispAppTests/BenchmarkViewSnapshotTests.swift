@@ -79,7 +79,7 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                     ),
                     pairCandidateAID: candidateB.id,
                     pairCandidateBID: candidateA.id,
-                    pairJudgeModel: "gpt-5-nano"
+                    pairJudgeModel: "gpt-4o-mini"
                 )),
                 benchmarkKey: BenchmarkKey(
                     task: .generation,
@@ -616,7 +616,7 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                     ),
                     pairCandidateAID: generationA.id,
                     pairCandidateBID: generationB.id,
-                    pairJudgeModel: "gpt-5-nano"
+                    pairJudgeModel: "gpt-4o-mini"
                 )),
                 benchmarkKey: BenchmarkKey(
                     task: .generation,
@@ -701,7 +701,7 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         viewModel.refresh()
         viewModel.setGenerationPairCandidateA(generationA.id)
         viewModel.setGenerationPairCandidateB(generationB.id)
-        viewModel.setGenerationPairJudgeModel(.gpt5Nano)
+        viewModel.setGenerationPairJudgeModel(.gpt4oMini)
         viewModel.selectGenerationPairwiseCase("case-1")
         viewModel.isPairwiseCaseDetailPresented = true
         XCTAssertNotNil(viewModel.generationPairwiseCaseDetail)
@@ -730,7 +730,7 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         viewModel.refresh()
         viewModel.setGenerationPairCandidateA(generationA.id)
         viewModel.setGenerationPairCandidateB(generationB.id)
-        viewModel.setGenerationPairJudgeModel(.gpt5Nano)
+        viewModel.setGenerationPairJudgeModel(.gpt4oMini)
         viewModel.selectGenerationPairwiseCase("case-1")
         viewModel.isPairwiseCaseDetailPresented = true
         XCTAssertNotNil(viewModel.generationPairwiseCaseDetail)

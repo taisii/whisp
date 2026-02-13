@@ -23,30 +23,56 @@ public enum RecordingMode: String, Codable, Equatable, Sendable {
     case pushToTalk = "push_to_talk"
 }
 
-public enum LLMModel: String, Codable, Equatable, Sendable {
-    case gemini3FlashPreview = "gemini-3-flash-preview"
-    case gemini25FlashLite = "gemini-2.5-flash-lite"
-    case gemini25FlashLiteAudio = "gemini-2.5-flash-lite-audio"
-    case gpt4oMini = "gpt-4o-mini"
-    case gpt5Nano = "gpt-5-nano"
+public struct LLMModelID: Hashable, Codable, Sendable, RawRepresentable, ExpressibleByStringLiteral {
+    public let rawValue: String
 
-    public var modelName: String {
-        switch self {
-        case .gemini3FlashPreview:
-            return "gemini-3-flash-preview"
-        case .gemini25FlashLite:
-            return "gemini-2.5-flash-lite"
-        case .gemini25FlashLiteAudio:
-            return "gemini-2.5-flash-lite"
-        case .gpt4oMini:
-            return "gpt-4o-mini"
-        case .gpt5Nano:
-            return "gpt-5-nano"
+    public init?(rawValue: String) {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
         }
+        self.rawValue = trimmed
     }
 
-    public var usesDirectAudio: Bool {
-        self == .gemini25FlashLiteAudio
+    public init(stringLiteral value: String) {
+        self.rawValue = value
+    }
+
+    public init(uncheckedRawValue: String) {
+        self.rawValue = uncheckedRawValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "llm model id is empty")
+        }
+        self.rawValue = trimmed
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+public typealias LLMModel = LLMModelID
+
+public extension LLMModelID {
+    static let gemini3FlashPreview = LLMModelID(uncheckedRawValue: "gemini-3-flash-preview")
+    static let gemini25FlashLite = LLMModelID(uncheckedRawValue: "gemini-2.5-flash-lite")
+    static let gemini25FlashLiteAudio = LLMModelID(uncheckedRawValue: "gemini-2.5-flash-lite-audio")
+    static let gpt4oMini = LLMModelID(uncheckedRawValue: "gpt-4o-mini")
+    static let gpt5Nano = LLMModelID(uncheckedRawValue: "gpt-5-nano")
+
+    var modelName: String {
+        LLMModelCatalog.spec(for: self)?.apiModelName ?? rawValue
+    }
+
+    var usesDirectAudio: Bool {
+        LLMModelCatalog.supports(.supportsDirectAudioInput, model: self)
     }
 }
 

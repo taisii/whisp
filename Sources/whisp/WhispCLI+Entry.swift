@@ -128,6 +128,8 @@ extension WhispCLI {
     }
 
     static func printUsage() {
+        let llmEvalModels = LLMModelCatalog.allowedModelRawValueText(for: .cliLLMEval)
+        let judgeModels = LLMModelCatalog.allowedModelRawValueText(for: .cliJudge)
         print("whisp (Swift) ready")
         print("usage: whisp --self-check")
         print("usage: whisp --stt-file /path/to/input.wav")
@@ -135,10 +137,10 @@ extension WhispCLI {
         print("usage: whisp --pipeline-file /path/to/input.wav [--stt rest|stream] [--chunk-ms N] [--realtime] [--emit discard|stdout|pbcopy] [--context-file /path/to/context.json]")
         print("usage: whisp --benchmark-vision-cases [/path/to/manual_test_cases.jsonl] [--benchmark-workers N] [--limit N] [--no-cache]")
         print("usage: whisp --benchmark-stt-cases [/path/to/manual_test_cases.jsonl] [--stt-provider deepgram|whisper|apple_speech] [--stt rest|stream] [--chunk-ms N] [--benchmark-workers N] [--realtime|--no-realtime] [--limit N] [--min-audio-seconds N] [--no-cache]")
-        print("usage: whisp --benchmark-generation-cases [/path/to/manual_test_cases.jsonl] [--benchmark-workers N] [--limit N] [--require-context] [--llm-eval|--no-llm-eval] [--llm-eval-model gemini-3-flash-preview|gemini-2.5-flash-lite|gpt-5-nano] [--no-cache]")
+        print("usage: whisp --benchmark-generation-cases [/path/to/manual_test_cases.jsonl] [--benchmark-workers N] [--limit N] [--require-context] [--llm-eval|--no-llm-eval] [--llm-eval-model \(llmEvalModels)] [--no-cache]")
         print("usage: whisp --benchmark-compare --task stt --cases /path/to/manual_test_cases.jsonl --candidate-id <id> [--candidate-id <id>] [--benchmark-workers N] [--force]")
         print("usage: whisp --benchmark-compare --task generation-single --cases /path/to/manual_test_cases.jsonl --candidate-id <id> [--benchmark-workers N] [--force]")
-        print("usage: whisp --benchmark-compare --task generation-battle --cases /path/to/manual_test_cases.jsonl --candidate-id <A> --candidate-id <B> [--judge-model gemini-3-flash-preview|gemini-2.5-flash-lite|gpt-4o-mini|gpt-5-nano] [--benchmark-workers N] [--force]")
+        print("usage: whisp --benchmark-compare --task generation-battle --cases /path/to/manual_test_cases.jsonl --candidate-id <A> --candidate-id <B> [--judge-model \(judgeModels)] [--benchmark-workers N] [--force]")
         print("usage: whisp --benchmark-list-candidates")
         print("usage: whisp --benchmark-scan-integrity --task stt|generation --cases /path/to/manual_test_cases.jsonl")
     }
