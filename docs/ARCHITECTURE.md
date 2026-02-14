@@ -258,12 +258,14 @@ postprocess 系の sanitize では `accessibilityText`, `windowText`, `visionSum
 ### 7.3 実行フロー
 
 - `--benchmark-workers` で固定ワーカープール数を指定可能（未指定は `min(4, CPUコア数)`）。
+- `compare_workers` は candidate比較時の並列数（既定2）として扱う。
 - ケース処理はケース単位で独立実行し、保存は `cases/<case_id>/` 配下に分離する。
 - run全体進捗は `orchestrator_events.jsonl`、UI一覧は `cases_index.jsonl` を参照する。
 - CLI `--benchmark-compare` は `BenchmarkKey` を構築し、同一キーの成功 run があれば再実行をスキップ（`--force` 時除く）。
-  - `stt`: candidate単位で実行
+  - `stt`: candidate単位で実行。candidate同士は並列実行可能
+    - `apple_speech + stream` は内部 capability で同時実行1に制限（上位フローはモデル非依存）
   - `generation`: pairwise専用（A/B 2候補 + judgeモデル）で実行
-- App (`BenchmarkViewModel`) は `stt` では複数candidate選択、`generation` では A/B + judge_model 選択で `--benchmark-compare` を実行する。
+- App (`BenchmarkViewModel`) は `stt` では複数candidate選択、`generation` では A/B + judge_model 選択で `--benchmark-compare` を実行する（compare_workers 未指定時は2）。
 - `--benchmark-scan-integrity` は task 単位で不備一覧を再生成し、除外状態は `exclusions.json` で維持する。
 
 ### 7.4 Generation 入力方針

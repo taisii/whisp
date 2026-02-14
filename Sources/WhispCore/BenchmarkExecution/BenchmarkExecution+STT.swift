@@ -48,7 +48,8 @@ extension BenchmarkExecutor {
                 evaluatorVersion: options.evaluatorVersion,
                 codeVersion: options.codeVersion,
                 caseLimit: options.limit,
-                useCache: options.useCache
+                useCache: options.useCache,
+                compareWorkers: options.compareWorkers
             ),
             candidateID: options.candidateID,
             sttExecutionProfile: sttExecutionProfile,

@@ -242,6 +242,17 @@ extension BenchmarkExecutor {
         return max(1, min(32, requested))
     }
 
+    static func defaultCompareWorkers() -> Int {
+        2
+    }
+
+    static func resolveCompareWorkers(_ requested: Int?) -> Int {
+        guard let requested else {
+            return defaultCompareWorkers()
+        }
+        return max(1, min(32, requested))
+    }
+
     static func runBenchmarkCaseWorkers<Result: Sendable>(
         cases: [ManualBenchmarkCase],
         workers requestedWorkers: Int?,

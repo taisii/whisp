@@ -454,6 +454,7 @@ public struct BenchmarkRunCommonOptions: Codable, Equatable, Sendable {
     public var codeVersion: String?
     public var caseLimit: Int?
     public var useCache: Bool?
+    public var compareWorkers: Int?
 
     public init(
         sourceCasesPath: String,
@@ -462,7 +463,8 @@ public struct BenchmarkRunCommonOptions: Codable, Equatable, Sendable {
         evaluatorVersion: String? = nil,
         codeVersion: String? = nil,
         caseLimit: Int? = nil,
-        useCache: Bool? = nil
+        useCache: Bool? = nil,
+        compareWorkers: Int? = nil
     ) {
         self.sourceCasesPath = sourceCasesPath
         self.datasetHash = datasetHash
@@ -471,6 +473,7 @@ public struct BenchmarkRunCommonOptions: Codable, Equatable, Sendable {
         self.codeVersion = codeVersion
         self.caseLimit = caseLimit
         self.useCache = useCache
+        self.compareWorkers = compareWorkers
     }
 }
 

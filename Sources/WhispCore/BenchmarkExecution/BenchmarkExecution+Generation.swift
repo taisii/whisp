@@ -37,7 +37,8 @@ extension BenchmarkExecutor {
                     evaluatorVersion: options.evaluatorVersion,
                     codeVersion: options.codeVersion,
                     caseLimit: options.limit,
-                    useCache: options.useCache
+                    useCache: options.useCache,
+                    compareWorkers: options.compareWorkers
                 ),
                 candidateID: options.candidateID,
                 promptName: options.promptName,
@@ -173,7 +174,8 @@ extension BenchmarkExecutor {
                 runtimeOptionsHash: options.runtimeOptionsHash,
                 evaluatorVersion: options.evaluatorVersion,
                 codeVersion: options.codeVersion,
-                caseLimit: options.limit
+                caseLimit: options.limit,
+                compareWorkers: options.compareWorkers
             ),
             pairCanonicalID: normalizedPair.canonical,
             pairExecutionOrder: normalizedPair.execution,

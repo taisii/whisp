@@ -436,6 +436,7 @@ struct STTBenchmarkOptions {
     let evaluatorVersion: String?
     let codeVersion: String?
     let benchmarkKey: BenchmarkKey?
+    let compareWorkers: Int?
 
     var sttMode: STTMode {
         switch STTPresetCatalog.spec(for: sttPreset).mode {
@@ -466,6 +467,7 @@ struct GenerationBenchmarkOptions {
     let promptName: String?
     let promptHash: String?
     let candidateSnapshot: BenchmarkCandidateSnapshot?
+    let compareWorkers: Int?
 }
 
 enum BenchmarkCompareFlow: String, Codable, CaseIterable, Sendable {
@@ -497,6 +499,7 @@ struct BenchmarkCompareOptions {
     let candidateIDs: [String]
     let force: Bool
     let benchmarkWorkers: Int?
+    let compareWorkers: Int?
     let judgeModel: LLMModel?
 }
 
@@ -515,6 +518,12 @@ struct GenerationPairwiseCompareOptions {
     let benchmarkKey: BenchmarkKey?
     let pairCandidateASnapshot: BenchmarkCandidateSnapshot?
     let pairCandidateBSnapshot: BenchmarkCandidateSnapshot?
+    let compareWorkers: Int?
+}
+
+struct STTCompareExecutionCapability: Sendable {
+    let laneID: String
+    let maxParallelCandidates: Int
 }
 
 struct BenchmarkIntegrityScanOptions {

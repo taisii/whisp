@@ -220,6 +220,7 @@ final class BenchmarkViewModel: ObservableObject {
         didSet { handleTaskChanged() }
     }
     @Published var forceRerun = false
+    @Published var compareWorkers: Int?
 
     @Published var candidates: [BenchmarkCandidate] = []
     @Published var selectedCandidateIDs: Set<String> = []
@@ -281,6 +282,7 @@ final class BenchmarkViewModel: ObservableObject {
     private var integrityRecordsByCaseID: [String: BenchmarkDatasetCaseRecord] = [:]
     private var integrityAutoScanTask: Task<Void, Never>?
     private var hasInitializedSTTCandidateSelection = false
+    private let defaultCompareWorkers = 2
 
     init(
         store: BenchmarkStore,
@@ -412,7 +414,8 @@ final class BenchmarkViewModel: ObservableObject {
                     datasetPath: dataset,
                     candidateIDs: candidateIDs,
                     judgeModel: judgeModel?.rawValue,
-                    force: force
+                    force: force,
+                    compareWorkers: resolvedCompareWorkers()
                 ))
                 try reloadAll()
                 setStatus("比較実行が完了しました。", isError: false, clearErrorLog: true)
@@ -460,7 +463,8 @@ final class BenchmarkViewModel: ObservableObject {
                     datasetPath: dataset,
                     candidateIDs: candidateIDs,
                     judgeModel: judgeModel?.rawValue,
-                    force: force
+                    force: force,
+                    compareWorkers: resolvedCompareWorkers()
                 ))
                 try reloadAll()
                 setStatus("比較実行が完了しました。", isError: false, clearErrorLog: true)
@@ -1883,7 +1887,8 @@ final class BenchmarkViewModel: ObservableObject {
                     datasetPath: dataset,
                     candidateIDs: [candidate.id],
                     judgeModel: nil,
-                    force: force
+                    force: force,
+                    compareWorkers: resolvedCompareWorkers()
                 ))
                 try reloadAll()
                 setStatus("比較実行が完了しました。", isError: false, clearErrorLog: true)
@@ -1899,6 +1904,11 @@ final class BenchmarkViewModel: ObservableObject {
         stopCaseAudioPlayback(showMessage: false)
         selectedCaseDetail = nil
         isCaseDetailPresented = false
+    }
+
+    private func resolvedCompareWorkers() -> Int {
+        let requested = compareWorkers ?? defaultCompareWorkers
+        return max(1, requested)
     }
 
     private func clearIntegrityCaseDetail() {

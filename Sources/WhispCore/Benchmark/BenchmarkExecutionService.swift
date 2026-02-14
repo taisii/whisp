@@ -24,6 +24,7 @@ public struct BenchmarkExecutionRequest: Sendable {
     public let judgeModel: String?
     public let force: Bool
     public let benchmarkWorkers: Int?
+    public let compareWorkers: Int?
 
     public init(
         flow: BenchmarkExecutionFlow,
@@ -31,7 +32,8 @@ public struct BenchmarkExecutionRequest: Sendable {
         candidateIDs: [String],
         judgeModel: String? = nil,
         force: Bool,
-        benchmarkWorkers: Int? = nil
+        benchmarkWorkers: Int? = nil,
+        compareWorkers: Int? = nil
     ) {
         self.flow = flow
         self.datasetPath = datasetPath
@@ -39,6 +41,7 @@ public struct BenchmarkExecutionRequest: Sendable {
         self.judgeModel = judgeModel
         self.force = force
         self.benchmarkWorkers = benchmarkWorkers
+        self.compareWorkers = compareWorkers
     }
 }
 
@@ -53,6 +56,7 @@ public final class BenchmarkExecutionService: @unchecked Sendable {
             candidateIDs: request.candidateIDs,
             force: request.force,
             benchmarkWorkers: request.benchmarkWorkers,
+            compareWorkers: request.compareWorkers,
             judgeModel: judgeModel
         )
         try await BenchmarkExecutor.runBenchmarkCompare(options: options)

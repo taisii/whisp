@@ -1,6 +1,62 @@
 import Foundation
 
 extension BenchmarkExecutor {
+    private static let compareGlobalLaneID = "compare_global"
+
+    private struct STTCompareExecutionPlan: Sendable {
+        let candidateID: String
+        let model: String
+        let options: STTBenchmarkOptions
+        let capability: STTCompareExecutionCapability
+    }
+
+    private actor CompareLaneLimiter {
+        private var activeCounts: [String: Int] = [:]
+
+        func withPermit<T: Sendable>(
+            laneID: String,
+            limit: Int,
+            operation: @Sendable () async throws -> T
+        ) async rethrows -> T {
+            await acquire(laneID: laneID, limit: limit)
+            defer { release(laneID: laneID) }
+            return try await operation()
+        }
+
+        private func acquire(laneID: String, limit: Int) async {
+            let maxActive = max(1, limit)
+            while true {
+                let current = activeCounts[laneID, default: 0]
+                if current < maxActive {
+                    activeCounts[laneID] = current + 1
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+
+        private func release(laneID: String) {
+            let current = activeCounts[laneID, default: 0]
+            if current <= 1 {
+                activeCounts.removeValue(forKey: laneID)
+            } else {
+                activeCounts[laneID] = current - 1
+            }
+        }
+    }
+
+    private actor STTCompareFailureCollector {
+        private var failures: [(candidateID: String, reason: String)] = []
+
+        func append(candidateID: String, reason: String) {
+            failures.append((candidateID, reason))
+        }
+
+        func snapshot() -> [(candidateID: String, reason: String)] {
+            failures
+        }
+    }
+
     static func runBenchmarkCompare(options: BenchmarkCompareOptions) async throws {
         let candidateStore = BenchmarkCandidateStore()
         try BenchmarkCandidateDefaults.ensureSeededAndNormalized(store: candidateStore)
@@ -19,6 +75,7 @@ extension BenchmarkExecutor {
         print("dataset_hash: \(datasetHash)")
         print("candidate_count: \(options.candidateIDs.count)")
         print("benchmark_workers: \(resolveBenchmarkWorkers(options.benchmarkWorkers))")
+        print("compare_workers: \(resolveCompareWorkers(options.compareWorkers))")
         print("force: \(options.force)")
 
         switch options.task {
@@ -95,7 +152,8 @@ extension BenchmarkExecutor {
             datasetHash: datasetHash,
             runtimeHash: runtimeHash,
             benchmarkKey: key,
-            benchmarkWorkers: options.benchmarkWorkers
+            benchmarkWorkers: options.benchmarkWorkers,
+            compareWorkers: options.compareWorkers
         )
         print("candidate: \(candidate.id)\tstatus: running")
         try await runGenerationCaseBenchmark(options: runOptions)
@@ -120,7 +178,8 @@ extension BenchmarkExecutor {
         candidateStore: BenchmarkCandidateStore,
         benchmarkStore: BenchmarkStore
     ) async throws {
-        var failures: [(candidateID: String, reason: String)] = []
+        let compareWorkers = resolveCompareWorkers(options.compareWorkers)
+        var plans: [STTCompareExecutionPlan] = []
 
         for candidateID in options.candidateIDs {
             let candidate = try candidateStore.loadCandidate(id: candidateID)
@@ -149,25 +208,59 @@ extension BenchmarkExecutor {
                 continue
             }
 
-            print("candidate: \(candidate.id)\tstatus: running\tmodel: \(candidate.model)")
-            do {
-                let sttOptions = try makeSTTCompareOptions(
-                    candidate: candidate,
-                    datasetPath: datasetPath,
-                    datasetHash: datasetHash,
-                    runtimeHash: runtimeHash,
-                    benchmarkKey: key,
-                    benchmarkWorkers: options.benchmarkWorkers
-                )
-                try await runSTTCaseBenchmark(options: sttOptions)
-                print("candidate: \(candidate.id)\tstatus: done")
-            } catch {
-                let reason = error.localizedDescription
-                failures.append((candidateID: candidate.id, reason: reason))
-                print("candidate: \(candidate.id)\tstatus: failed\treason: \(reason)")
-            }
+            let sttOptions = try makeSTTCompareOptions(
+                candidate: candidate,
+                datasetPath: datasetPath,
+                datasetHash: datasetHash,
+                runtimeHash: runtimeHash,
+                benchmarkKey: key,
+                benchmarkWorkers: options.benchmarkWorkers,
+                compareWorkers: compareWorkers
+            )
+            let capability = resolveSTTCompareExecutionCapability(
+                options: sttOptions,
+                compareWorkers: compareWorkers
+            )
+            plans.append(STTCompareExecutionPlan(
+                candidateID: candidate.id,
+                model: candidate.model,
+                options: sttOptions,
+                capability: capability
+            ))
+            print("candidate: \(candidate.id)\tstatus: queued\tlane: \(capability.laneID)")
         }
 
+        let failureCollector = STTCompareFailureCollector()
+        let laneLimiter = CompareLaneLimiter()
+
+        await withTaskGroup(of: Void.self, returning: Void.self) { group in
+            for plan in plans {
+                group.addTask {
+                    await laneLimiter.withPermit(
+                        laneID: plan.capability.laneID,
+                        limit: plan.capability.maxParallelCandidates
+                    ) {
+                        await laneLimiter.withPermit(
+                            laneID: compareGlobalLaneID,
+                            limit: compareWorkers
+                        ) {
+                            print("candidate: \(plan.candidateID)\tstatus: running\tmodel: \(plan.model)\tlane: \(plan.capability.laneID)")
+                            do {
+                                try await runSTTCaseBenchmark(options: plan.options)
+                                print("candidate: \(plan.candidateID)\tstatus: done")
+                            } catch {
+                                let reason = error.localizedDescription
+                                await failureCollector.append(candidateID: plan.candidateID, reason: reason)
+                                print("candidate: \(plan.candidateID)\tstatus: failed\treason: \(reason)")
+                            }
+                        }
+                    }
+                }
+            }
+            await group.waitForAll()
+        }
+
+        let failures = await failureCollector.snapshot()
         if !failures.isEmpty {
             print("stt_compare_failures: \(failures.count)")
             for failure in failures {
@@ -249,7 +342,8 @@ extension BenchmarkExecutor {
             datasetHash: datasetHash,
             runtimeHash: key.runtimeOptionsHash,
             benchmarkKey: key,
-            benchmarkWorkers: options.benchmarkWorkers
+            benchmarkWorkers: options.benchmarkWorkers,
+            compareWorkers: options.compareWorkers
         )
         print("pair: \(candidateA.id) vs \(candidateB.id)\tstatus: running")
         try await runGenerationPairwiseCompare(options: generationOptions)
@@ -262,7 +356,8 @@ extension BenchmarkExecutor {
         datasetHash: String,
         runtimeHash: String,
         benchmarkKey: BenchmarkKey,
-        benchmarkWorkers: Int?
+        benchmarkWorkers: Int?,
+        compareWorkers: Int?
     ) throws -> GenerationBenchmarkOptions {
         let promptTemplate = (candidate.generationPromptTemplate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if promptTemplate.isEmpty {
@@ -294,7 +389,8 @@ extension BenchmarkExecutor {
             promptTemplateOverride: promptTemplate,
             promptName: candidate.promptName,
             promptHash: candidate.generationPromptHash ?? promptTemplateHash(promptTemplate),
-            candidateSnapshot: makeCandidateSnapshot(candidate)
+            candidateSnapshot: makeCandidateSnapshot(candidate),
+            compareWorkers: compareWorkers
         )
     }
 
@@ -304,7 +400,8 @@ extension BenchmarkExecutor {
         datasetHash: String,
         runtimeHash: String,
         benchmarkKey: BenchmarkKey,
-        benchmarkWorkers: Int?
+        benchmarkWorkers: Int?,
+        compareWorkers: Int?
     ) throws -> STTBenchmarkOptions {
         guard let preset = STTPresetID(rawValue: candidate.model) else {
             throw AppError.invalidArgument("candidate \(candidate.id): stt preset が不正です: \(candidate.model)")
@@ -338,7 +435,8 @@ extension BenchmarkExecutor {
             runtimeOptionsHash: runtimeHash,
             evaluatorVersion: benchmarkKey.evaluatorVersion,
             codeVersion: benchmarkKey.codeVersion,
-            benchmarkKey: benchmarkKey
+            benchmarkKey: benchmarkKey,
+            compareWorkers: compareWorkers
         )
     }
 
@@ -351,7 +449,8 @@ extension BenchmarkExecutor {
         datasetHash: String,
         runtimeHash: String,
         benchmarkKey: BenchmarkKey,
-        benchmarkWorkers: Int?
+        benchmarkWorkers: Int?,
+        compareWorkers: Int?
     ) throws -> GenerationPairwiseCompareOptions {
         _ = try parseGenerationCandidateDescriptor(candidateA)
         _ = try parseGenerationCandidateDescriptor(candidateB)
@@ -386,7 +485,8 @@ extension BenchmarkExecutor {
             codeVersion: benchmarkKey.codeVersion,
             benchmarkKey: benchmarkKey,
             pairCandidateASnapshot: makeCandidateSnapshot(candidateA),
-            pairCandidateBSnapshot: makeCandidateSnapshot(candidateB)
+            pairCandidateBSnapshot: makeCandidateSnapshot(candidateB),
+            compareWorkers: compareWorkers
         )
     }
 
@@ -542,6 +642,25 @@ extension BenchmarkExecutor {
             runtimeOptionsHash: runtimeHash,
             evaluatorVersion: "pairwise-v1",
             codeVersion: ProcessInfo.processInfo.environment["WHISP_CODE_VERSION"] ?? "dev"
+        )
+    }
+
+    private static func resolveSTTCompareExecutionCapability(
+        options: STTBenchmarkOptions,
+        compareWorkers: Int
+    ) -> STTCompareExecutionCapability {
+        let spec = STTPresetCatalog.spec(for: options.sttPreset)
+        if spec.engine == .appleSpeech,
+           options.sttMode == .stream
+        {
+            return STTCompareExecutionCapability(
+                laneID: "apple_speech_stream",
+                maxParallelCandidates: 1
+            )
+        }
+        return STTCompareExecutionCapability(
+            laneID: "stt_default",
+            maxParallelCandidates: compareWorkers
         )
     }
 

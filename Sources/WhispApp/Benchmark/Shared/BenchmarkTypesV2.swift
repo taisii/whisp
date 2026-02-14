@@ -32,12 +32,20 @@ struct BenchmarkWorkspaceState: Equatable {
     var datasetPath: String
     var forceRun: Bool
     var benchmarkWorkers: Int?
+    var compareWorkers: Int?
 
-    init(selectedFlow: BenchmarkFlow = .stt, datasetPath: String = "", forceRun: Bool = false, benchmarkWorkers: Int? = nil) {
+    init(
+        selectedFlow: BenchmarkFlow = .stt,
+        datasetPath: String = "",
+        forceRun: Bool = false,
+        benchmarkWorkers: Int? = nil,
+        compareWorkers: Int? = nil
+    ) {
         self.selectedFlow = selectedFlow
         self.datasetPath = datasetPath
         self.forceRun = forceRun
         self.benchmarkWorkers = benchmarkWorkers
+        self.compareWorkers = compareWorkers
     }
 }
 
@@ -48,4 +56,5 @@ struct BenchmarkExecutionPayload: Codable {
     let judgeModel: String?
     let forceRun: Bool
     let benchmarkWorkers: Int?
+    let compareWorkers: Int?
 }
