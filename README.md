@@ -21,15 +21,14 @@ Whisp is now implemented as a native macOS app in Swift.
 - `Sources/WhispCore`: core logic and utilities
 - `Sources/WhispApp`: native menu bar GUI app
   - `Pipeline/`: `RecordingService` / `STTService` / `PostProcessorService` / `OutputService` / `DebugCaptureService`
-  - `LLM/`: provider abstraction (`LLMAPIProvider`) and provider implementations
   - `Benchmark*View`: candidate比較中心UI（`Comparison` / `Case Integrity`）
-- `Sources/whisp`: small CLI smoke-check target
+- `Sources/whisp`: read-only diagnostics CLI (`debug self-check/status/integrity`)
 - `Tests/WhispCoreTests`: migrated tests
 - `Tests/WhispAppTests`: app-layer tests (pipeline state transitions)
 - `docs/ARCHITECTURE.md`: current architecture and debug data model
 - `scripts/build_macos_app.sh`: local `.app` bundle builder
 - `scripts/reset_permissions.sh`: TCC reset / privacy settings helper
-- `scripts/benchmark_cases.sh`: benchmark entrypoint (`stt|vision`)
+- `scripts/benchmark_cases.sh`: deprecated helper (benchmark実行はGUIへ移行)
 
 ## Prerequisites
 
@@ -47,7 +46,7 @@ swift build
 swift test
 
 # smoke checks
-swift run whisp --self-check
+swift run whisp debug self-check
 swift run WhispApp --self-check
 ```
 
@@ -90,127 +89,36 @@ scripts/export_system_log.sh 15 /tmp/whisp-system.log
 - `audio` category: `recording_stop`
 - `app` category: pipeline各段の開始/終了イベント（`DevLog` と同名）
 
-## STT smoke check (Swift)
+## CLI diagnostics (read-only)
 
 ```bash
-# 1) prepare fixed benchmark sample
-scripts/prepare_benchmark_sample.sh Tests/Fixtures/benchmark_ja_10s.wav
+# basic check
+swift run whisp debug self-check
 
-# 2) run Deepgram STT through Swift implementation
-swift run whisp --stt-file Tests/Fixtures/benchmark_ja_10s.wav
+# benchmark candidates + latest runs
+swift run whisp debug benchmark-status --format text
+swift run whisp debug benchmark-status --format json
 
-# 3) run Deepgram STT streaming (simulated realtime)
-swift run whisp --stt-stream-file Tests/Fixtures/benchmark_ja_10s.wav --chunk-ms 120 --realtime
-```
-
-Requirements:
-- `~/.config/whisp/config.json` に必要なAPIキーが設定されていること
-  - `sttPreset=deepgram_stream|deepgram_rest` の場合: `apiKeys.deepgram`
-  - `sttPreset=chatgpt_whisper_stream` の場合: `apiKeys.openai`
-  - `sttPreset=apple_speech_recognizer_stream|apple_speech_recognizer_rest` の場合: APIキー不要（音声認識権限は必要）
-
-### STT latency benchmark example
-
-```bash
-# one-command benchmark cycle
-scripts/benchmark_stt_latency.sh Tests/Fixtures/benchmark_ja_10s.wav 3
-# ログ保存先を指定する例
-scripts/benchmark_stt_latency.sh Tests/Fixtures/benchmark_ja_10s.wav 3 /tmp/whisp-sttbench
-```
-
-`benchmark_stt_latency.sh` は次を出力します（各runログは `result_root/logs/` に保存）。
-- `post_stop_latency_rest_ms`: REST方式での「録音停止後→STT完了」
-- `post_stop_latency_stream_ms`: Streaming方式での「録音停止後→最終確定」
-
-今回の最適化目標は、この `post_stop_latency_*` を下げることです。
-
-### STT case benchmark (音声 + 人手正解)
-
-`manual_test_cases.jsonl` を使って、実録音データに対する精度を定量評価できます。
-この評価は **ベンチマーク（モデル/処理性能）** 用で、運用件数統計は別の統計ストアに分離されています。
-
-```bash
-# 既定ケースファイルでSTT評価
-scripts/benchmark_cases.sh stt
-# パスや件数を指定する例
-scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --limit 20
-# 音声長2.5秒未満を除外し、結果を保存する例
-scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --result-root /tmp/whisp-sttbench --min-audio-seconds 2.5
-```
-
-主指標:
-- `exact_match_rate`: 完全一致率
-- `avg_cer`: ケース平均CER（文字誤り率）
-- `weighted_cer`: 全文字数で重み付けしたCER
-- `intent_match_rate`: 意図一致率（intent judge 有効時）
-- `stt_total_ms`: STT全体レイテンシ分布（`avg/p50/p95/p99`）
-- `stt_after_stop_ms`: 録音停止後STTレイテンシ分布（`avg/p50/p95/p99`）
-- `post_ms`: 生成/整形レイテンシ分布（`avg/p50/p95/p99`）
-- `total_after_stop_ms`: 録音停止後E2Eレイテンシ分布（`avg/p50/p95/p99`）
-- `intent_preservation_score` / `hallucination_score` / `hallucination_rate`: LLM評価（`--llm-eval` 有効時）
-
-補足:
-- この更新以前に保存されたケースには `context` / `vision_image_file` が無い場合があります。
-- `--require-context` を付けると、同条件比較に必要な `context` 付きケースだけを評価します。
-- `--min-audio-seconds` 未満の短い音声は `skipped_too_short_audio` として自動除外されます。
-- ケース別ログは `stt_case_rows.jsonl`、集計ログは `stt_summary.json` に保存されます。
-- intent評価は `intent_gold` / `intent_silver`（または `labels.intent_gold` / `labels.intent_silver`）を参照します。
-- 生成品質のLLM評価は `--llm-eval` / `--no-llm-eval` / `--llm-eval-model` で制御できます（デフォルトOFF）。
-
-### Component benchmarks (1:Vision / 2:STT)
-
-同じ `manual_test_cases.jsonl` を使って、2つの能力を分離して評価できます。
-
-```bash
-# 1) 画像 -> OCRコンテキスト抽出
-scripts/benchmark_cases.sh vision ~/.config/whisp/debug/manual_test_cases.jsonl
-
-# 2) 音声 -> transcript（STT）
-scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --stt-preset deepgram_stream --min-audio-seconds 2.0
-```
-
-各ベンチは `--result-root` で保存先を指定できます。保存物:
-- `*_case_rows.jsonl`: ケース別ログ
-- `*_summary.json`: 集計結果
-- `summary.txt`: 実行時コンソール出力
-
-集計の基本方針:
-- ベンチマーク画面は性能中心表示（品質 + レイテンシ分布）で、件数系は主表示しません。
-- レイテンシは平均値だけでなく `P50/P95/P99` を必須指標として扱います。
-
-キャッシュ:
-- 1/2 は `~/.config/whisp/benchmark_cache/` を参照し、同一入力・同一設定の結果を再利用します。
-- キャッシュ無効化は `--no-cache`。
-
-### Candidate 比較コマンド（新UI対応）
-
-比較中心の実行フローでは、candidate を先に定義し、`BenchmarkKey` 一致の既存成功runを再利用します。
-
-```bash
-# candidate一覧
-swift run whisp --benchmark-list-candidates
-
-# STT比較（複数candidateを一括指定、既存成功runは自動スキップ）
-swift run whisp --benchmark-compare \
+# dataset integrity (read-only scan)
+swift run whisp debug benchmark-integrity \
   --task stt \
   --cases ~/.config/whisp/debug/manual_test_cases.jsonl \
-  --candidate-id stt-deepgram-stream-default \
-  --candidate-id stt-apple-speech-recognizer-stream-default
-
-# Generation比較（A/B pairwise, 強制再実行）
-swift run whisp --benchmark-compare \
-  --task generation \
-  --cases ~/.config/whisp/debug/manual_test_cases.jsonl \
-  --candidate-id generation-gemini-2.5-flash-lite-default \
-  --candidate-id generation-gpt-5-nano-default \
-  --judge-model gpt-4o-mini \
-  --force
-
-# ケース不備スキャン
-swift run whisp --benchmark-scan-integrity \
-  --task generation \
-  --cases ~/.config/whisp/debug/manual_test_cases.jsonl
+  --format json
 ```
+
+### Benchmark execution policy
+
+ベンチマーク実行（STT / Generation / Vision / Pairwise）は `WhispApp` の `ベンチマーク` 画面からのみ行います。  
+`whisp` CLI は read-only 診断専用です。
+
+注記:
+- `scripts/benchmark_*.sh` は互換維持のため残っていますが、実行系としては廃止（deprecated）です。
+- 実行状態の確認は `whisp debug benchmark-status` と `whisp debug benchmark-integrity` を使ってください。
+
+### Candidate 比較（GUI実行）
+
+ベンチマーク実行（candidate比較・pairwise判定）は `WhispApp` の `ベンチマーク` 画面から実行します。  
+`whisp` CLI は実行機能を持たず、状態確認用の read-only 診断のみ提供します。
 
 STT candidate 設計メモ:
 - `model` は `STTPresetID` を指定（例: `deepgram_stream`, `apple_speech_recognizer_stream`）
@@ -233,30 +141,10 @@ Generation入力ポリシー:
 
 表示時に `runs/*/events.jsonl` 全走査は行わず、統計ファイルを直接参照します。
 
-### Full pipeline benchmark (stop -> final output)
+### Full pipeline benchmark (deprecated script)
 
-```bash
-scripts/benchmark_full_pipeline.sh Tests/Fixtures/benchmark_ja_10s.wav 3
-# output段も測るなら emit を指定
-scripts/benchmark_full_pipeline.sh Tests/Fixtures/benchmark_ja_10s.wav 3 pbcopy
-# 画面コンテキストを模擬する場合
-scripts/benchmark_full_pipeline.sh Tests/Fixtures/benchmark_ja_10s.wav 3 discard /tmp/whisp-fullbench-context Tests/Fixtures/context_sample.json
-```
-
-主指標:
-- `avg_total_after_stop_ms` (録音停止後から最終出力まで)
-- `dominant_stage_after_stop` (`stt_after_stop` / `post` / `output`)
-
-この結果を基準に、改善優先度を決めます。
-
-プロンプト比較:
-
-`benchmark_full_pipeline.sh` は `result_root` 配下に `traces/` を保存します。  
-比較は次で実行できます。
-
-```bash
-scripts/analyze_prompt_traces.sh /tmp/whisp-fullbench-context
-```
+`scripts/benchmark_full_pipeline.sh` は deprecated です。  
+実行時のボトルネック分析は、`WhispApp` のベンチマーク画面と `debug/runs/*/events.jsonl` を基準に行ってください。
 
 実アプリでの実プロンプト採取:
 

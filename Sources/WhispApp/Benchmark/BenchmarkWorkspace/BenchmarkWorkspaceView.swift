@@ -8,9 +8,7 @@ struct BenchmarkWorkspaceView: View {
     var body: some View {
         ZStack {
             VStack(spacing: 0) {
-                header
-                Divider()
-                tabSelector
+                headerBar
                 Divider()
 
                 Group {
@@ -55,23 +53,11 @@ struct BenchmarkWorkspaceView: View {
         .frame(minWidth: 1420, minHeight: 860)
     }
 
-    private var header: some View {
+    private var headerBar: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Benchmark Lab")
-                    .font(.system(size: 19, weight: .semibold))
-                Text("タスク別ベンチマーク実行")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-            }
+            Text("Benchmark Lab")
+                .font(.system(size: 19, weight: .semibold))
             Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-    }
-
-    private var tabSelector: some View {
-        HStack(spacing: 10) {
             Picker("Tab", selection: $viewModel.selectedTab) {
                 ForEach(BenchmarkDashboardTab.allCases) { tab in
                     Text(tab.rawValue).tag(tab)
@@ -79,7 +65,6 @@ struct BenchmarkWorkspaceView: View {
             }
             .pickerStyle(.segmented)
             .frame(width: 420)
-            Spacer()
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

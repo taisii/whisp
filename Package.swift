@@ -11,11 +11,17 @@ let package = Package(
         .executable(name: "whisp", targets: ["whisp"]),
         .executable(name: "WhispApp", targets: ["WhispApp"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+    ],
     targets: [
         .target(name: "WhispCore"),
         .executableTarget(
             name: "whisp",
-            dependencies: ["WhispCore"]
+            dependencies: [
+                "WhispCore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
         ),
         .executableTarget(
             name: "WhispApp",

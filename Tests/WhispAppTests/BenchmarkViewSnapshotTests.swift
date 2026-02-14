@@ -432,6 +432,30 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                 updatedAt: "2026-02-12T00:00:00.000Z"
             ),
             BenchmarkCandidate(
+                id: "stt-deepgram-rest",
+                task: .stt,
+                model: "deepgram_rest",
+                options: ["use_cache": "true", "chunk_ms": "120"],
+                createdAt: "2026-02-12T00:00:00.000Z",
+                updatedAt: "2026-02-12T00:00:00.000Z"
+            ),
+            BenchmarkCandidate(
+                id: "stt-openai-stream",
+                task: .stt,
+                model: "chatgpt_whisper_stream",
+                options: ["use_cache": "false", "chunk_ms": "160"],
+                createdAt: "2026-02-12T00:00:00.000Z",
+                updatedAt: "2026-02-12T00:00:00.000Z"
+            ),
+            BenchmarkCandidate(
+                id: "stt-apple-stream",
+                task: .stt,
+                model: "apple_speech_recognizer_stream",
+                options: ["use_cache": "false", "chunk_ms": "200"],
+                createdAt: "2026-02-12T00:00:00.000Z",
+                updatedAt: "2026-02-12T00:00:00.000Z"
+            ),
+            BenchmarkCandidate(
                 id: "generation-a",
                 task: .generation,
                 model: "gpt-5-nano",
@@ -555,6 +579,16 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
             let url = artifactDir.appendingPathComponent(fileName)
             try pngData(from: image).write(to: url, options: .atomic)
             XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+
+            if tab == .generation {
+                let singleURL = artifactDir.appendingPathComponent("benchmark_tab_generation_single.png")
+                let battleURL = artifactDir.appendingPathComponent("benchmark_tab_generation_battle.png")
+                let png = try pngData(from: image)
+                try png.write(to: singleURL, options: .atomic)
+                try png.write(to: battleURL, options: .atomic)
+                XCTAssertTrue(FileManager.default.fileExists(atPath: singleURL.path))
+                XCTAssertTrue(FileManager.default.fileExists(atPath: battleURL.path))
+            }
         }
     }
 

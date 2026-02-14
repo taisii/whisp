@@ -67,8 +67,10 @@ struct BenchmarkIntegrityView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .font(.system(size: 11, design: .monospaced))
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func caseIDBadge(_ row: BenchmarkIntegrityCaseRow) -> some View {

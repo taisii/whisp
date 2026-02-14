@@ -6,7 +6,7 @@
 
 - プロダクトを `WhispCore`（ドメイン/基盤）と `WhispApp`（UI/OS統合）に分離する。
 - デバッグ可能性を重視し、実行ごとの成果物をファイルとして再現可能に保存する。
-- CLI (`whisp`) は用途別に責務分割し、検証・ベンチマーク実行を担う。
+- CLI (`whisp`) は read-only 診断専用とし、ベンチマーク実行は担わない。
 
 ## 2. ターゲット構成
 
@@ -14,8 +14,8 @@
 
 - `WhispCore` (library): 共通モデル、保存、STT/Prompt関連ロジック
 - `WhispApp` (executable): メニューバーアプリ本体
-- `whisp` (executable): CLI（STT検証・ベンチマーク・補助ツール）
-- `WhispCoreTests`, `WhispAppTests`
+- `whisp` (executable): CLI（read-only 診断）
+- `WhispCoreTests`, `WhispAppTests`, `WhispCLITests`
 
 ## 3. レイヤー責務
 
@@ -54,18 +54,13 @@
 
 ### 3.3 whisp (CLI)
 
-`Sources/whisp` は以下に分割:
+`Sources/whisp` は `swift-argument-parser` ベースの診断コマンド群で構成:
 
-- `WhispCLI+Main.swift`（エントリポイント）
-- `WhispCLI+Entry.swift`（サブコマンド分岐）
-- `WhispCLI+Commands.swift`（実行処理）
-- `WhispCLI+Parsing.swift`（引数解析）
-- `WhispCLI+BenchmarkSupport.swift`（ベンチ補助）
-- `WhispCLI+CommandBenchmarkCompare.swift`（candidate比較実行）
-- `WhispCLI+CommandBenchmarkIntegrity.swift`（ケース不備スキャン）
-- `WhispCLI+AI.swift`（API連携補助）
-- `WhispCLI+Utils.swift`（共通関数）
-- `WhispCLI+Models.swift`（CLI用モデル）
+- `WhispCLI.swift`（エントリポイント）
+- `DebugCommand.swift`（`debug` サブコマンド）
+- `DebugSelfCheckCommand.swift`（疎通確認）
+- `DebugBenchmarkStatusCommand.swift`（candidate/run状況の read-only 表示）
+- `DebugBenchmarkIntegrityCommand.swift`（ケース不備の read-only スキャン）
 
 ## 4. パイプライン実行モデル
 
@@ -247,7 +242,7 @@ postprocess 系の sanitize では `accessibilityText`, `windowText`, `visionSum
 
 - `BenchmarkCandidate`: 比較対象定義（`task + model + promptName + generationPromptTemplate/hash + options`）
 - `BenchmarkKey`: 比較セル識別子（`task + datasetPath/hash + candidateID + runtimeOptionsHash + evaluator/code version`）
-- `BenchmarkRunRecord`: run正本（`schemaVersion=5`、run全体 `metrics`、`candidateID`、`benchmarkKey`）
+- `BenchmarkRunRecord`: run正本（`schemaVersion=7`、run全体 `metrics`、`candidateID`、`benchmarkKey`）
   - generation pairwise は `options.compareMode=pairwise`、`pairCandidateAID`、`pairCandidateBID`、`pairJudgeModel` を保存
 - `BenchmarkCaseResult`: `cases_index.jsonl` の軽量行（一覧表示向け）
 - `BenchmarkCaseManifest` + `BenchmarkCaseMetrics`: ケース詳細の正本
@@ -257,16 +252,15 @@ postprocess 系の sanitize では `accessibilityText`, `windowText`, `visionSum
 
 ### 7.3 実行フロー
 
-- `--benchmark-workers` で固定ワーカープール数を指定可能（未指定は `min(4, CPUコア数)`）。
+- `benchmark_workers` で固定ワーカープール数を指定可能（未指定は `min(4, CPUコア数)`）。
 - `compare_workers` は candidate比較時の並列数（既定2）として扱う。
 - ケース処理はケース単位で独立実行し、保存は `cases/<case_id>/` 配下に分離する。
 - run全体進捗は `orchestrator_events.jsonl`、UI一覧は `cases_index.jsonl` を参照する。
-- CLI `--benchmark-compare` は `BenchmarkKey` を構築し、同一キーの成功 run があれば再実行をスキップ（`--force` 時除く）。
+- App (`BenchmarkViewModel`) が `BenchmarkExecutionService` を介して `BenchmarkExecutor` を実行する。
   - `stt`: candidate単位で実行。candidate同士は並列実行可能
     - `apple_speech + stream` は内部 capability で同時実行1に制限（上位フローはモデル非依存）
   - `generation`: pairwise専用（A/B 2候補 + judgeモデル）で実行
-- App (`BenchmarkViewModel`) は `stt` では複数candidate選択、`generation` では A/B + judge_model 選択で `--benchmark-compare` を実行する（compare_workers 未指定時は2）。
-- `--benchmark-scan-integrity` は task 単位で不備一覧を再生成し、除外状態は `exclusions.json` で維持する。
+- CLI は `debug benchmark-status` / `debug benchmark-integrity` の read-only 診断のみ提供する。
 
 ### 7.4 Generation 入力方針
 

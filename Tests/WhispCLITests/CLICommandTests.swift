@@ -1,673 +1,73 @@
 import XCTest
-import WhispCore
 @testable import whisp
 
 final class CLICommandTests: XCTestCase {
-    private actor AttemptCounter {
-        private var value = 0
-
-        func increment() -> Int {
-            value += 1
-            return value
-        }
-
-        func current() -> Int {
-            value
-        }
+    func testParseDebugSelfCheckCommand() throws {
+        XCTAssertNoThrow(try WhispCLI.parseAsRoot(["debug", "self-check"]))
     }
 
-    private actor ParallelStartRecorder {
-        private var timestamps: [UInt64] = []
-
-        func mark(_ timestamp: UInt64) {
-            timestamps.append(timestamp)
-        }
-
-        func absoluteDiffMs() -> Double? {
-            guard timestamps.count >= 2,
-                  let minTimestamp = timestamps.min(),
-                  let maxTimestamp = timestamps.max()
-            else {
-                return nil
-            }
-            let diffNanos = maxTimestamp - minTimestamp
-            return Double(diffNanos) / 1_000_000
-        }
-    }
-
-    func testParseSelfCheckCommand() throws {
-        let command = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: ["--self-check"]))
-        guard case .selfCheck = command else {
-            return XCTFail("unexpected command")
-        }
-    }
-
-    func testParseTopLevelCommandsCoversAllVariants() throws {
-        let sttFile = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: ["--stt-file", "/tmp/in.wav"]))
-        guard case let .sttFile(path) = sttFile else {
-            return XCTFail("unexpected stt-file command")
-        }
-        XCTAssertEqual(path, "/tmp/in.wav")
-
-        let sttStream = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--stt-stream-file", "/tmp/in.wav", "--chunk-ms", "240", "--realtime",
-        ]))
-        guard case let .sttStream(options) = sttStream else {
-            return XCTFail("unexpected stt-stream command")
-        }
-        XCTAssertEqual(options.path, "/tmp/in.wav")
-        XCTAssertEqual(options.chunkMs, 240)
-        XCTAssertTrue(options.realtime)
-
-        let pipeline = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--pipeline-file", "/tmp/in.wav", "--stt-preset", "deepgram_rest", "--no-realtime", "--emit", "stdout", "--context-file", "/tmp/context.json",
-        ]))
-        guard case let .pipeline(options) = pipeline else {
-            return XCTFail("unexpected pipeline command")
-        }
-        XCTAssertEqual(options.path, "/tmp/in.wav")
-        XCTAssertEqual(options.sttMode, .rest)
-        XCTAssertFalse(options.realtime)
-        XCTAssertEqual(options.emitMode, .stdout)
-        XCTAssertEqual(options.contextFilePath, "/tmp/context.json")
-
-        let vision = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--benchmark-vision-cases", "/tmp/manual.jsonl", "--no-cache",
-        ]))
-        guard case let .benchmarkVision(options) = vision else {
-            return XCTFail("unexpected benchmark-vision-cases command")
-        }
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertFalse(options.useCache)
-
-        let stt = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--benchmark-stt-cases", "/tmp/manual.jsonl", "--stt-preset", "apple_speech_recognizer_rest", "--no-realtime",
-        ]))
-        guard case let .benchmarkSTT(options) = stt else {
-            return XCTFail("unexpected benchmark-stt-cases command")
-        }
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertFalse(options.realtime)
-        XCTAssertEqual(options.sttPreset, .appleSpeechRecognizerRest)
-
-        let compare = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--benchmark-compare",
-            "--task", "stt",
+    func testParseDebugBenchmarkStatusCommand() throws {
+        let parsed = try DebugBenchmarkStatusCommand.parseAsRoot([
             "--cases", "/tmp/manual.jsonl",
-            "--candidate-id", "stt-a",
-        ]))
-        guard case let .benchmarkCompare(options) = compare else {
-            return XCTFail("unexpected benchmark-compare command")
-        }
-        XCTAssertEqual(options.task, .stt)
-        XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.candidateIDs, ["stt-a"])
-
-        let listCandidates = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: ["--benchmark-list-candidates"]))
-        guard case .benchmarkListCandidates = listCandidates else {
-            return XCTFail("unexpected benchmark-list-candidates command")
-        }
-
-        let integrity = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--benchmark-scan-integrity",
-            "--task", "generation",
-            "--cases", "/tmp/manual.jsonl",
-        ]))
-        guard case let .benchmarkIntegrityScan(options) = integrity else {
-            return XCTFail("unexpected benchmark-scan-integrity command")
-        }
-        XCTAssertEqual(options.task, .generation)
-        XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
-    }
-
-    func testParseUnknownTopLevelCommandReturnsNil() throws {
-        let command = try WhispCLI.CLICommand.parse(arguments: ["--unknown"])
-        XCTAssertNil(command)
-    }
-
-    func testParsePipelineCommandRejectsInvalidSTTPreset() {
-        XCTAssertThrowsError(try WhispCLI.CLICommand.parse(arguments: [
-            "--pipeline-file",
-            "/tmp/in.wav",
-            "--stt-preset",
-            "invalid",
-        ]))
-    }
-
-    func testParsePipelineCommandRejectsInvalidEmitMode() {
-        XCTAssertThrowsError(try WhispCLI.CLICommand.parse(arguments: [
-            "--pipeline-file",
-            "/tmp/in.wav",
-            "--emit",
-            "invalid",
-        ]))
-    }
-
-    func testParsePipelineOptionsAcceptsRealtimeOverrides() throws {
-        let options = try WhispCLI.parsePipelineOptions(args: [
-            "--pipeline-file",
-            "/tmp/in.wav",
-            "--no-realtime",
-            "--realtime",
-            "--chunk-ms",
-            "200",
+            "--format", "json",
         ])
-        XCTAssertTrue(options.realtime)
-        XCTAssertEqual(options.chunkMs, 200)
-    }
-
-    func testParseVisionBenchmarkOptionsParsesAndRejectsUnknownOption() throws {
-        let options = try WhispCLI.parseVisionBenchmarkOptions(args: [
-            "--benchmark-vision-cases",
-            "/tmp/manual.jsonl",
-            "--limit", "8",
-            "--no-cache",
-        ])
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.limit, 8)
-        XCTAssertFalse(options.useCache)
-
-        XCTAssertThrowsError(try WhispCLI.parseVisionBenchmarkOptions(args: [
-            "--benchmark-vision-cases",
-            "/tmp/manual.jsonl",
-            "--unknown",
-        ]))
-    }
-
-    func testParseSTTBenchmarkOptionsParsesPresetAndRejectsInvalidValues() throws {
-        let options = try WhispCLI.parseSTTBenchmarkOptions(args: [
-            "--benchmark-stt-cases",
-            "/tmp/manual.jsonl",
-            "--stt-preset", "apple_speech_recognizer_rest",
-            "--chunk-ms", "200",
-            "--silence-ms", "900",
-            "--max-segment-ms", "30000",
-            "--pre-roll-ms", "300",
-            "--no-realtime",
-            "--limit", "16",
-            "--min-audio-seconds", "2.25",
-            "--no-cache",
-        ])
-
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.sttMode, .rest)
-        XCTAssertEqual(options.chunkMs, 200)
-        XCTAssertEqual(options.silenceMs, 900)
-        XCTAssertEqual(options.maxSegmentMs, 30_000)
-        XCTAssertEqual(options.preRollMs, 300)
-        XCTAssertFalse(options.realtime)
-        XCTAssertEqual(options.limit, 16)
-        XCTAssertEqual(options.minAudioSeconds, 2.25, accuracy: 0.0001)
-        XCTAssertFalse(options.useCache)
-        XCTAssertEqual(options.sttPreset, .appleSpeechRecognizerRest)
-
-        let appleStreamOptions = try WhispCLI.parseSTTBenchmarkOptions(args: [
-            "--benchmark-stt-cases",
-            "/tmp/manual.jsonl",
-            "--stt-preset", "apple_speech_recognizer_stream",
-        ])
-        XCTAssertEqual(appleStreamOptions.sttPreset, .appleSpeechRecognizerStream)
-        XCTAssertEqual(appleStreamOptions.sttMode, .stream)
-
-        if STTPresetCatalog.isAvailableOnCurrentPlatform(.appleSpeechTranscriberRest) {
-            let speechTranscriberRest = try WhispCLI.parseSTTBenchmarkOptions(args: [
-                "--benchmark-stt-cases",
-                "/tmp/manual.jsonl",
-                "--stt-preset", "apple_speech_transcriber_rest",
-            ])
-            XCTAssertEqual(speechTranscriberRest.sttPreset, .appleSpeechTranscriberRest)
-            XCTAssertEqual(speechTranscriberRest.sttMode, .rest)
+        guard let command = parsed as? DebugBenchmarkStatusCommand else {
+            return XCTFail("unexpected command type")
         }
-
-        if STTPresetCatalog.isAvailableOnCurrentPlatform(.appleDictationTranscriberStream) {
-            let dictationStream = try WhispCLI.parseSTTBenchmarkOptions(args: [
-                "--benchmark-stt-cases",
-                "/tmp/manual.jsonl",
-                "--stt-preset", "apple_dictation_transcriber_stream",
-            ])
-            XCTAssertEqual(dictationStream.sttPreset, .appleDictationTranscriberStream)
-            XCTAssertEqual(dictationStream.sttMode, .stream)
-        }
-
-        XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
-            "--benchmark-stt-cases",
-            "/tmp/manual.jsonl",
-            "--stt-preset",
-            "invalid",
-        ]))
+        XCTAssertEqual(command.cases, "/tmp/manual.jsonl")
+        XCTAssertEqual(command.format, .json)
     }
 
-    func testBenchmarkLogDirOptionIsRejectedInAllBenchmarkParsers() {
-        XCTAssertThrowsError(try WhispCLI.parseVisionBenchmarkOptions(args: [
-            "--benchmark-vision-cases",
-            "/tmp/manual.jsonl",
-            "--benchmark-log-dir",
-            "/tmp/logs",
-        ]))
-
-        XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
-            "--benchmark-stt-cases",
-            "/tmp/manual.jsonl",
-            "--benchmark-log-dir",
-            "/tmp/logs",
-        ]))
-    }
-
-    func testParseBenchmarkCompareOptions() throws {
-        let options = try WhispCLI.parseBenchmarkCompareOptions(args: [
-            "--benchmark-compare",
-            "--task", "generation",
-            "--cases", "/tmp/manual.jsonl",
-            "--candidate-id", "gen-a",
-            "--candidate-id", "gen-b",
-            "--judge-model", "gpt-4o-mini",
-            "--force",
-        ])
-        XCTAssertEqual(options.task, .generation)
-        XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.candidateIDs, ["gen-a", "gen-b"])
-        XCTAssertEqual(options.judgeModel, .gpt4oMini)
-        XCTAssertTrue(options.force)
-
-        let compareWithoutCases = try WhispCLI.parseBenchmarkCompareOptions(args: [
-            "--benchmark-compare",
-            "--task", "stt",
-            "--candidate-id", "x",
-        ])
-        XCTAssertEqual(compareWithoutCases.task, .stt)
-        XCTAssertEqual(compareWithoutCases.candidateIDs, ["x"])
-        XCTAssertEqual(
-            URL(fileURLWithPath: compareWithoutCases.casesPath).lastPathComponent,
-            "manual_test_cases.jsonl"
-        )
-    }
-
-    func testParseBenchmarkCompareOptionsRequiresTwoGenerationCandidates() {
-        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
-            "--benchmark-compare",
-            "--task", "generation",
-            "--cases", "/tmp/manual.jsonl",
-            "--candidate-id", "gen-a",
-        ]))
-
-        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
-            "--benchmark-compare",
-            "--task", "generation",
-            "--cases", "/tmp/manual.jsonl",
-            "--candidate-id", "gen-a",
-            "--candidate-id", "gen-b",
-            "--candidate-id", "gen-c",
-        ]))
-    }
-
-    func testParseBenchmarkCompareOptionsRejectsInvalidJudgeModel() {
-        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
-            "--benchmark-compare",
-            "--task", "generation",
-            "--cases", "/tmp/manual.jsonl",
-            "--candidate-id", "gen-a",
-            "--candidate-id", "gen-b",
-            "--judge-model", "invalid-model",
-        ]))
-    }
-
-    func testParseBenchmarkCompareOptionsAcceptsKimiJudgeModel() throws {
-        let options = try WhispCLI.parseBenchmarkCompareOptions(args: [
-            "--benchmark-compare",
-            "--task", "generation",
-            "--cases", "/tmp/manual.jsonl",
-            "--candidate-id", "gen-a",
-            "--candidate-id", "gen-b",
-            "--judge-model", "kimi-k2.5",
-        ])
-        XCTAssertEqual(options.judgeModel, .kimiK25)
-    }
-
-    func testParseBenchmarkCompareOptionsRejectsLegacyGenerationTaskNames() {
-        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
-            "--benchmark-compare",
-            "--task", "generation-single",
-            "--cases", "/tmp/manual.jsonl",
-            "--candidate-id", "gen-a",
-        ]))
-        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
-            "--benchmark-compare",
-            "--task", "generation-battle",
-            "--cases", "/tmp/manual.jsonl",
-            "--candidate-id", "gen-a",
-            "--candidate-id", "gen-b",
-        ]))
-    }
-
-    func testParseBenchmarkIntegrityScanOptions() throws {
-        let options = try WhispCLI.parseBenchmarkIntegrityScanOptions(args: [
-            "--benchmark-scan-integrity",
+    func testParseDebugBenchmarkIntegrityCommand() throws {
+        let parsed = try DebugBenchmarkIntegrityCommand.parseAsRoot([
             "--task", "stt",
             "--cases", "/tmp/manual.jsonl",
         ])
-        XCTAssertEqual(options.task, .stt)
-        XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
+        guard let command = parsed as? DebugBenchmarkIntegrityCommand else {
+            return XCTFail("unexpected command type")
+        }
+        XCTAssertEqual(command.task, .stt)
+        XCTAssertEqual(command.cases, "/tmp/manual.jsonl")
+        XCTAssertEqual(command.format, .text)
+    }
 
-        XCTAssertThrowsError(try WhispCLI.parseBenchmarkIntegrityScanOptions(args: [
-            "--benchmark-scan-integrity",
+    func testParseDebugBenchmarkIntegrityCommandRejectsUnknownTask() {
+        XCTAssertThrowsError(try DebugBenchmarkIntegrityCommand.parseAsRoot([
             "--task", "vision",
+            "--cases", "/tmp/manual.jsonl",
         ]))
     }
 
-    func testResolvedGenerationInputRequiresSttTextOnly() throws {
-        let decoder = JSONDecoder()
-        let data = Data("""
-        {
-          "id": "case-a",
-          "audio_file": "/tmp/a.wav",
-          "labels": { "transcript_gold": "gold text" }
-        }
-        """.utf8)
-        let item = try decoder.decode(ManualBenchmarkCase.self, from: data)
-        XCTAssertNil(item.resolvedGenerationInputSTT())
+    func testOldTopLevelFlagsAreRejected() {
+        XCTAssertThrowsError(try WhispCLI.parseAsRoot(["--self-check"]))
+        XCTAssertThrowsError(try WhispCLI.parseAsRoot(["--benchmark-compare"]))
     }
 
-    func testMakePostProcessPromptSupportsContextVariables() {
-        var config = Config()
-        config.inputLanguage = "ja"
-        let context = ContextInfo(
-            accessibilityText: "選択中",
-            windowText: "議事録本文",
-            visionSummary: "会議メモを編集中",
-            visionTerms: ["Whisp", "Swift"]
-        )
-        let prompt = WhispCLI.makePostProcessPrompt(
-            config: config,
-            sttText: "今日は定例です",
-            context: context,
-            templateOverride: """
-            入力={STT結果}
-            選択={選択テキスト}
-            画面={画面テキスト}
-            要約={画面要約}
-            用語={専門用語候補}
-            """
-        )
-
-        XCTAssertTrue(prompt.contains("入力=今日は定例です"))
-        XCTAssertTrue(prompt.contains("選択=選択中"))
-        XCTAssertTrue(prompt.contains("画面=議事録本文"))
-        XCTAssertTrue(prompt.contains("要約=会議メモを編集中"))
-        XCTAssertTrue(prompt.contains("用語=Whisp, Swift"))
+    func testSelfCheckRunSucceeds() async throws {
+        var command = DebugSelfCheckCommand()
+        try await command.run()
     }
 
-    func testParseCandidateBoolOptionRejectsInvalidValue() {
-        XCTAssertThrowsError(
-            try WhispCLI.parseCandidateBoolOption(
-                ["require_context": "invalid-value"],
-                key: "require_context",
-                defaultValue: false
-            )
-        )
+    func testLoadCasesCountForStatusReturnsNilForMalformedJSONL() throws {
+        let tempFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+        try "not-json\n".write(to: tempFile, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        let count = loadCasesCountForStatus(path: tempFile.path)
+        XCTAssertNil(count)
     }
 
-    func testBuildPairwiseJudgePromptIncludesSTTAndReferencePrinciples() {
-        let prompt = WhispCLI.buildPairwiseJudgePrompt(
-            referenceText: "期待される文",
-            sttInputText: "すってぃー入力",
-            candidateAText: "候補A",
-            candidateBText: "候補B"
-        )
+    func testLoadCasesCountForStatusReturnsCountForValidJSONL() throws {
+        let tempFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+        try """
+        {"id":"c1","audio_file":"/tmp/a.wav"}
+        {"id":"c2","audio_file":"/tmp/b.wav"}
+        """.write(to: tempFile, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
 
-        XCTAssertTrue(prompt.contains("[evaluation_principles]"))
-        XCTAssertTrue(prompt.contains("reference_text を主基準"))
-        XCTAssertTrue(prompt.contains("STT入力は音声認識結果"))
-        XCTAssertTrue(prompt.contains("[stt_input_text]"))
-        XCTAssertTrue(prompt.contains("すってぃー入力"))
-        XCTAssertFalse(prompt.contains("[cursor_context_text]"))
-        XCTAssertFalse(prompt.contains("[screen_context_text]"))
-    }
-
-    func testManualBenchmarkCaseDecodesAccessibilityFocusedElement() throws {
-        let data = Data("""
-        {
-          "id": "case-a",
-          "audio_file": "/tmp/a.wav",
-          "stt_text": "input",
-          "accessibility": {
-            "focusedElement": {
-              "selectedText": "選択中",
-              "selectedRange": { "location": 3, "length": 2 },
-              "caretContext": "abc|def"
-            }
-          }
-        }
-        """.utf8)
-        let item = try JSONDecoder().decode(ManualBenchmarkCase.self, from: data)
-        XCTAssertEqual(item.accessibility?.focusedElement?.selectedText, "選択中")
-        XCTAssertEqual(item.accessibility?.focusedElement?.selectedRange?.location, 3)
-        XCTAssertEqual(item.accessibility?.focusedElement?.selectedRange?.length, 2)
-        XCTAssertEqual(item.accessibility?.focusedElement?.caretContext, "abc|def")
-    }
-
-    func testMultimodalPayloadsEncodeImageParts() throws {
-        let openAI = OpenAIChatRequest(
-            model: "gpt-4o-mini",
-            messages: [
-                OpenAIChatMessage(
-                    role: "user",
-                    content: .parts([
-                        .text("prompt"),
-                        .imageURL(OpenAIImageURLContent(url: "data:image/png;base64,AAAA")),
-                    ])
-                ),
-            ]
-        )
-        let openAIJSON = String(data: try JSONEncoder().encode(openAI), encoding: .utf8) ?? ""
-        let normalizedOpenAIJSON = openAIJSON.replacingOccurrences(of: "\\/", with: "/")
-        XCTAssertTrue(normalizedOpenAIJSON.contains("\"image_url\""))
-        XCTAssertTrue(normalizedOpenAIJSON.contains("\"data:image/png;base64,AAAA\""))
-
-        let gemini = GeminiMultimodalRequest(contents: [
-            GeminiMultimodalContent(role: "user", parts: [
-                .text("prompt"),
-                .inlineData(GeminiInlineData(mimeType: "image/png", data: "BBBB")),
-            ]),
-        ])
-        let geminiJSON = String(data: try JSONEncoder().encode(gemini), encoding: .utf8) ?? ""
-        let normalizedGeminiJSON = geminiJSON.replacingOccurrences(of: "\\/", with: "/")
-        XCTAssertTrue(normalizedGeminiJSON.contains("\"inlineData\""))
-        XCTAssertTrue(normalizedGeminiJSON.contains("\"mimeType\""))
-        XCTAssertTrue(normalizedGeminiJSON.contains("\"image/png\""))
-        XCTAssertTrue(normalizedGeminiJSON.contains("\"data\":\"BBBB\""))
-    }
-
-    func testPairwiseJudgeHasImagePayloadRequiresImageMimePrefix() {
-        let bytes = Data([0x00, 0x01, 0x02])
-        XCTAssertTrue(WhispCLI.pairwiseJudgeHasImagePayload(
-            visionImageData: bytes,
-            visionImageMimeType: "image/png"
-        ))
-        XCTAssertFalse(WhispCLI.pairwiseJudgeHasImagePayload(
-            visionImageData: bytes,
-            visionImageMimeType: "png"
-        ))
-        XCTAssertFalse(WhispCLI.pairwiseJudgeHasImagePayload(
-            visionImageData: bytes,
-            visionImageMimeType: nil
-        ))
-        XCTAssertFalse(WhispCLI.pairwiseJudgeHasImagePayload(
-            visionImageData: nil,
-            visionImageMimeType: "image/png"
-        ))
-    }
-
-    func testMakeGenerationPairwiseBenchmarkKeyDoesNotRequireJudgeAPIKey() throws {
-        let now = WhispTime.isoNow()
-        let candidateA = BenchmarkCandidate(
-            id: "gen-a",
-            task: .generation,
-            model: "gpt-4o-mini",
-            generationPromptTemplate: "A",
-            options: [:],
-            createdAt: now,
-            updatedAt: now
-        )
-        let candidateB = BenchmarkCandidate(
-            id: "gen-b",
-            task: .generation,
-            model: "gemini-2.5-flash-lite",
-            generationPromptTemplate: "B",
-            options: [:],
-            createdAt: now,
-            updatedAt: now
-        )
-
-        let key = try WhispCLI.makeGenerationPairwiseBenchmarkKey(
-            candidateA: candidateA,
-            candidateB: candidateB,
-            datasetPath: "/tmp/manual.jsonl",
-            datasetHash: "dataset-hash",
-            judgeModel: .gpt5Nano
-        )
-        XCTAssertEqual(key.task, .generation)
-        XCTAssertEqual(key.datasetPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(key.datasetHash, "dataset-hash")
-        XCTAssertEqual(key.candidateID, "pair:gen-a__vs__gen-b")
-        XCTAssertFalse(key.runtimeOptionsHash.isEmpty)
-    }
-
-    func testRunPairwiseOperationsInParallelExecutesBothOperationsConcurrently() async throws {
-        let recorder = ParallelStartRecorder()
-        let startedAt = DispatchTime.now().uptimeNanoseconds
-        let result = try await WhispCLI.runPairwiseOperationsInParallel(
-            firstLane: .generationA,
-            firstFailureLabel: "pairwise_generation_a_failed",
-            operationFirst: {
-                await recorder.mark(DispatchTime.now().uptimeNanoseconds)
-                try await Task.sleep(nanoseconds: 200_000_000)
-                return "A"
-            },
-            secondLane: .generationB,
-            secondFailureLabel: "pairwise_generation_b_failed",
-            operationSecond: {
-                await recorder.mark(DispatchTime.now().uptimeNanoseconds)
-                try await Task.sleep(nanoseconds: 200_000_000)
-                return "B"
-            }
-        )
-        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
-        let startDiffMaybe = await recorder.absoluteDiffMs()
-        guard let startDiffMs = startDiffMaybe else {
-            return XCTFail("parallel start timestamps should contain two entries")
-        }
-
-        XCTAssertEqual(result.first.lane, .generationA)
-        XCTAssertEqual(result.second.lane, .generationB)
-        XCTAssertEqual(result.first.outcome.value, "A")
-        XCTAssertEqual(result.second.outcome.value, "B")
-        XCTAssertFalse(result.first.outcome.retried)
-        XCTAssertFalse(result.second.outcome.retried)
-        XCTAssertLessThan(startDiffMs, 80)
-        XCTAssertLessThan(elapsedMs, 350)
-    }
-
-    func testExecuteWithImmediateRetryIfNeededRetriesOnceForIOError() async throws {
-        let counter = AttemptCounter()
-        let outcome = try await WhispCLI.executeWithImmediateRetryIfNeeded(
-            failureLabel: "pairwise_generation_a_failed"
-        ) {
-            let attempt = await counter.increment()
-            if attempt == 1 {
-                throw AppError.io("temporary backend error")
-            }
-            return "ok"
-        }
-
-        let attempts = await counter.current()
-        XCTAssertEqual(attempts, 2)
-        XCTAssertEqual(outcome.value, "ok")
-        XCTAssertEqual(outcome.attempts, 2)
-        XCTAssertTrue(outcome.retried)
-    }
-
-    func testExecuteWithImmediateRetryIfNeededDoesNotRetryDecodeError() async {
-        let counter = AttemptCounter()
-        do {
-            _ = try await WhispCLI.executeWithImmediateRetryIfNeeded(
-                failureLabel: "pairwise_judge_round1_failed"
-            ) {
-                _ = await counter.increment()
-                throw AppError.decode("invalid json")
-            }
-            XCTFail("decode error should be thrown")
-        } catch let error as AppError {
-            guard case .decode(let message) = error else {
-                return XCTFail("unexpected AppError: \(error)")
-            }
-            XCTAssertTrue(message.contains("pairwise_judge_round1_failed"))
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
-        let attempts = await counter.current()
-        XCTAssertEqual(attempts, 1)
-    }
-
-    func testRunPairwiseOperationsInParallelRetriesOnlyFailedSide() async throws {
-        let aCounter = AttemptCounter()
-        let bCounter = AttemptCounter()
-
-        let result = try await WhispCLI.runPairwiseOperationsInParallel(
-            firstLane: .generationA,
-            firstFailureLabel: "pairwise_generation_a_failed",
-            operationFirst: {
-                let attempt = await aCounter.increment()
-                if attempt == 1 {
-                    throw URLError(.timedOut)
-                }
-                return "A"
-            },
-            secondLane: .generationB,
-            secondFailureLabel: "pairwise_generation_b_failed",
-            operationSecond: {
-                _ = await bCounter.increment()
-                return "B"
-            }
-        )
-
-        let attemptsA = await aCounter.current()
-        let attemptsB = await bCounter.current()
-        XCTAssertEqual(attemptsA, 2)
-        XCTAssertEqual(attemptsB, 1)
-        XCTAssertEqual(result.first.outcome.value, "A")
-        XCTAssertEqual(result.second.outcome.value, "B")
-        XCTAssertTrue(result.first.outcome.retried)
-        XCTAssertFalse(result.second.outcome.retried)
-    }
-
-    func testRunPairwiseOperationsInParallelFailsAfterRetryExhausted() async {
-        let aCounter = AttemptCounter()
-
-        do {
-            _ = try await WhispCLI.runPairwiseOperationsInParallel(
-                firstLane: .generationA,
-                firstFailureLabel: "pairwise_generation_a_failed",
-                operationFirst: {
-                    _ = await aCounter.increment()
-                    throw AppError.io("backend unavailable")
-                },
-                secondLane: .generationB,
-                secondFailureLabel: "pairwise_generation_b_failed",
-                operationSecond: {
-                    try await Task.sleep(nanoseconds: 100_000_000)
-                    return "B"
-                }
-            )
-            XCTFail("error should be thrown after retry exhaustion")
-        } catch let error as AppError {
-            guard case .io(let message) = error else {
-                return XCTFail("unexpected AppError: \(error)")
-            }
-            XCTAssertTrue(message.contains("pairwise_generation_a_failed"))
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
-        let attemptsA = await aCounter.current()
-        XCTAssertEqual(attemptsA, 2)
+        let count = loadCasesCountForStatus(path: tempFile.path)
+        XCTAssertEqual(count, 2)
     }
 }

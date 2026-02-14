@@ -1,3 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-scripts/benchmark_cases.sh stt "$@"
+
+echo "scripts/benchmark_stt_cases.sh is deprecated."
+echo "Benchmark execution moved to WhispApp GUI (ベンチマーク画面)."
+exit 1

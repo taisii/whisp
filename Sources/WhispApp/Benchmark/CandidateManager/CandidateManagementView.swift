@@ -59,6 +59,7 @@ struct CandidateManagementView: View {
                         cellText("\(row.wins)-\(row.losses)-\(row.ties)", width: 120, alignment: .trailing)
                         Spacer(minLength: 0)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

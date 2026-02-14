@@ -109,33 +109,18 @@ struct BenchmarkComparisonView: View {
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(.secondary)
                     } else {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 4) {
+                        ScrollView([.horizontal, .vertical]) {
+                            LazyVGrid(columns: sttCandidateListColumns, alignment: .leading, spacing: 4) {
                                 ForEach(viewModel.taskCandidates, id: \.id) { candidate in
-                                    Toggle(
-                                        isOn: Binding(
-                                            get: { viewModel.selectedCandidateIDs.contains(candidate.id) },
-                                            set: { isOn in
-                                                if isOn {
-                                                    viewModel.selectedCandidateIDs.insert(candidate.id)
-                                                } else {
-                                                    viewModel.selectedCandidateIDs.remove(candidate.id)
-                                                }
-                                            }
-                                        )
-                                    ) {
-                                        Text(candidate.id)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .lineLimit(1)
-                                    }
-                                    .toggleStyle(.checkbox)
+                                    sttCandidateToggleRow(candidate)
                                 }
                             }
+                            .frame(minWidth: sttCandidateListMinWidth, alignment: .leading)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 6)
                         }
-                        .frame(width: 360, height: 124)
+                        .frame(height: 132)
                         .background(Color(NSColor.textBackgroundColor))
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                         .overlay {
@@ -144,7 +129,7 @@ struct BenchmarkComparisonView: View {
                         }
                     }
                 }
-                .frame(width: 370, alignment: .leading)
+                .frame(maxWidth: 760, alignment: .leading)
             }
 
             Toggle("Force rerun", isOn: $viewModel.forceRerun)
@@ -245,6 +230,8 @@ struct BenchmarkComparisonView: View {
         }
         .font(.system(size: 11, design: .monospaced))
         .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     private var caseBreakdown: some View {
@@ -263,9 +250,10 @@ struct BenchmarkComparisonView: View {
                         viewModel.openCaseDetail(caseID: row.id)
                     } label: {
                         caseBreakdownRow(row)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .contentShape(Rectangle())
                 }
             }
             .listStyle(.plain)
@@ -325,23 +313,26 @@ struct BenchmarkComparisonView: View {
                 set: { viewModel.selectGenerationPairwiseCase($0) }
             )) {
                 ForEach(viewModel.generationPairwiseCaseRows) { row in
-                    HStack(spacing: 10) {
-                        Text(row.id)
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .frame(width: 180, alignment: .leading)
-                        statusChip(row.status)
-                            .frame(width: 70, alignment: .leading)
-                        winnerCell(row.overallWinner, width: 120)
-                        winnerCell(row.intentWinner, width: 110)
-                        winnerCell(row.hallucinationWinner, width: 150)
-                        winnerCell(row.styleContextWinner, width: 150)
-                        Spacer(minLength: 0)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
+                    Button {
                         viewModel.selectGenerationPairwiseCase(row.id)
                         viewModel.isPairwiseCaseDetailPresented = true
+                    } label: {
+                        HStack(spacing: 10) {
+                            Text(row.id)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .frame(width: 180, alignment: .leading)
+                            statusChip(row.status)
+                                .frame(width: 70, alignment: .leading)
+                            winnerCell(row.overallWinner, width: 120)
+                            winnerCell(row.intentWinner, width: 110)
+                            winnerCell(row.hallucinationWinner, width: 150)
+                            winnerCell(row.styleContextWinner, width: 150)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .tag(Optional(row.id))
                 }
             }
@@ -656,6 +647,40 @@ struct BenchmarkComparisonView: View {
         let promptName = (candidate.promptName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = promptName.isEmpty ? candidate.id : promptName
         return "\(displayName)（\(candidate.model)）"
+    }
+
+    private var sttCandidateListColumns: [GridItem] {
+        [
+            GridItem(.fixed(220), spacing: 8, alignment: .topLeading),
+            GridItem(.fixed(220), spacing: 8, alignment: .topLeading),
+            GridItem(.fixed(220), spacing: 8, alignment: .topLeading),
+        ]
+    }
+
+    private var sttCandidateListMinWidth: CGFloat {
+        (220 * 3) + (8 * 2)
+    }
+
+    private func sttCandidateToggleRow(_ candidate: BenchmarkCandidate) -> some View {
+        Toggle(
+            isOn: Binding(
+                get: { viewModel.selectedCandidateIDs.contains(candidate.id) },
+                set: { isOn in
+                    if isOn {
+                        viewModel.selectedCandidateIDs.insert(candidate.id)
+                    } else {
+                        viewModel.selectedCandidateIDs.remove(candidate.id)
+                    }
+                }
+            )
+        ) {
+            Text(candidate.id)
+                .font(.system(size: 11, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .toggleStyle(.checkbox)
+        .frame(width: 220, alignment: .leading)
     }
 
     @ViewBuilder

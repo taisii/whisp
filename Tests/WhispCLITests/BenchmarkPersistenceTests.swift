@@ -1,76 +1,26 @@
 import Foundation
 import XCTest
 import WhispCore
-@testable import whisp
 
 final class BenchmarkPersistenceTests: XCTestCase {
-    private enum DummyFailure: Error {
-        case worker
-    }
-
     private func tempHome() -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }
 
-    private func makeBenchmarkCase(id: String) throws -> ManualBenchmarkCase {
-        let json = """
-        {
-          "id": "\(id)",
-          "audio_file": "/tmp/\(id).wav"
-        }
-        """
-        return try JSONDecoder().decode(ManualBenchmarkCase.self, from: Data(json.utf8))
-    }
-
-    func testSaveBenchmarkRunPersistsRunCasesAndEvents() throws {
-        let home = tempHome()
-        let runID = "stt-20260211-000000-000-aaaa1111"
-        let env = ["HOME": home.path]
-
-        let caseResult = BenchmarkCaseResult(
-            id: "case-1",
-            status: .ok,
-            reason: nil,
-            cache: BenchmarkCacheRecord(hit: true, key: "cache-key", namespace: "stt"),
-            sources: BenchmarkReferenceSources(transcript: "labels.transcript_gold"),
-            contextUsed: false,
-            visionImageAttached: false,
-            metrics: BenchmarkCaseMetrics(
-                exactMatch: true,
-                cer: 0,
-                sttTotalMs: 120,
-                sttAfterStopMs: 40,
-                latencyMs: 120,
-                outputChars: 32
-            )
-        )
-
-        let base = WhispCLI.makeEventBase(
-            runID: runID,
-            caseID: "case-1",
-            stage: .aggregate,
-            status: .ok,
-            seed: 1
-        )
-        let event = BenchmarkCaseEvent.aggregate(BenchmarkAggregateLog(
-            base: base,
-            exactMatch: true,
-            cer: 0,
-            intentMatch: nil,
-            intentScore: nil,
-            intentPreservationScore: nil,
-            hallucinationScore: nil,
-            hallucinationRate: nil,
-            latencyMs: 120,
-            totalAfterStopMs: 40,
-            outputChars: 32
-        ))
-
-        _ = try WhispCLI.saveBenchmarkRun(
-            runID: runID,
-            kind: .stt,
+    private func makeRunRecord(
+        runID: String,
+        kind: BenchmarkKind,
+        createdAt: String,
+        store: BenchmarkStore
+    ) -> BenchmarkRunRecord {
+        BenchmarkRunRecord(
+            id: runID,
+            kind: kind,
+            status: .completed,
+            createdAt: createdAt,
+            updatedAt: createdAt,
             options: .stt(BenchmarkSTTRunOptions(
                 common: BenchmarkRunCommonOptions(sourceCasesPath: "/tmp/manual.jsonl"),
                 sttMode: "stream"
@@ -82,218 +32,191 @@ final class BenchmarkPersistenceTests: XCTestCase {
                     executedCases: 1,
                     skippedCases: 0,
                     failedCases: 0,
-                    cachedHits: 1
-                ),
-                exactMatchRate: 1,
-                avgCER: 0,
-                weightedCER: 0,
-                latencyMs: BenchmarkLatencyDistribution(avg: 120, p50: 120, p95: 120, p99: 120)
+                    cachedHits: 0
+                )
             )),
-            caseResults: [caseResult],
-            events: [event],
-            environment: env
+            paths: store.resolveRunPaths(runID: runID)
         )
-
-        let store = BenchmarkStore(environment: env)
-        let run = try store.loadRun(runID: runID)
-        XCTAssertNotNil(run)
-        XCTAssertEqual(run?.id, runID)
-
-        let rows = try store.loadCaseResults(runID: runID)
-        XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows.first?.id, "case-1")
-        XCTAssertEqual(rows.first?.metrics.cer, 0)
-
-        let events = try store.loadEvents(runID: runID)
-        XCTAssertEqual(events.count, 1)
-        XCTAssertEqual(events.first?.base.stage, .aggregate)
     }
 
-    func testMakeSkippedCaseArtifactsBuildsLoadAndAggregateEvents() {
-        let artifacts = WhispCLI.makeSkippedCaseArtifacts(
-            runID: "run-skip",
-            caseID: "case-skip",
-            caseStartedAtMs: 1_700_000_000_000,
-            reason: "missing reference",
-            cacheNamespace: "stt",
-            sources: BenchmarkReferenceSources(transcript: "labels.transcript_gold"),
-            contextPresent: true,
-            visionImagePresent: false,
-            audioFilePath: "/tmp/case-skip.wav",
-            metrics: BenchmarkCaseMetrics(audioSeconds: 1.2)
-        )
-
-        XCTAssertEqual(artifacts.result.id, "case-skip")
-        XCTAssertEqual(artifacts.result.status, .skipped)
-        XCTAssertEqual(artifacts.result.reason, "missing reference")
-        XCTAssertEqual(artifacts.result.cache?.namespace, "stt")
-        XCTAssertEqual(artifacts.events.count, 2)
-
-        guard case let .loadCase(load) = artifacts.events[0] else {
-            XCTFail("first event should be loadCase")
-            return
-        }
-        XCTAssertEqual(load.base.stage, .loadCase)
-        XCTAssertEqual(load.base.status, .ok)
-        XCTAssertEqual(load.sources.transcript, "labels.transcript_gold")
-
-        guard case let .aggregate(aggregate) = artifacts.events[1] else {
-            XCTFail("second event should be aggregate")
-            return
-        }
-        XCTAssertEqual(aggregate.base.stage, .aggregate)
-        XCTAssertEqual(aggregate.base.status, .skipped)
-        XCTAssertGreaterThanOrEqual(aggregate.base.startedAtMs, load.base.endedAtMs)
-    }
-
-    func testExecuteBenchmarkRunLifecycleFinalizesCompleted() async throws {
+    func testLoadStatusSnapshotReturnsCandidateCountsAndLatestRuns() throws {
         let home = tempHome()
         let env = ["HOME": home.path]
-        let runID = "stt-lifecycle-success"
-        let runOptions = BenchmarkRunOptions.stt(BenchmarkSTTRunOptions(
-            common: BenchmarkRunCommonOptions(sourceCasesPath: "/tmp/manual.jsonl"),
-            sttMode: "stream"
-        ))
-        let recorder = try BenchmarkRunRecorder(
-            runID: runID,
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let benchmarkStore = BenchmarkStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        try candidateStore.saveCandidates([
+            BenchmarkCandidate(
+                id: "stt-a",
+                task: .stt,
+                model: "deepgram_stream",
+                createdAt: "2026-02-15T00:00:00Z",
+                updatedAt: "2026-02-15T00:00:00Z"
+            ),
+            BenchmarkCandidate(
+                id: "gen-a",
+                task: .generation,
+                model: "gpt-5-mini",
+                createdAt: "2026-02-15T00:00:00Z",
+                updatedAt: "2026-02-15T00:00:00Z"
+            ),
+        ])
+
+        try benchmarkStore.saveRun(makeRunRecord(
+            runID: "run-stt-old",
             kind: .stt,
-            options: runOptions,
-            initialMetrics: .stt(BenchmarkSTTRunMetrics(
-                counts: BenchmarkRunCounts(
-                    casesTotal: 2,
-                    casesSelected: 2,
-                    executedCases: 0,
-                    skippedCases: 0,
-                    failedCases: 0,
-                    cachedHits: 0
-                )
-            )),
+            createdAt: "2026-02-10T00:00:00Z",
+            store: benchmarkStore
+        ))
+        try benchmarkStore.saveRun(makeRunRecord(
+            runID: "run-stt-new",
+            kind: .stt,
+            createdAt: "2026-02-11T00:00:00Z",
+            store: benchmarkStore
+        ))
+        try benchmarkStore.saveRun(makeRunRecord(
+            runID: "run-gen",
+            kind: .generation,
+            createdAt: "2026-02-12T00:00:00Z",
+            store: benchmarkStore
+        ))
+
+        let service = BenchmarkDiagnosticsService(
+            candidateStore: candidateStore,
+            benchmarkStore: benchmarkStore,
+            integrityStore: integrityStore,
             environment: env
         )
-        let selectedCases = [
-            try makeBenchmarkCase(id: "case-1"),
-            try makeBenchmarkCase(id: "case-2"),
-        ]
 
-        let lifecycle = try await WhispCLI.executeBenchmarkRunLifecycle(
-            selectedCases: selectedCases,
-            recorder: recorder
-        ) {
-            // success path
-        } snapshotSummary: {
-            2
-        } makeMetrics: { executed in
-            .stt(BenchmarkSTTRunMetrics(
-                counts: BenchmarkRunCounts(
-                    casesTotal: 2,
-                    casesSelected: 2,
-                    executedCases: executed,
-                    skippedCases: 0,
-                    failedCases: 0,
-                    cachedHits: 0
-                )
+        let snapshot = try service.loadStatusSnapshot()
+        XCTAssertFalse(snapshot.generatedAt.isEmpty)
+
+        let sttCount = snapshot.candidateCounts.first { $0.task == BenchmarkKind.stt.rawValue }
+        let generationCount = snapshot.candidateCounts.first { $0.task == BenchmarkKind.generation.rawValue }
+        let visionCount = snapshot.candidateCounts.first { $0.task == BenchmarkKind.vision.rawValue }
+
+        XCTAssertEqual(sttCount?.count, 1)
+        XCTAssertEqual(generationCount?.count, 1)
+        XCTAssertEqual(visionCount?.count, 0)
+
+        XCTAssertEqual(snapshot.latestRuns.first { $0.task == BenchmarkKind.stt.rawValue }?.runID, "run-stt-new")
+        XCTAssertEqual(snapshot.latestRuns.first { $0.task == BenchmarkKind.generation.rawValue }?.runID, "run-gen")
+    }
+
+    func testLoadStatusSnapshotIncludesOldTaskRunBeyondThousandRecentEntries() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let benchmarkStore = BenchmarkStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        try candidateStore.saveCandidates([
+            BenchmarkCandidate(
+                id: "stt-a",
+                task: .stt,
+                model: "deepgram_stream",
+                createdAt: "2026-02-15T00:00:00Z",
+                updatedAt: "2026-02-15T00:00:00Z"
+            ),
+            BenchmarkCandidate(
+                id: "gen-a",
+                task: .generation,
+                model: "gpt-5-mini",
+                createdAt: "2026-02-15T00:00:00Z",
+                updatedAt: "2026-02-15T00:00:00Z"
+            ),
+        ])
+
+        try benchmarkStore.saveRun(makeRunRecord(
+            runID: "run-stt-only",
+            kind: .stt,
+            createdAt: "2026-01-01T00:00:00Z",
+            store: benchmarkStore
+        ))
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let baseDate = try XCTUnwrap(formatter.date(from: "2026-02-01T00:00:00Z"))
+
+        for index in 0..<1_005 {
+            let createdAt = formatter.string(from: baseDate.addingTimeInterval(Double(index)))
+            try benchmarkStore.saveRun(makeRunRecord(
+                runID: "run-gen-\(index)",
+                kind: .generation,
+                createdAt: createdAt,
+                store: benchmarkStore
             ))
-        } makeRunOptions: { _ in
-            runOptions
         }
 
-        XCTAssertEqual(lifecycle.run.status, .completed)
-        XCTAssertEqual(lifecycle.metrics.executedCases, 2)
-
-        let store = BenchmarkStore(environment: env)
-        let run = try XCTUnwrap(try store.loadRun(runID: runID))
-        XCTAssertEqual(run.status, .completed)
-        XCTAssertEqual(run.metrics.executedCases, 2)
-
-        let orchestrator = try store.loadOrchestratorEvents(runID: runID)
-        XCTAssertEqual(orchestrator.filter { $0.stage == .caseQueued }.count, 2)
-        XCTAssertEqual(orchestrator.last?.stage, .runCompleted)
-    }
-
-    func testExecuteBenchmarkRunLifecycleFinalizesFailedOnWorkerError() async throws {
-        let home = tempHome()
-        let env = ["HOME": home.path]
-        let runID = "stt-lifecycle-failed"
-        let runOptions = BenchmarkRunOptions.stt(BenchmarkSTTRunOptions(
-            common: BenchmarkRunCommonOptions(sourceCasesPath: "/tmp/manual.jsonl"),
-            sttMode: "stream"
-        ))
-        let recorder = try BenchmarkRunRecorder(
-            runID: runID,
-            kind: .stt,
-            options: runOptions,
-            initialMetrics: .stt(BenchmarkSTTRunMetrics(
-                counts: BenchmarkRunCounts(
-                    casesTotal: 1,
-                    casesSelected: 1,
-                    executedCases: 0,
-                    skippedCases: 0,
-                    failedCases: 0,
-                    cachedHits: 0
-                )
-            )),
+        let service = BenchmarkDiagnosticsService(
+            candidateStore: candidateStore,
+            benchmarkStore: benchmarkStore,
+            integrityStore: integrityStore,
             environment: env
         )
-        let selectedCases = [try makeBenchmarkCase(id: "case-failed")]
 
-        do {
-            _ = try await WhispCLI.executeBenchmarkRunLifecycle(
-                selectedCases: selectedCases,
-                recorder: recorder
-            ) {
-                throw DummyFailure.worker
-            } snapshotSummary: {
-                1
-            } makeMetrics: { executed in
-                .stt(BenchmarkSTTRunMetrics(
-                    counts: BenchmarkRunCounts(
-                        casesTotal: 1,
-                        casesSelected: 1,
-                        executedCases: executed,
-                        skippedCases: 0,
-                        failedCases: 1,
-                        cachedHits: 0
-                    )
-                ))
-            } makeRunOptions: { _ in
-                runOptions
-            }
-            XCTFail("worker error should be rethrown")
-        } catch DummyFailure.worker {
-            // expected
-        } catch {
-            XCTFail("unexpected error: \(error)")
-        }
-
-        let store = BenchmarkStore(environment: env)
-        let run = try XCTUnwrap(try store.loadRun(runID: runID))
-        XCTAssertEqual(run.status, .failed)
-        XCTAssertEqual(run.metrics.executedCases, 1)
-
-        let orchestrator = try store.loadOrchestratorEvents(runID: runID)
-        XCTAssertEqual(orchestrator.filter { $0.stage == .caseQueued }.count, 1)
-        XCTAssertEqual(orchestrator.last?.stage, .runFailed)
+        let snapshot = try service.loadStatusSnapshot()
+        XCTAssertEqual(snapshot.latestRuns.first { $0.task == BenchmarkKind.stt.rawValue }?.runID, "run-stt-only")
     }
 
-    func testWrapPairwiseLaneErrorKeepsDecodeCategory() {
-        let wrapped = WhispCLI.wrapPairwiseLaneError(
-            AppError.decode("json parse failed"),
-            failureLabel: "pairwise_judge_round2_failed"
+    func testLoadIntegritySnapshotIsReadOnlyAndRespectsExclusions() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let benchmarkStore = BenchmarkStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+        let datasetStore = BenchmarkDatasetStore()
+        let service = BenchmarkDiagnosticsService(
+            candidateStore: candidateStore,
+            benchmarkStore: benchmarkStore,
+            integrityStore: integrityStore,
+            datasetStore: datasetStore,
+            environment: env
         )
-        guard let appError = wrapped as? AppError else {
-            return XCTFail("wrapped error should be AppError")
-        }
-        guard case .decode(let message) = appError else {
-            return XCTFail("decode category should be preserved")
-        }
-        XCTAssertTrue(message.contains("pairwise_judge_round2_failed"))
-        XCTAssertTrue(message.contains("json parse failed"))
-    }
 
-    func testIsRetryablePairwiseErrorTreatsOnlyIOAndURLErrorAsRetryable() {
-        XCTAssertTrue(WhispCLI.isRetryablePairwiseError(AppError.io("temporary")))
-        XCTAssertTrue(WhispCLI.isRetryablePairwiseError(URLError(.timedOut)))
-        XCTAssertFalse(WhispCLI.isRetryablePairwiseError(AppError.decode("invalid json")))
-        XCTAssertFalse(WhispCLI.isRetryablePairwiseError(AppError.invalidArgument("bad input")))
+        let casesPath = home
+            .appendingPathComponent(".config", isDirectory: true)
+            .appendingPathComponent("whisp", isDirectory: true)
+            .appendingPathComponent("debug", isDirectory: true)
+            .appendingPathComponent("manual_test_cases.jsonl", isDirectory: false)
+            .path
+
+        let records = [
+            BenchmarkDatasetCaseRecord(
+                id: "case-1",
+                audioFile: "/tmp/not-found.wav",
+                sttText: "",
+                groundTruthText: ""
+            ),
+        ]
+        try datasetStore.saveCases(path: casesPath, records: records)
+
+        let scanCases = [BenchmarkIntegrityScanCase(
+            id: "case-1",
+            audioFile: "/tmp/not-found.wav",
+            sttText: "",
+            groundTruthText: "",
+            transcriptGold: nil,
+            transcriptSilver: nil
+        )]
+        var scanned = BenchmarkIntegrityScanner.scanIssues(
+            task: .stt,
+            cases: scanCases,
+            sourcePath: WhispPaths.normalizeForStorage(casesPath),
+            detectedAt: "2026-02-15T00:00:00Z"
+        )
+        XCTAssertEqual(scanned.count, 2)
+
+        scanned[0].excluded = true
+        try integrityStore.saveIssues(task: .stt, issues: [scanned[0]])
+
+        let snapshot = try service.loadIntegritySnapshot(task: .stt, casesPath: casesPath)
+        XCTAssertEqual(snapshot.task, BenchmarkKind.stt.rawValue)
+        XCTAssertEqual(snapshot.totalIssues, 1)
+        XCTAssertEqual(snapshot.severityCounts.reduce(0) { $0 + $1.count }, 1)
+
+        let persistedIssues = try integrityStore.loadIssues(task: .stt)
+        XCTAssertEqual(persistedIssues.count, 1)
     }
 }
