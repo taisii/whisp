@@ -212,6 +212,7 @@ final class AppCoordinator {
             }
             reservedArtifacts = debugArtifacts
             let logger = pipelineLogger(runID: runID, captureID: reservedCaptureID)
+            let targetSampleRate = STTPresetCatalog.targetInputSampleRate(for: config.sttPreset)
             let streamingSession = sttService.startStreamingSessionIfNeeded(
                 config: config,
                 runID: runID,
@@ -251,7 +252,7 @@ final class AppCoordinator {
             )
             currentRun = run
 
-            let recorder = try recordingService.startRecording(onChunk: { [weak streamingSession] chunk in
+            let recorder = try recordingService.startRecording(targetSampleRate: targetSampleRate, onChunk: { [weak streamingSession] chunk in
                 streamingSession?.submit(chunk: chunk)
             })
             self.recorder = recorder

@@ -56,19 +56,33 @@ private struct OpenAIRealtimeError: Decodable {
 
 private struct OpenAISessionUpdateEvent: Encodable {
     let type = "session.update"
-    let session: OpenAISessionConfig
+    let session: OpenAITranscriptionSessionConfig
 }
 
-private struct OpenAISessionConfig: Encodable {
-    let inputAudioFormat: String
-    let inputAudioTranscription: OpenAIInputAudioTranscription
+private struct OpenAITranscriptionSessionConfig: Encodable {
+    let type = "transcription"
+    let audio: OpenAIRealtimeAudioConfig
+}
+
+private struct OpenAIRealtimeAudioConfig: Encodable {
+    let input: OpenAIRealtimeAudioInputConfig
+}
+
+private struct OpenAIRealtimeAudioInputConfig: Encodable {
+    let format: OpenAIRealtimeAudioFormat
+    let transcription: OpenAIInputAudioTranscription
     let turnDetection: OpenAITurnDetection
 
     enum CodingKeys: String, CodingKey {
-        case inputAudioFormat = "input_audio_format"
-        case inputAudioTranscription = "input_audio_transcription"
+        case format
+        case transcription
         case turnDetection = "turn_detection"
     }
+}
+
+private struct OpenAIRealtimeAudioFormat: Encodable {
+    let type: String
+    let rate: Int
 }
 
 private struct OpenAIInputAudioTranscription: Encodable {
@@ -93,6 +107,8 @@ private struct OpenAIResponseCreateEvent: Encodable {
 }
 
 public actor OpenAIRealtimeStreamingClient {
+    public static let defaultTranscriptionModel = "gpt-4o-mini-transcribe"
+
     private let session: URLSession
 
     private var webSocketTask: URLSessionWebSocketTask?
@@ -123,16 +139,14 @@ public actor OpenAIRealtimeStreamingClient {
         apiKey: String,
         sampleRate: Int,
         language: String?,
-        sessionModel: String = "gpt-4o-mini-realtime-preview",
-        transcriptionModel: String = "gpt-4o-mini-transcribe"
+        sessionModel: String = OpenAIRealtimeStreamingClient.defaultTranscriptionModel,
+        transcriptionModel: String = OpenAIRealtimeStreamingClient.defaultTranscriptionModel
     ) async throws {
         guard !started else {
             return
         }
 
-        var components = URLComponents(string: "wss://api.openai.com/v1/realtime")
-        components?.queryItems = [URLQueryItem(name: "model", value: sessionModel)]
-        guard let url = components?.url else {
+        guard let url = Self.makeRealtimeURL(model: sessionModel) else {
             throw AppError.invalidArgument("OpenAI Realtime URL生成に失敗")
         }
 
@@ -164,12 +178,9 @@ public actor OpenAIRealtimeStreamingClient {
         // ごく短時間だけ待ってから初期イベントを送る。
         try? await Task.sleep(nanoseconds: 400_000_000)
 
-        let sessionUpdate = OpenAISessionUpdateEvent(
-            session: OpenAISessionConfig(
-                inputAudioFormat: "pcm16",
-                inputAudioTranscription: OpenAIInputAudioTranscription(model: transcriptionModel),
-                turnDetection: OpenAITurnDetection(type: "server_vad")
-            )
+        let sessionUpdate = Self.makeSessionUpdateEvent(
+            transcriptionModel: transcriptionModel,
+            sampleRate: self.sampleRate
         )
 
         do {
@@ -202,8 +213,43 @@ public actor OpenAIRealtimeStreamingClient {
             apiKey: apiKey,
             sampleRate: sampleRate,
             language: language,
-            sessionModel: "gpt-4o-mini-realtime-preview",
+            sessionModel: model,
             transcriptionModel: model
+        )
+    }
+
+    static func makeRealtimeURL(model: String) -> URL? {
+        var components = URLComponents(string: "wss://api.openai.com/v1/realtime")
+        components?.queryItems = [URLQueryItem(name: "model", value: model)]
+        return components?.url
+    }
+
+    private static func makeSessionUpdateEvent(
+        transcriptionModel: String,
+        sampleRate: Int
+    ) -> OpenAISessionUpdateEvent {
+        OpenAISessionUpdateEvent(
+            session: OpenAITranscriptionSessionConfig(
+                audio: OpenAIRealtimeAudioConfig(
+                    input: OpenAIRealtimeAudioInputConfig(
+                        format: OpenAIRealtimeAudioFormat(
+                            type: "audio/pcm",
+                            rate: sampleRate
+                        ),
+                        transcription: OpenAIInputAudioTranscription(model: transcriptionModel),
+                        turnDetection: OpenAITurnDetection(type: "server_vad")
+                    )
+                )
+            )
+        )
+    }
+
+    static func makeSessionUpdatePayload(
+        transcriptionModel: String,
+        sampleRate: Int
+    ) throws -> Data {
+        try JSONEncoder().encode(
+            makeSessionUpdateEvent(transcriptionModel: transcriptionModel, sampleRate: sampleRate)
         )
     }
 

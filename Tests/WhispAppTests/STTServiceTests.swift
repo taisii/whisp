@@ -100,8 +100,14 @@ final class STTServiceTests: XCTestCase {
         )))
         let service = DeepgramSTTService(
             restClient: FakeDeepgramRESTTranscriber(transcript: "unused", usage: nil),
-            streamingSessionBuilder: { apiKey, language, runID, logger in
-                recorder.build(apiKey: apiKey, language: language, runID: runID, logger: logger)
+            streamingSessionBuilder: { apiKey, language, runID, sampleRate, logger in
+                recorder.build(
+                    apiKey: apiKey,
+                    language: language,
+                    runID: runID,
+                    sampleRate: sampleRate,
+                    logger: logger
+                )
             }
         )
 
@@ -117,6 +123,7 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(recorder.lastAPIKey, "dg")
         XCTAssertEqual(recorder.lastLanguage, "ja")
         XCTAssertEqual(recorder.lastRunID, "run-builder")
+        XCTAssertEqual(recorder.lastSampleRate, 16_000)
     }
 
     func testDeepgramStartStreamingSessionReturnsNilForDirectAudioModel() {
@@ -130,8 +137,14 @@ final class STTServiceTests: XCTestCase {
 
         let service = DeepgramSTTService(
             restClient: FakeDeepgramRESTTranscriber(transcript: "unused", usage: nil),
-            streamingSessionBuilder: { apiKey, language, runID, logger in
-                recorder.build(apiKey: apiKey, language: language, runID: runID, logger: logger)
+            streamingSessionBuilder: { apiKey, language, runID, sampleRate, logger in
+                recorder.build(
+                    apiKey: apiKey,
+                    language: language,
+                    runID: runID,
+                    sampleRate: sampleRate,
+                    logger: logger
+                )
             }
         )
 
@@ -145,6 +158,37 @@ final class STTServiceTests: XCTestCase {
 
         XCTAssertNil(session)
         XCTAssertEqual(recorder.callCount, 0)
+    }
+
+    func testWhisperStartStreamingSessionUsesPresetSampleRatePolicy() {
+        let recorder = StreamingBuilderRecorder(sessionToReturn: FakeStreamingSession(result: STTStreamingFinalizeResult(
+            transcript: "stream",
+            usage: nil,
+            drainStats: STTStreamingDrainStats(submittedChunks: 0, submittedBytes: 0, droppedChunks: 0)
+        )))
+        let service = WhisperSTTService(
+            client: FakeWhisperRESTTranscriber(transcript: "unused", usage: nil),
+            streamingSessionBuilder: { apiKey, language, runID, sampleRate, logger in
+                recorder.build(
+                    apiKey: apiKey,
+                    language: language,
+                    runID: runID,
+                    sampleRate: sampleRate,
+                    logger: logger
+                )
+            }
+        )
+
+        _ = service.startStreamingSessionIfNeeded(
+            config: config(sttPreset: .chatgptWhisperStream),
+            runID: "run-whisper-builder",
+            language: "ja",
+            logger: { _, _ in },
+            onSegmentCommitted: nil
+        )
+
+        XCTAssertEqual(recorder.callCount, 1)
+        XCTAssertEqual(recorder.lastSampleRate, 24_000)
     }
 
     func testProviderSwitchingUsesConfiguredProvider() async throws {
@@ -328,6 +372,89 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(appleCalls, 1)
     }
 
+    func testAppleSpeechServiceRoutesSpeechTranscriberRESTToDedicatedClient() async throws {
+        let recognizer = FakeAppleSpeechTranscriber(transcript: "recognizer", usage: nil)
+        let speech = FakeAppleSpeechTranscriber(transcript: "speech", usage: nil)
+        let dictation = FakeAppleSpeechTranscriber(transcript: "dictation", usage: nil)
+        let service = AppleSpeechSTTService(
+            recognizerClient: recognizer,
+            speechTranscriberClient: speech,
+            dictationTranscriberClient: dictation
+        )
+
+        let result = try await service.transcribe(
+            config: config(sttPreset: .appleSpeechTranscriberRest),
+            recording: recording,
+            language: "ja",
+            runID: "run-apple-speech-transcriber-rest",
+            streamingSession: nil,
+            logger: { _, _ in }
+        )
+
+        XCTAssertEqual(result.transcript, "speech")
+        XCTAssertEqual(result.trace.attempts[0].source, "apple_speech_transcriber_rest")
+        let recognizerCalls = await recognizer.callCount()
+        let speechCalls = await speech.callCount()
+        let dictationCalls = await dictation.callCount()
+        XCTAssertEqual(recognizerCalls, 0)
+        XCTAssertEqual(speechCalls, 1)
+        XCTAssertEqual(dictationCalls, 0)
+    }
+
+    func testAppleSpeechServiceRoutesDictationRESTToDedicatedClient() async throws {
+        let recognizer = FakeAppleSpeechTranscriber(transcript: "recognizer", usage: nil)
+        let speech = FakeAppleSpeechTranscriber(transcript: "speech", usage: nil)
+        let dictation = FakeAppleSpeechTranscriber(transcript: "dictation", usage: nil)
+        let service = AppleSpeechSTTService(
+            recognizerClient: recognizer,
+            speechTranscriberClient: speech,
+            dictationTranscriberClient: dictation
+        )
+
+        let result = try await service.transcribe(
+            config: config(sttPreset: .appleDictationTranscriberRest),
+            recording: recording,
+            language: "ja",
+            runID: "run-apple-dictation-rest",
+            streamingSession: nil,
+            logger: { _, _ in }
+        )
+
+        XCTAssertEqual(result.transcript, "dictation")
+        XCTAssertEqual(result.trace.attempts[0].source, "apple_dictation_transcriber_rest")
+        let recognizerCalls = await recognizer.callCount()
+        let speechCalls = await speech.callCount()
+        let dictationCalls = await dictation.callCount()
+        XCTAssertEqual(recognizerCalls, 0)
+        XCTAssertEqual(speechCalls, 0)
+        XCTAssertEqual(dictationCalls, 1)
+    }
+
+    func testAppleSpeechServiceUsesModelSpecificSourceForDictationStreaming() async throws {
+        let service = AppleSpeechSTTService(
+            recognizerClient: FakeAppleSpeechTranscriber(transcript: "recognizer", usage: nil),
+            speechTranscriberClient: FakeAppleSpeechTranscriber(transcript: "speech", usage: nil),
+            dictationTranscriberClient: FakeAppleSpeechTranscriber(transcript: "dictation", usage: nil)
+        )
+        let session = FakeStreamingSession(result: STTStreamingFinalizeResult(
+            transcript: "streamed",
+            usage: nil,
+            drainStats: STTStreamingDrainStats(submittedChunks: 1, submittedBytes: 64, droppedChunks: 0)
+        ))
+
+        let result = try await service.transcribe(
+            config: config(sttPreset: .appleDictationTranscriberStream),
+            recording: recording,
+            language: "ja",
+            runID: "run-apple-dictation-stream",
+            streamingSession: session,
+            logger: { _, _ in }
+        )
+
+        XCTAssertEqual(result.transcript, "streamed")
+        XCTAssertEqual(result.trace.attempts[0].source, "apple_dictation_transcriber_stream")
+    }
+
     func testAppleSpeechServiceUsesStreamingFinalizeWhenSessionSucceeds() async throws {
         let apple = FakeAppleSpeechTranscriber(transcript: "apple-rest-unused", usage: nil)
         let service = AppleSpeechSTTService(client: apple)
@@ -358,10 +485,8 @@ final class STTServiceTests: XCTestCase {
 
     func testAppleSpeechServiceStreamingReturnsCommittedSegments() async throws {
         let recognizer = FakeAppleSpeechTranscriber(transcript: "recognizer-rest", usage: nil)
-        let analyzer = FakeAppleSpeechTranscriber(transcript: "analyzer-rest", usage: nil)
         let service = AppleSpeechSTTService(
-            recognizerClient: recognizer,
-            analyzerClient: analyzer
+            recognizerClient: recognizer
         )
 
         let recognizerSession = FakeStreamingSession(result: STTStreamingFinalizeResult(
@@ -387,28 +512,6 @@ final class STTServiceTests: XCTestCase {
         )
         XCTAssertEqual(recognizerResult.segments.count, 2)
         XCTAssertEqual(recognizerResult.vadIntervals.count, 2)
-
-        let analyzerSession = FakeStreamingSession(result: STTStreamingFinalizeResult(
-            transcript: "three",
-            usage: nil,
-            drainStats: STTStreamingDrainStats(submittedChunks: 1, submittedBytes: 128, droppedChunks: 0),
-            segments: [
-                STTCommittedSegment(index: 0, startMs: 0, endMs: 400, text: "three", reason: "stop"),
-            ],
-            vadIntervals: [
-                VADInterval(startMs: 0, endMs: 400, kind: "speech"),
-            ]
-        ))
-        let analyzerResult = try await service.transcribe(
-            config: config(sttPreset: .appleSpeechAnalyzerStream),
-            recording: recording,
-            language: nil,
-            runID: "run-apple-analyzer-stream-segments",
-            streamingSession: analyzerSession,
-            logger: { _, _ in }
-        )
-        XCTAssertEqual(analyzerResult.segments.count, 1)
-        XCTAssertEqual(analyzerResult.segments.first?.text, "three")
     }
 
     func testAppleSpeechSegmentingSessionSplitsOnSilence() async throws {
@@ -730,6 +833,7 @@ private final class StreamingBuilderRecorder: @unchecked Sendable {
     private(set) var lastAPIKey: String?
     private(set) var lastLanguage: String?
     private(set) var lastRunID: String?
+    private(set) var lastSampleRate: Int?
     private let sessionToReturn: (any STTStreamingSession)?
 
     init(sessionToReturn: (any STTStreamingSession)?) {
@@ -740,6 +844,7 @@ private final class StreamingBuilderRecorder: @unchecked Sendable {
         apiKey: String,
         language: String?,
         runID: String,
+        sampleRate: Int,
         logger _: @escaping PipelineEventLogger
     ) -> (any STTStreamingSession)? {
         lock.lock()
@@ -747,6 +852,7 @@ private final class StreamingBuilderRecorder: @unchecked Sendable {
         lastAPIKey = apiKey
         lastLanguage = language
         lastRunID = runID
+        lastSampleRate = sampleRate
         lock.unlock()
         return sessionToReturn
     }

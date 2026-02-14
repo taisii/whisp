@@ -116,6 +116,7 @@ typealias DeepgramStreamingSessionBuilder = @Sendable (
     _ apiKey: String,
     _ language: String?,
     _ runID: String,
+    _ sampleRate: Int,
     _ logger: @escaping PipelineEventLogger
 ) -> (any STTStreamingSession)?
 
@@ -123,6 +124,7 @@ typealias OpenAIStreamingSessionBuilder = @Sendable (
     _ apiKey: String,
     _ language: String?,
     _ runID: String,
+    _ sampleRate: Int,
     _ logger: @escaping PipelineEventLogger
 ) -> (any STTStreamingSession)?
 
@@ -220,14 +222,16 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
         guard case let .apiKey(deepgramKey) = (try? APIKeyResolver.sttCredential(config: config, preset: config.sttPreset)) else {
             return nil
         }
+        let targetSampleRate = STTPresetCatalog.targetInputSampleRate(for: config.sttPreset)
 
-        return streamingSessionBuilder(deepgramKey, language, runID, logger)
+        return streamingSessionBuilder(deepgramKey, language, runID, targetSampleRate, logger)
     }
 
     private static func defaultStreamingSessionBuilder(
         apiKey: String,
         language: String?,
         runID: String,
+        sampleRate: Int,
         logger: @escaping PipelineEventLogger
     ) -> (any STTStreamingSession)? {
         let stream = DeepgramStreamingClient()
@@ -236,11 +240,11 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
             do {
                 try await stream.start(
                     apiKey: apiKey,
-                    sampleRate: AudioRecorder.targetSampleRate,
+                    sampleRate: sampleRate,
                     language: language
                 )
                 logger("stt_stream_connected", [
-                    "sample_rate": String(AudioRecorder.targetSampleRate),
+                    "sample_rate": String(sampleRate),
                     "language": language ?? "auto",
                 ])
             } catch {
@@ -374,13 +378,15 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
         guard case let .apiKey(openAIKey) = (try? APIKeyResolver.sttCredential(config: config, preset: config.sttPreset)) else {
             return nil
         }
-        return streamingSessionBuilder(openAIKey, language, runID, logger)
+        let targetSampleRate = STTPresetCatalog.targetInputSampleRate(for: config.sttPreset)
+        return streamingSessionBuilder(openAIKey, language, runID, targetSampleRate, logger)
     }
 
     private static func defaultStreamingSessionBuilder(
         apiKey: String,
         language: String?,
         runID: String,
+        sampleRate: Int,
         logger: @escaping PipelineEventLogger
     ) -> (any STTStreamingSession)? {
         let stream = OpenAIRealtimeStreamingClient()
@@ -389,11 +395,11 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
             do {
                 try await stream.start(
                     apiKey: apiKey,
-                    sampleRate: AudioRecorder.targetSampleRate,
+                    sampleRate: sampleRate,
                     language: language
                 )
                 logger("stt_stream_connected", [
-                    "sample_rate": String(AudioRecorder.targetSampleRate),
+                    "sample_rate": String(sampleRate),
                     "language": language ?? "auto",
                     "provider": STTProvider.whisper.rawValue,
                 ])
@@ -508,20 +514,24 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
 
 final class AppleSpeechSTTService: STTService, @unchecked Sendable {
     private let recognizerClient: any AppleSpeechTranscriber
-    private let analyzerClient: any AppleSpeechTranscriber
+    private let speechTranscriberClient: any AppleSpeechTranscriber
+    private let dictationTranscriberClient: any AppleSpeechTranscriber
 
     init(
         client: (any AppleSpeechTranscriber)? = nil,
         recognizerClient: (any AppleSpeechTranscriber)? = nil,
-        analyzerClient: (any AppleSpeechTranscriber)? = nil
+        speechTranscriberClient: (any AppleSpeechTranscriber)? = nil,
+        dictationTranscriberClient: (any AppleSpeechTranscriber)? = nil
     ) {
         if let client {
             self.recognizerClient = client
-            self.analyzerClient = client
+            self.speechTranscriberClient = client
+            self.dictationTranscriberClient = client
             return
         }
         self.recognizerClient = recognizerClient ?? AppleSpeechRecognizerClient()
-        self.analyzerClient = analyzerClient ?? AppleSpeechAnalyzerClient()
+        self.speechTranscriberClient = speechTranscriberClient ?? AppleSpeechTranscriberClient()
+        self.dictationTranscriberClient = dictationTranscriberClient ?? AppleDictationTranscriberClient()
     }
 
     func startStreamingSessionIfNeeded(
@@ -534,10 +544,11 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         guard !config.llmModel.usesDirectAudio else {
             return nil
         }
+        let targetSampleRate = STTPresetCatalog.targetInputSampleRate(for: config.sttPreset)
         let client = transcriber(for: config.sttPreset)
         return AppleSpeechSegmentingSession(
             transcriber: client,
-            sampleRate: AudioRecorder.targetSampleRate,
+            sampleRate: targetSampleRate,
             language: language,
             segmentation: config.sttSegmentation,
             logger: logger,
@@ -554,13 +565,7 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         streamingSession: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
-        let sourcePrefix: String
-        switch config.sttPreset {
-        case .appleSpeechAnalyzerStream, .appleSpeechAnalyzerRest:
-            sourcePrefix = "apple_speech_analyzer"
-        default:
-            sourcePrefix = "apple_speech_recognizer"
-        }
+        let sourcePrefix = sourcePrefix(for: config.sttPreset)
 
         if let streamingSession {
             let finalizeRequestedAt = Date()
@@ -654,11 +659,26 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
     }
 
     private func transcriber(for preset: STTPresetID) -> any AppleSpeechTranscriber {
-        switch preset {
-        case .appleSpeechAnalyzerStream, .appleSpeechAnalyzerRest:
-            return analyzerClient
-        default:
+        let spec = STTPresetCatalog.spec(for: preset)
+        switch spec.appleModel {
+        case .speechTranscriber:
+            return speechTranscriberClient
+        case .dictationTranscriber:
+            return dictationTranscriberClient
+        case .recognizer, .none:
             return recognizerClient
+        }
+    }
+
+    private func sourcePrefix(for preset: STTPresetID) -> String {
+        let spec = STTPresetCatalog.spec(for: preset)
+        switch spec.appleModel {
+        case .speechTranscriber:
+            return "apple_speech_transcriber"
+        case .dictationTranscriber:
+            return "apple_dictation_transcriber"
+        case .recognizer, .none:
+            return "apple_speech_recognizer"
         }
     }
 }
@@ -714,6 +734,7 @@ private final class AppleSpeechLiveSession: STTStreamingSession, @unchecked Send
     private let logger: PipelineEventLogger
     private let runID: String
     private let language: String?
+    private let sampleRate: Int
     private let startLock = NSLock()
     private var startTask: Task<Void, Error>?
 
@@ -721,12 +742,14 @@ private final class AppleSpeechLiveSession: STTStreamingSession, @unchecked Send
         stream: any AppleSpeechTranscriber,
         logger: @escaping PipelineEventLogger,
         runID: String,
-        language: String?
+        language: String?,
+        sampleRate: Int
     ) {
         self.stream = stream
         self.logger = logger
         self.runID = runID
         self.language = language
+        self.sampleRate = sampleRate
     }
 
     func submit(chunk: Data) {
@@ -797,14 +820,15 @@ private final class AppleSpeechLiveSession: STTStreamingSession, @unchecked Send
         }
         let stream = self.stream
         let language = self.language
+        let sampleRate = self.sampleRate
         let logger = self.logger
         let created = Task {
             try await stream.startStreaming(
-                sampleRate: AudioRecorder.targetSampleRate,
+                sampleRate: sampleRate,
                 language: language
             )
             logger("stt_stream_connected", [
-                "sample_rate": String(AudioRecorder.targetSampleRate),
+                "sample_rate": String(sampleRate),
                 "language": language ?? "auto",
                 "provider": STTProvider.appleSpeech.rawValue,
             ])

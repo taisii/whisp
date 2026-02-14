@@ -16,19 +16,21 @@ private final class ConversionState: @unchecked Sendable {
 }
 
 final class AudioRecorder {
-    static let targetSampleRate = 16_000
-
     private let engine = AVAudioEngine()
     private let lock = NSLock()
+    private let targetSampleRate: Int
     private let onChunk: (Data) -> Void
 
     private var pcmData = Data()
-    private(set) var sampleRate: Int = AudioRecorder.targetSampleRate
+    private(set) var sampleRate: Int
     private var isRecording = false
     private var converter: AVAudioConverter?
     private var outputFormat: AVAudioFormat?
 
-    init(onChunk: @escaping (Data) -> Void = { _ in }) {
+    init(targetSampleRate: Int, onChunk: @escaping (Data) -> Void = { _ in }) {
+        let normalizedRate = max(1, targetSampleRate)
+        self.targetSampleRate = normalizedRate
+        sampleRate = normalizedRate
         self.onChunk = onChunk
     }
 
@@ -41,7 +43,7 @@ final class AudioRecorder {
         let inputFormat = inputNode.inputFormat(forBus: 0)
         guard let outputFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
-            sampleRate: Double(Self.targetSampleRate),
+            sampleRate: Double(targetSampleRate),
             channels: 1,
             interleaved: false
         ) else {
@@ -53,7 +55,7 @@ final class AudioRecorder {
 
         self.outputFormat = outputFormat
         self.converter = converter
-        sampleRate = Self.targetSampleRate
+        sampleRate = targetSampleRate
 
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
             self?.append(buffer: buffer)
