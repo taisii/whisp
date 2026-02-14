@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
-  echo "usage: $0 <stt|generation|vision> [jsonl_path] [--result-root DIR] [extra args...]"
+  echo "usage: $0 <stt|vision> [jsonl_path] [--result-root DIR] [extra args...]"
   exit 1
 fi
 
@@ -16,13 +16,6 @@ case "$kind" in
     summary_name="stt_summary.json"
     rows_name="stt_case_rows.jsonl"
     label="stt-case"
-    ;;
-  generation)
-    bench_flag="--benchmark-generation-cases"
-    default_prefix="whisp-generationbench"
-    summary_name="generation_summary.json"
-    rows_name="generation_case_rows.jsonl"
-    label="generation-case"
     ;;
   vision)
     bench_flag="--benchmark-vision-cases"

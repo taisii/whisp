@@ -29,7 +29,7 @@ Whisp is now implemented as a native macOS app in Swift.
 - `docs/ARCHITECTURE.md`: current architecture and debug data model
 - `scripts/build_macos_app.sh`: local `.app` bundle builder
 - `scripts/reset_permissions.sh`: TCC reset / privacy settings helper
-- `scripts/benchmark_cases.sh`: benchmark entrypoint (`stt|generation|vision`)
+- `scripts/benchmark_cases.sh`: benchmark entrypoint (`stt|vision`)
 
 ## Prerequisites
 
@@ -157,9 +157,9 @@ scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --r
 - intent評価は `intent_gold` / `intent_silver`（または `labels.intent_gold` / `labels.intent_silver`）を参照します。
 - 生成品質のLLM評価は `--llm-eval` / `--no-llm-eval` / `--llm-eval-model` で制御できます（デフォルトOFF）。
 
-### Component benchmarks (1:Vision / 2:STT / 3:Generation)
+### Component benchmarks (1:Vision / 2:STT)
 
-同じ `manual_test_cases.jsonl` を使って、3つの能力を分離して評価できます。
+同じ `manual_test_cases.jsonl` を使って、2つの能力を分離して評価できます。
 
 ```bash
 # 1) 画像 -> OCRコンテキスト抽出
@@ -167,10 +167,6 @@ scripts/benchmark_cases.sh vision ~/.config/whisp/debug/manual_test_cases.jsonl
 
 # 2) 音声 -> transcript（STT）
 scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --stt-preset deepgram_stream --min-audio-seconds 2.0
-
-# 3) stt_text + context -> 最終テキスト（生成）
-scripts/benchmark_cases.sh generation ~/.config/whisp/debug/manual_test_cases.jsonl
-
 ```
 
 各ベンチは `--result-root` で保存先を指定できます。保存物:
@@ -181,19 +177,10 @@ scripts/benchmark_cases.sh generation ~/.config/whisp/debug/manual_test_cases.js
 集計の基本方針:
 - ベンチマーク画面は性能中心表示（品質 + レイテンシ分布）で、件数系は主表示しません。
 - レイテンシは平均値だけでなく `P50/P95/P99` を必須指標として扱います。
-- `generation` では `--llm-eval` で意図保持と幻覚率を追加評価できます。
 
 キャッシュ:
-- 1/2/3 は `~/.config/whisp/benchmark_cache/` を参照し、同一入力・同一設定の結果を再利用します。
+- 1/2 は `~/.config/whisp/benchmark_cache/` を参照し、同一入力・同一設定の結果を再利用します。
 - キャッシュ無効化は `--no-cache`。
-
-一括で回す場合:
-
-```bash
-scripts/run_component_eval_loop.sh ~/.config/whisp/debug/manual_test_cases.jsonl
-```
-
-`run_component_eval_loop.sh` は `1_vision/2_stt/3_generation` を同一 `result_root` に出力し、`overview.txt` を生成します。
 
 ### Candidate 比較コマンド（新UI対応）
 
@@ -210,11 +197,13 @@ swift run whisp --benchmark-compare \
   --candidate-id stt-deepgram-stream-default \
   --candidate-id stt-apple-speech-recognizer-stream-default
 
-# Generation比較（強制再実行）
+# Generation比較（A/B pairwise, 強制再実行）
 swift run whisp --benchmark-compare \
   --task generation \
   --cases ~/.config/whisp/debug/manual_test_cases.jsonl \
   --candidate-id generation-gemini-2.5-flash-lite-default \
+  --candidate-id generation-gpt-5-nano-default \
+  --judge-model gpt-4o-mini \
   --force
 
 # ケース不備スキャン
@@ -259,24 +248,6 @@ scripts/benchmark_full_pipeline.sh Tests/Fixtures/benchmark_ja_10s.wav 3 discard
 - `dominant_stage_after_stop` (`stt_after_stop` / `post` / `output`)
 
 この結果を基準に、改善優先度を決めます。
-
-### End-to-end eval loop (components + stt + full)
-
-評価ループをまとめて回す場合:
-
-```bash
-# 1) component benchmarks (vision / stt / generation)
-# 2) STT latency
-# 3) full pipeline
-# 4) events.jsonl解析
-scripts/run_eval_loop.sh ~/.config/whisp/debug/manual_test_cases.jsonl Tests/Fixtures/benchmark_ja_10s.wav
-```
-
-出力:
-- `overview.txt`: 主要指標の要約
-- `components/`: component別のケース評価ログと集計JSON
-- `stt/`: STT latencyログ
-- `full/`: full pipelineログ
 
 プロンプト比較:
 

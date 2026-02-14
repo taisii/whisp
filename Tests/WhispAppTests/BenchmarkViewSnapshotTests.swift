@@ -544,8 +544,7 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
 
         let tabs: [(BenchmarkDashboardTab, String)] = [
             (.stt, "benchmark_tab_stt.png"),
-            (.generationSingle, "benchmark_tab_generation_single.png"),
-            (.generationBattle, "benchmark_tab_generation_battle.png"),
+            (.generation, "benchmark_tab_generation.png"),
             (.integrity, "benchmark_tab_integrity.png"),
         ]
 
@@ -559,7 +558,7 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
         }
     }
 
-    func testRenderBenchmarkGenerationBattlePairwiseModal() throws {
+    func testRenderBenchmarkGenerationPairwiseModal() throws {
         let artifactDir = try makeArtifactDirectory()
         let home = try makeTempHome()
         let env = ["HOME": home.path]
@@ -696,7 +695,7 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
-        viewModel.selectedTab = .generationBattle
+        viewModel.selectedTab = .generation
         viewModel.selectedTask = .generation
         viewModel.refresh()
         viewModel.setGenerationPairCandidateA(generationA.id)

@@ -1,10 +1,10 @@
 import SwiftUI
 import WhispCore
 
-struct GenerationBattleBenchmarkView: View {
+struct GenerationBenchmarkView: View {
     @ObservedObject var viewModel: BenchmarkViewModel
 
     var body: some View {
-        BenchmarkComparisonView(viewModel: viewModel, mode: .generationBattle)
+        BenchmarkComparisonView(viewModel: viewModel, mode: .generation)
     }
 }

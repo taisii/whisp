@@ -31,15 +31,7 @@ extension WhispCLI {
                 candidateStore: candidateStore,
                 benchmarkStore: benchmarkStore
             )
-        case .generationSingle:
-            try await runGenerationSingleBenchmarkCompare(
-                options: options,
-                datasetPath: datasetPath,
-                datasetHash: datasetHash,
-                candidateStore: candidateStore,
-                benchmarkStore: benchmarkStore
-            )
-        case .generationBattle:
+        case .generation:
             try await runGenerationPairwiseBenchmarkCompare(
                 options: options,
                 datasetPath: datasetPath,
@@ -48,59 +40,6 @@ extension WhispCLI {
                 benchmarkStore: benchmarkStore
             )
         }
-    }
-
-    private static func runGenerationSingleBenchmarkCompare(
-        options: BenchmarkCompareOptions,
-        datasetPath: String,
-        datasetHash: String,
-        candidateStore: BenchmarkCandidateStore,
-        benchmarkStore: BenchmarkStore
-    ) async throws {
-        guard options.candidateIDs.count == 1 else {
-            throw AppError.invalidArgument("generation-single は --candidate-id を1件指定してください")
-        }
-        let candidateID = options.candidateIDs[0]
-        guard let candidate = try candidateStore.loadCandidate(id: candidateID) else {
-            throw AppError.invalidArgument("candidate が見つかりません: \(candidateID)")
-        }
-        guard candidate.task == .generation else {
-            throw AppError.invalidArgument("candidate \(candidate.id) は generation ではありません")
-        }
-
-        let runtimeHash = buildRuntimeOptionsHash(candidate: candidate)
-        let key = BenchmarkKey(
-            task: .generation,
-            datasetPath: datasetPath,
-            datasetHash: datasetHash,
-            candidateID: candidate.id,
-            runtimeOptionsHash: runtimeHash,
-            evaluatorVersion: "single-v1",
-            codeVersion: ProcessInfo.processInfo.environment["WHISP_CODE_VERSION"] ?? "dev"
-        )
-
-        print("candidate_id: \(candidate.id)")
-        print("candidate_model: \(candidate.model)")
-        print("runtime_hash: \(runtimeHash)")
-
-        if !options.force,
-           let existing = try benchmarkStore.findLatestCompletedRun(matching: key)
-        {
-            print("candidate: \(candidate.id)\tstatus: skipped_existing\trun_id: \(existing.id)")
-            return
-        }
-
-        let runOptions = try makeGenerationSingleCompareOptions(
-            candidate: candidate,
-            datasetPath: datasetPath,
-            datasetHash: datasetHash,
-            runtimeHash: runtimeHash,
-            benchmarkKey: key,
-            benchmarkWorkers: options.benchmarkWorkers
-        )
-        print("candidate: \(candidate.id)\tstatus: running")
-        try await runGenerationCaseBenchmark(options: runOptions)
-        print("candidate: \(candidate.id)\tstatus: done")
     }
 
     static func runBenchmarkListCandidates() throws {
@@ -255,48 +194,6 @@ extension WhispCLI {
         print("pair: \(candidateA.id) vs \(candidateB.id)\tstatus: running")
         try await runGenerationPairwiseCompare(options: generationOptions)
         print("pair: \(candidateA.id) vs \(candidateB.id)\tstatus: done")
-    }
-
-    private static func makeGenerationSingleCompareOptions(
-        candidate: BenchmarkCandidate,
-        datasetPath: String,
-        datasetHash: String,
-        runtimeHash: String,
-        benchmarkKey: BenchmarkKey,
-        benchmarkWorkers: Int?
-    ) throws -> GenerationBenchmarkOptions {
-        let promptTemplate = (candidate.generationPromptTemplate ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if promptTemplate.isEmpty {
-            throw AppError.invalidArgument("candidate \(candidate.id): generation_prompt_template が未設定です")
-        }
-        let parsedModel = LLMModelCatalog.resolveRegistered(rawValue: candidate.model)
-        if parsedModel == nil {
-            throw AppError.invalidArgument("candidate \(candidate.id): generation model が不正です: \(candidate.model)")
-        }
-        let limit = try parseCandidateOptionalInt(candidate.options, key: "limit")
-        let requireContext = try parseCandidateBool(candidate.options, key: "require_context", defaultValue: false)
-        let useCache = try parseCandidateBool(candidate.options, key: "use_cache", defaultValue: true)
-
-        return GenerationBenchmarkOptions(
-            jsonlPath: datasetPath,
-            benchmarkWorkers: benchmarkWorkers,
-            limit: limit,
-            requireContext: requireContext,
-            useCache: useCache,
-            llmEvalEnabled: false,
-            llmEvalModel: nil,
-            candidateID: candidate.id,
-            datasetHash: datasetHash,
-            runtimeOptionsHash: runtimeHash,
-            evaluatorVersion: benchmarkKey.evaluatorVersion,
-            codeVersion: benchmarkKey.codeVersion,
-            benchmarkKey: benchmarkKey,
-            modelOverride: parsedModel,
-            promptTemplateOverride: promptTemplate,
-            promptName: candidate.promptName,
-            promptHash: candidate.generationPromptHash ?? promptTemplateHash(promptTemplate),
-            candidateSnapshot: makeCandidateSnapshot(candidate)
-        )
     }
 
     private static func makeSTTCompareOptions(

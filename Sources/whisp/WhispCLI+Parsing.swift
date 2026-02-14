@@ -271,79 +271,6 @@ extension WhispCLI {
         )
     }
 
-    static func parseGenerationBenchmarkOptions(args: [String]) throws -> GenerationBenchmarkOptions {
-        var jsonlPath = defaultManualCasesPath()
-        var benchmarkWorkers: Int?
-        var limit: Int?
-        var requireContext = false
-        var useCache = true
-        var llmEvalEnabled = false
-        var llmEvalModel: LLMModel?
-        var parser = ArgParser(args: args, startIndex: 1)
-
-        while let item = parser.next() {
-            if item == "--limit" {
-                limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
-                continue
-            }
-            if item == "--require-context" {
-                requireContext = true
-                continue
-            }
-            if item == "--benchmark-workers" {
-                benchmarkWorkers = try parsePositiveInt(try parser.value(for: "--benchmark-workers"), option: "--benchmark-workers")
-                continue
-            }
-            if item == "--no-cache" {
-                useCache = false
-                continue
-            }
-            if item == "--llm-eval" {
-                llmEvalEnabled = true
-                continue
-            }
-            if item == "--no-llm-eval" {
-                llmEvalEnabled = false
-                continue
-            }
-            if item == "--llm-eval-model" {
-                let value = try parser.value(for: "--llm-eval-model")
-                guard let parsed = LLMModelCatalog.resolveRegistered(rawValue: value),
-                      LLMModelCatalog.isSelectable(parsed, for: .cliLLMEval)
-                else {
-                    throw AppError.invalidArgument("--llm-eval-model は有効なモデルIDを指定してください")
-                }
-                llmEvalModel = parsed
-                continue
-            }
-            if item.hasPrefix("--") {
-                throw AppError.invalidArgument("不明な引数: \(item)")
-            }
-            jsonlPath = item
-        }
-
-        return GenerationBenchmarkOptions(
-            jsonlPath: jsonlPath,
-            benchmarkWorkers: benchmarkWorkers,
-            limit: limit,
-            requireContext: requireContext,
-            useCache: useCache,
-            llmEvalEnabled: llmEvalEnabled,
-            llmEvalModel: llmEvalModel,
-            candidateID: nil,
-            datasetHash: nil,
-            runtimeOptionsHash: nil,
-            evaluatorVersion: nil,
-            codeVersion: nil,
-            benchmarkKey: nil,
-            modelOverride: nil,
-            promptTemplateOverride: nil,
-            promptName: nil,
-            promptHash: nil,
-            candidateSnapshot: nil
-        )
-    }
-
     static func parseBenchmarkCompareOptions(args: [String]) throws -> BenchmarkCompareOptions {
         var task: BenchmarkCompareFlow?
         var casesPath = defaultManualCasesPath()
@@ -389,7 +316,7 @@ extension WhispCLI {
         }
 
         guard let task else {
-            throw AppError.invalidArgument("--task が必要です (stt|generation-single|generation-battle)")
+            throw AppError.invalidArgument("--task が必要です (stt|generation)")
         }
         switch task {
         case .stt:
@@ -397,18 +324,11 @@ extension WhispCLI {
                 throw AppError.invalidArgument("--candidate-id が1件以上必要です")
             }
             if judgeModel != nil {
-                throw AppError.invalidArgument("--judge-model は generation-battle のみ利用できます")
+                throw AppError.invalidArgument("--judge-model は generation のみ利用できます")
             }
-        case .generationSingle:
-            guard candidateIDs.count == 1 else {
-                throw AppError.invalidArgument("generation-single は --candidate-id を1件指定してください")
-            }
-            if judgeModel != nil {
-                throw AppError.invalidArgument("--judge-model は generation-battle のみ利用できます")
-            }
-        case .generationBattle:
+        case .generation:
             guard candidateIDs.count == 2 else {
-                throw AppError.invalidArgument("generation-battle は --candidate-id を2件指定してください")
+                throw AppError.invalidArgument("generation は --candidate-id を2件指定してください")
             }
             if candidateIDs[0] == candidateIDs[1] {
                 throw AppError.invalidArgument("candidate A/B は異なる ID を指定してください")
@@ -460,7 +380,7 @@ extension WhispCLI {
     private static func parseCompareTask(_ raw: String) throws -> BenchmarkCompareFlow {
         guard let task = BenchmarkCompareFlow(rawValue: raw)
         else {
-            throw AppError.invalidArgument("--task は stt|generation-single|generation-battle を指定してください")
+            throw AppError.invalidArgument("--task は stt|generation を指定してください")
         }
         return task
     }

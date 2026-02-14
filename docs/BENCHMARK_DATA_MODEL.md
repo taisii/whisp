@@ -26,8 +26,6 @@
                 ├── events.jsonl
                 ├── io/
                 │   ├── input_stt.txt
-                │   ├── prompt_generation.txt                 (single candidate generation)
-                │   ├── output_generation.txt                 (single candidate generation)
                 │   ├── prompt_generation_a.txt               (pairwise generation)
                 │   ├── output_generation_a.txt               (pairwise generation)
                 │   ├── prompt_generation_b.txt               (pairwise generation)

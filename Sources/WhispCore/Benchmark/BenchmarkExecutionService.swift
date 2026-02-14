@@ -2,17 +2,14 @@ import Foundation
 
 public enum BenchmarkExecutionFlow: String, Codable, CaseIterable, Sendable {
     case stt
-    case generationSingle = "generation-single"
-    case generationBattle = "generation-battle"
+    case generation
 
     var internalFlow: BenchmarkCompareFlow {
         switch self {
         case .stt:
             return .stt
-        case .generationSingle:
-            return .generationSingle
-        case .generationBattle:
-            return .generationBattle
+        case .generation:
+            return .generation
         }
     }
 }

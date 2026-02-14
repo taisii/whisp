@@ -704,7 +704,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
-        viewModel.selectedTab = .generationSingle
+        viewModel.selectedTab = .generation
         viewModel.selectedTask = .generation
         viewModel.refresh()
         viewModel.openCreatePromptCandidateModal()
@@ -738,7 +738,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
-        viewModel.selectedTab = .generationSingle
+        viewModel.selectedTab = .generation
         viewModel.selectedTask = .generation
         viewModel.refresh()
         viewModel.openCreatePromptCandidateModal()
@@ -777,7 +777,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             candidateStore: candidateStore,
             integrityStore: integrityStore
         )
-        viewModel.selectedTab = .generationBattle
+        viewModel.selectedTab = .generation
         viewModel.selectedTask = .generation
         viewModel.refresh()
 
@@ -918,7 +918,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
-        viewModel.selectedTab = .generationBattle
+        viewModel.selectedTab = .generation
         viewModel.selectedTask = .generation
         viewModel.refresh()
         viewModel.setGenerationPairJudgeModel(.gpt4oMini)
@@ -1037,7 +1037,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             integrityStore: integrityStore,
             datasetPathOverride: casesPath.path
         )
-        viewModel.selectedTab = .generationBattle
+        viewModel.selectedTab = .generation
         viewModel.selectedTask = .generation
         viewModel.refresh()
 

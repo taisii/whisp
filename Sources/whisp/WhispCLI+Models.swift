@@ -425,24 +425,15 @@ struct GenerationBenchmarkOptions {
 
 enum BenchmarkCompareFlow: String, Codable, CaseIterable, Sendable {
     case stt
-    case generationSingle = "generation-single"
-    case generationBattle = "generation-battle"
+    case generation
 
     var benchmarkKind: BenchmarkKind {
         switch self {
         case .stt:
             return .stt
-        case .generationSingle, .generationBattle:
+        case .generation:
             return .generation
         }
-    }
-
-    var isGenerationSingle: Bool {
-        self == .generationSingle
-    }
-
-    var isGenerationBattle: Bool {
-        self == .generationBattle
     }
 }
 

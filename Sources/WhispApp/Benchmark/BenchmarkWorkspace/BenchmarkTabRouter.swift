@@ -3,8 +3,7 @@ import WhispCore
 
 enum BenchmarkWorkspaceTab: String, CaseIterable, Identifiable {
     case stt = "STT"
-    case generationSingle = "Generation"
-    case generationBattle = "Generation対戦"
+    case generation = "Generation"
     case candidateManagement = "候補管理"
     case integrity = "Case Integrity"
 
@@ -14,10 +13,8 @@ enum BenchmarkWorkspaceTab: String, CaseIterable, Identifiable {
         switch self {
         case .stt:
             return .stt
-        case .generationSingle:
-            return .generationSingle
-        case .generationBattle:
-            return .generationBattle
+        case .generation:
+            return .generation
         case .candidateManagement:
             return nil
         case .integrity:
@@ -29,7 +26,7 @@ enum BenchmarkWorkspaceTab: String, CaseIterable, Identifiable {
         switch self {
         case .stt:
             return .stt
-        case .generationSingle, .generationBattle, .candidateManagement:
+        case .generation, .candidateManagement:
             return .generation
         case .integrity:
             return .stt

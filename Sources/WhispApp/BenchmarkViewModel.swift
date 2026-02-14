@@ -6,8 +6,7 @@ import WhispCore
 
 enum BenchmarkDashboardTab: String, CaseIterable, Identifiable {
     case stt = "STT"
-    case generationSingle = "Generation"
-    case generationBattle = "Generation対戦"
+    case generation = "Generation"
     case candidateManagement = "候補管理"
     case integrity = "Case Integrity"
 
@@ -17,7 +16,7 @@ enum BenchmarkDashboardTab: String, CaseIterable, Identifiable {
         switch self {
         case .stt, .integrity:
             return .stt
-        case .generationSingle, .generationBattle, .candidateManagement:
+        case .generation, .candidateManagement:
             return .generation
         }
     }
@@ -26,10 +25,8 @@ enum BenchmarkDashboardTab: String, CaseIterable, Identifiable {
         switch self {
         case .stt:
             return .stt
-        case .generationSingle:
-            return .generationSingle
-        case .generationBattle:
-            return .generationBattle
+        case .generation:
+            return .generation
         case .candidateManagement:
             return nil
         case .integrity:
@@ -224,7 +221,6 @@ final class BenchmarkViewModel: ObservableObject {
 
     @Published var candidates: [BenchmarkCandidate] = []
     @Published var selectedCandidateIDs: Set<String> = []
-    @Published var selectedGenerationSingleCandidateID: String?
     @Published var comparisonRows: [BenchmarkComparisonRow] = []
     @Published var selectedComparisonCandidateID: String?
     @Published var caseBreakdownRows: [BenchmarkCaseBreakdownRow] = []
@@ -328,13 +324,6 @@ final class BenchmarkViewModel: ObservableObject {
         return generationCandidates.first(where: { $0.id == generationPairCandidateBID })
     }
 
-    var selectedGenerationSingleCandidate: BenchmarkCandidate? {
-        guard let selectedGenerationSingleCandidateID else {
-            return generationCandidates.first
-        }
-        return generationCandidates.first(where: { $0.id == selectedGenerationSingleCandidateID })
-    }
-
     var selectedComparisonRow: BenchmarkComparisonRow? {
         guard let selectedComparisonCandidateID else { return nil }
         return comparisonRows.first { $0.candidate.id == selectedComparisonCandidateID }
@@ -394,7 +383,7 @@ final class BenchmarkViewModel: ObservableObject {
         let candidateIDs: [String]
         let judgeModel: LLMModel?
         guard selectedTask == .stt else {
-            runGenerationBattleCompare()
+            runGenerationCompare()
             return
         }
         candidateIDs = taskCandidates.map(\.id).filter { selectedCandidateIDs.contains($0) }
@@ -427,10 +416,10 @@ final class BenchmarkViewModel: ObservableObject {
         }
     }
 
-    func runGenerationBattleCompare() {
+    func runGenerationCompare() {
         guard !isExecutingBenchmark else { return }
         guard selectedTask == .generation else {
-            setStatus("Generation対戦は generation タブから実行してください。", isError: true)
+            setStatus("Generation 比較は generation タブから実行してください。", isError: true)
             return
         }
         let dataset = benchmarkDatasetPath
@@ -442,7 +431,7 @@ final class BenchmarkViewModel: ObservableObject {
               !candidateAID.isEmpty,
               !candidateBID.isEmpty
         else {
-            setStatus("Generation対戦は candidate A/B を選択してください。", isError: true)
+            setStatus("Generation 比較は candidate A/B を選択してください。", isError: true)
             return
         }
         guard candidateAID != candidateBID else {
@@ -459,7 +448,7 @@ final class BenchmarkViewModel: ObservableObject {
             defer { isExecutingBenchmark = false }
             do {
                 try await executionService.runCompare(request: BenchmarkExecutionRequest(
-                    flow: .generationBattle,
+                    flow: .generation,
                     datasetPath: dataset,
                     candidateIDs: candidateIDs,
                     judgeModel: judgeModel?.rawValue,
@@ -491,13 +480,6 @@ final class BenchmarkViewModel: ObservableObject {
         }
         clearPairwiseCaseDetail()
         try? reloadGenerationPairwiseState()
-    }
-
-    func setGenerationSingleCandidate(_ candidateID: String) {
-        selectedGenerationSingleCandidateID = generationCandidates.first(where: { $0.id == candidateID })?.id
-        if selectedGenerationSingleCandidateID == nil {
-            ensureGenerationSingleCandidateSelection()
-        }
     }
 
     func setGenerationPairCandidateB(_ candidateID: String) {
@@ -832,9 +814,6 @@ final class BenchmarkViewModel: ObservableObject {
         do {
             try candidateStore.deleteCandidate(id: selectedCandidateManagementID)
             selectedCandidateIDs.remove(selectedCandidateManagementID)
-            if selectedGenerationSingleCandidateID == selectedCandidateManagementID {
-                selectedGenerationSingleCandidateID = nil
-            }
             if generationPairCandidateAID == selectedCandidateManagementID {
                 generationPairCandidateAID = nil
             }
@@ -922,7 +901,6 @@ final class BenchmarkViewModel: ObservableObject {
     private func applySavedCandidateSelection(_ saved: BenchmarkCandidate) {
         selectedTask = .generation
         selectedCandidateIDs.insert(saved.id)
-        selectedGenerationSingleCandidateID = saved.id
         selectedComparisonCandidateID = saved.id
         if generationPairCandidateAID == nil {
             generationPairCandidateAID = saved.id
@@ -1045,11 +1023,7 @@ final class BenchmarkViewModel: ObservableObject {
         case .stt:
             clearIntegrityCaseDetail()
             selectedTask = .stt
-        case .generationSingle:
-            clearIntegrityCaseDetail()
-            selectedTask = .generation
-            ensureGenerationSingleCandidateSelection()
-        case .generationBattle:
+        case .generation:
             clearIntegrityCaseDetail()
             selectedTask = .generation
         case .candidateManagement:
@@ -1089,16 +1063,6 @@ final class BenchmarkViewModel: ObservableObject {
                 self.setStatus("Case Integrityの自動再計算に失敗: \(error.localizedDescription)", isError: true, errorLog: error.localizedDescription)
             }
         }
-    }
-
-    private func ensureGenerationSingleCandidateSelection() {
-        let availableIDs = Set(generationCandidates.map(\.id))
-        if let current = selectedGenerationSingleCandidateID,
-           availableIDs.contains(current)
-        {
-            return
-        }
-        selectedGenerationSingleCandidateID = generationCandidates.first?.id
     }
 
     private func loadComparisonRows() throws {
@@ -1860,42 +1824,6 @@ final class BenchmarkViewModel: ObservableObject {
                 if !player.isPlaying {
                     self.stopCaseAudioPlayback(showMessage: false)
                 }
-            }
-        }
-    }
-
-    func runGenerationSingleCompare() {
-        guard !isExecutingBenchmark else { return }
-        guard selectedTask == .generation else {
-            setStatus("Generation単体は generation タブから実行してください。", isError: true)
-            return
-        }
-        guard let candidate = selectedGenerationSingleCandidate else {
-            setStatus("Generation単体は候補を1件選択してください。", isError: true)
-            return
-        }
-        let dataset = benchmarkDatasetPath
-        let force = forceRerun
-        isExecutingBenchmark = true
-        setStatus("比較実行を開始しました。", isError: false, clearErrorLog: true)
-
-        Task {
-            defer { isExecutingBenchmark = false }
-            do {
-                try await executionService.runCompare(request: BenchmarkExecutionRequest(
-                    flow: .generationSingle,
-                    datasetPath: dataset,
-                    candidateIDs: [candidate.id],
-                    judgeModel: nil,
-                    force: force,
-                    compareWorkers: resolvedCompareWorkers()
-                ))
-                try reloadAll()
-                setStatus("比較実行が完了しました。", isError: false, clearErrorLog: true)
-                benchmarkErrorLog = ""
-            } catch {
-                let log = normalizedErrorLog(error.localizedDescription)
-                setStatus("比較実行に失敗: \(compactHeadline(for: log))", isError: true, errorLog: log)
             }
         }
     }

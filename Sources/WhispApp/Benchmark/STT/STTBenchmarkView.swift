@@ -3,8 +3,7 @@ import WhispCore
 
 enum BenchmarkComparisonMode {
     case stt
-    case generationSingle
-    case generationBattle
+    case generation
 }
 
 struct STTBenchmarkView: View {

@@ -3,14 +3,13 @@ import WhispCore
 
 enum BenchmarkFlow: String, Codable, CaseIterable, Sendable {
     case stt
-    case generationSingle = "generation-single"
-    case generationBattle = "generation-battle"
+    case generation
 
     var benchmarkKind: BenchmarkKind {
         switch self {
         case .stt:
             return .stt
-        case .generationSingle, .generationBattle:
+        case .generation:
             return .generation
         }
     }
@@ -19,10 +18,8 @@ enum BenchmarkFlow: String, Codable, CaseIterable, Sendable {
         switch self {
         case .stt:
             return "STT"
-        case .generationSingle:
+        case .generation:
             return "Generation"
-        case .generationBattle:
-            return "Generation 対戦"
         }
     }
 }

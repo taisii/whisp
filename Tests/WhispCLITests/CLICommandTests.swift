@@ -71,38 +71,53 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.emitMode, .stdout)
         XCTAssertEqual(options.contextFilePath, "/tmp/context.json")
 
-        let vision = try WhispCLI.CLICommand.parse(arguments: [
+        let vision = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-vision-cases", "/tmp/manual.jsonl", "--no-cache",
-        ])
-        XCTAssertNil(vision)
+        ]))
+        guard case let .benchmarkVision(options) = vision else {
+            return XCTFail("unexpected benchmark-vision-cases command")
+        }
+        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
+        XCTAssertFalse(options.useCache)
 
-        let stt = try WhispCLI.CLICommand.parse(arguments: [
+        let stt = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-stt-cases", "/tmp/manual.jsonl", "--stt-preset", "apple_speech_recognizer_rest", "--no-realtime",
-        ])
-        XCTAssertNil(stt)
+        ]))
+        guard case let .benchmarkSTT(options) = stt else {
+            return XCTFail("unexpected benchmark-stt-cases command")
+        }
+        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
+        XCTAssertFalse(options.realtime)
+        XCTAssertEqual(options.sttPreset, .appleSpeechRecognizerRest)
 
-        let generation = try WhispCLI.CLICommand.parse(arguments: [
-            "--benchmark-generation-cases", "/tmp/manual.jsonl", "--require-context",
-        ])
-        XCTAssertNil(generation)
-
-        let compare = try WhispCLI.CLICommand.parse(arguments: [
+        let compare = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-compare",
             "--task", "stt",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "stt-a",
-        ])
-        XCTAssertNil(compare)
+        ]))
+        guard case let .benchmarkCompare(options) = compare else {
+            return XCTFail("unexpected benchmark-compare command")
+        }
+        XCTAssertEqual(options.task, .stt)
+        XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
+        XCTAssertEqual(options.candidateIDs, ["stt-a"])
 
-        let listCandidates = try WhispCLI.CLICommand.parse(arguments: ["--benchmark-list-candidates"])
-        XCTAssertNil(listCandidates)
+        let listCandidates = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: ["--benchmark-list-candidates"]))
+        guard case .benchmarkListCandidates = listCandidates else {
+            return XCTFail("unexpected benchmark-list-candidates command")
+        }
 
-        let integrity = try WhispCLI.CLICommand.parse(arguments: [
+        let integrity = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-scan-integrity",
             "--task", "generation",
             "--cases", "/tmp/manual.jsonl",
-        ])
-        XCTAssertNil(integrity)
+        ]))
+        guard case let .benchmarkIntegrityScan(options) = integrity else {
+            return XCTFail("unexpected benchmark-scan-integrity command")
+        }
+        XCTAssertEqual(options.task, .generation)
+        XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
     }
 
     func testParseUnknownTopLevelCommandReturnsNil() throws {
@@ -222,31 +237,6 @@ final class CLICommandTests: XCTestCase {
         ]))
     }
 
-    func testParseGenerationBenchmarkOptionsParsesAndRejectsUnknownOption() throws {
-        let options = try WhispCLI.parseGenerationBenchmarkOptions(args: [
-            "--benchmark-generation-cases",
-            "/tmp/manual.jsonl",
-            "--limit", "30",
-            "--require-context",
-            "--llm-eval",
-            "--llm-eval-model", "gemini-2.5-flash-lite",
-            "--no-cache",
-        ])
-
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.limit, 30)
-        XCTAssertTrue(options.requireContext)
-        XCTAssertTrue(options.llmEvalEnabled)
-        XCTAssertEqual(options.llmEvalModel, .gemini25FlashLite)
-        XCTAssertFalse(options.useCache)
-
-        XCTAssertThrowsError(try WhispCLI.parseGenerationBenchmarkOptions(args: [
-            "--benchmark-generation-cases",
-            "/tmp/manual.jsonl",
-            "--unknown",
-        ]))
-    }
-
     func testBenchmarkLogDirOptionIsRejectedInAllBenchmarkParsers() {
         XCTAssertThrowsError(try WhispCLI.parseVisionBenchmarkOptions(args: [
             "--benchmark-vision-cases",
@@ -261,26 +251,19 @@ final class CLICommandTests: XCTestCase {
             "--benchmark-log-dir",
             "/tmp/logs",
         ]))
-
-        XCTAssertThrowsError(try WhispCLI.parseGenerationBenchmarkOptions(args: [
-            "--benchmark-generation-cases",
-            "/tmp/manual.jsonl",
-            "--benchmark-log-dir",
-            "/tmp/logs",
-        ]))
     }
 
     func testParseBenchmarkCompareOptions() throws {
         let options = try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation-battle",
+            "--task", "generation",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",
             "--judge-model", "gpt-4o-mini",
             "--force",
         ])
-        XCTAssertEqual(options.task, .generationBattle)
+        XCTAssertEqual(options.task, .generation)
         XCTAssertEqual(options.casesPath, "/tmp/manual.jsonl")
         XCTAssertEqual(options.candidateIDs, ["gen-a", "gen-b"])
         XCTAssertEqual(options.judgeModel, .gpt4oMini)
@@ -302,14 +285,14 @@ final class CLICommandTests: XCTestCase {
     func testParseBenchmarkCompareOptionsRequiresTwoGenerationCandidates() {
         XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation-battle",
+            "--task", "generation",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
         ]))
 
         XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation-battle",
+            "--task", "generation",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",
@@ -320,7 +303,7 @@ final class CLICommandTests: XCTestCase {
     func testParseBenchmarkCompareOptionsRejectsInvalidJudgeModel() {
         XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation-battle",
+            "--task", "generation",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",
@@ -331,13 +314,29 @@ final class CLICommandTests: XCTestCase {
     func testParseBenchmarkCompareOptionsAcceptsKimiJudgeModel() throws {
         let options = try WhispCLI.parseBenchmarkCompareOptions(args: [
             "--benchmark-compare",
-            "--task", "generation-battle",
+            "--task", "generation",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "gen-a",
             "--candidate-id", "gen-b",
             "--judge-model", "kimi-k2.5",
         ])
         XCTAssertEqual(options.judgeModel, .kimiK25)
+    }
+
+    func testParseBenchmarkCompareOptionsRejectsLegacyGenerationTaskNames() {
+        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
+            "--benchmark-compare",
+            "--task", "generation-single",
+            "--cases", "/tmp/manual.jsonl",
+            "--candidate-id", "gen-a",
+        ]))
+        XCTAssertThrowsError(try WhispCLI.parseBenchmarkCompareOptions(args: [
+            "--benchmark-compare",
+            "--task", "generation-battle",
+            "--cases", "/tmp/manual.jsonl",
+            "--candidate-id", "gen-a",
+            "--candidate-id", "gen-b",
+        ]))
     }
 
     func testParseBenchmarkIntegrityScanOptions() throws {

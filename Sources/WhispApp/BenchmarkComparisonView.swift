@@ -27,7 +27,7 @@ struct BenchmarkComparisonView: View {
         VStack(spacing: 0) {
             controlBar
             Divider()
-            if mode == .generationBattle {
+            if mode == .generation {
                 generationPairwiseBody
             } else {
                 sttComparisonBody
@@ -48,7 +48,7 @@ struct BenchmarkComparisonView: View {
 
     private var controlBar: some View {
         HStack(spacing: 10) {
-            if mode == .generationBattle {
+            if mode == .generation {
                 Picker("candidate A", selection: Binding(
                     get: { viewModel.generationPairCandidateAID ?? "" },
                     set: { viewModel.setGenerationPairCandidateA($0) }
@@ -84,19 +84,6 @@ struct BenchmarkComparisonView: View {
                     }
                 }
                 .frame(width: 190)
-            } else if mode == .generationSingle {
-                Picker("candidate", selection: Binding(
-                    get: { viewModel.selectedGenerationSingleCandidateID ?? "" },
-                    set: { viewModel.setGenerationSingleCandidate($0) }
-                )) {
-                    ForEach(viewModel.generationCandidates, id: \.id) { candidate in
-                        Text(candidateDisplayLabel(candidate))
-                            .lineLimit(1)
-                            .help(candidate.id)
-                            .tag(candidate.id)
-                    }
-                }
-                .frame(width: 280)
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
@@ -167,10 +154,8 @@ struct BenchmarkComparisonView: View {
                 switch mode {
                 case .stt:
                     viewModel.runCompare()
-                case .generationSingle:
-                    viewModel.runGenerationSingleCompare()
-                case .generationBattle:
-                    viewModel.runGenerationBattleCompare()
+                case .generation:
+                    viewModel.runGenerationCompare()
                 }
             } label: {
                 if viewModel.isExecutingBenchmark {
@@ -186,7 +171,7 @@ struct BenchmarkComparisonView: View {
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.isExecutingBenchmark)
 
-            if mode == .generationSingle || mode == .generationBattle {
+            if mode == .generation {
                 Button {
                     viewModel.openCreatePromptCandidateModal()
                 } label: {
@@ -602,7 +587,7 @@ struct BenchmarkComparisonView: View {
                 columns.insert(ComparisonColumn(id: "skip_cases", label: "skip_cases", width: 90), at: 3)
             }
             return columns
-        case .generationSingle, .generationBattle:
+        case .generation:
             var columns = [
                 ComparisonColumn(id: "candidate_id", label: "candidate", width: 320),
                 ComparisonColumn(id: "model", label: "model", width: 120),
@@ -998,7 +983,7 @@ struct BenchmarkPairwiseCaseDetailModal: View {
 
     private func modalHeader(_ detail: BenchmarkPairwiseCaseDetail) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Generation対戦 ケース詳細")
+            Text("Generation ケース詳細")
                 .font(.system(size: 15, weight: .semibold))
             HStack(spacing: 8) {
                 copyableCaseIDChip(detail.caseID)

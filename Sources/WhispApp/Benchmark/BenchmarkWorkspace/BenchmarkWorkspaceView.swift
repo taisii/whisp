@@ -17,10 +17,8 @@ struct BenchmarkWorkspaceView: View {
                     switch viewModel.selectedTab {
                     case .stt:
                         STTBenchmarkView(viewModel: viewModel)
-                    case .generationSingle:
-                        GenerationSingleBenchmarkView(viewModel: viewModel)
-                    case .generationBattle:
-                        GenerationBattleBenchmarkView(viewModel: viewModel)
+                    case .generation:
+                        GenerationBenchmarkView(viewModel: viewModel)
                     case .candidateManagement:
                         CandidateManagementView(viewModel: viewModel)
                     case .integrity:
