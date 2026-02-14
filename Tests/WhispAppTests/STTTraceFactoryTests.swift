@@ -6,6 +6,7 @@ final class STTTraceFactoryTests: XCTestCase {
     func testSingleAttemptTraceBuildsConsistentMainSpan() {
         let trace = STTTraceFactory.singleAttemptTrace(
             provider: STTProvider.deepgram.rawValue,
+            transport: .rest,
             route: .rest,
             kind: .rest,
             eventStartMs: 100,
@@ -17,6 +18,7 @@ final class STTTraceFactoryTests: XCTestCase {
         )
 
         XCTAssertEqual(trace.provider, STTProvider.deepgram.rawValue)
+        XCTAssertEqual(trace.transport, .rest)
         XCTAssertEqual(trace.route, .rest)
         XCTAssertEqual(trace.mainSpan.eventStartMs, 100)
         XCTAssertEqual(trace.mainSpan.eventEndMs, 160)

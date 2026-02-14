@@ -7,7 +7,10 @@ extension WhispCLI {
         options: PipelineOptions,
         context: ContextInfo?
     ) async throws -> PipelineRunResult {
-        let deepgramKey = try APIKeyResolver.sttKey(config: config, provider: .deepgram)
+        let sttCredential = try APIKeyResolver.sttCredential(config: config, provider: .deepgram)
+        guard case let .apiKey(deepgramKey) = sttCredential else {
+            throw AppError.invalidArgument("Deepgram APIキーが未設定です")
+        }
         let model = APIKeyResolver.effectivePostProcessModel(config.llmModel)
         let llmKey = try APIKeyResolver.llmKey(config: config, model: model)
 

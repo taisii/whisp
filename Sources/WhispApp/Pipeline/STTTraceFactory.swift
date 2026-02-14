@@ -34,6 +34,7 @@ enum STTTraceFactory {
 
     static func trace(
         provider: String,
+        transport: STTTransport,
         route: DebugSTTRoute,
         eventStartMs: Int64,
         eventEndMs: Int64,
@@ -47,6 +48,7 @@ enum STTTraceFactory {
     ) -> STTTrace {
         STTTrace(
             provider: provider,
+            transport: transport,
             route: route,
             mainSpan: STTMainSpanTrace(
                 eventStartMs: eventStartMs,
@@ -64,6 +66,7 @@ enum STTTraceFactory {
 
     static func singleAttemptTrace(
         provider: String,
+        transport: STTTransport,
         route: DebugSTTRoute,
         kind: DebugSTTAttemptKind,
         eventStartMs: Int64,
@@ -85,6 +88,7 @@ enum STTTraceFactory {
         )
         return trace(
             provider: provider,
+            transport: transport,
             route: route,
             eventStartMs: eventStartMs,
             eventEndMs: eventEndMs,

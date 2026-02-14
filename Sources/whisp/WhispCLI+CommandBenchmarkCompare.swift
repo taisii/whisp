@@ -4,6 +4,7 @@ import WhispCore
 extension WhispCLI {
     static func runBenchmarkCompare(options: BenchmarkCompareOptions) async throws {
         let candidateStore = BenchmarkCandidateStore()
+        try BenchmarkCandidateDefaults.ensureSeededAndNormalized(store: candidateStore)
         let benchmarkStore = BenchmarkStore()
         let datasetPath = normalizePath(options.casesPath)
         guard FileManager.default.fileExists(atPath: datasetPath) else {
@@ -104,6 +105,7 @@ extension WhispCLI {
 
     static func runBenchmarkListCandidates() throws {
         let store = BenchmarkCandidateStore()
+        try BenchmarkCandidateDefaults.ensureSeededAndNormalized(store: store)
         let candidates = try store.listCandidates()
         print("mode: benchmark_list_candidates")
         print("count: \(candidates.count)")
@@ -119,6 +121,8 @@ extension WhispCLI {
         candidateStore: BenchmarkCandidateStore,
         benchmarkStore: BenchmarkStore
     ) async throws {
+        var failures: [(candidateID: String, reason: String)] = []
+
         for candidateID in options.candidateIDs {
             let candidate = try candidateStore.loadCandidate(id: candidateID)
             guard let candidate else {
@@ -147,16 +151,29 @@ extension WhispCLI {
             }
 
             print("candidate: \(candidate.id)\tstatus: running\tmodel: \(candidate.model)")
-            let sttOptions = try makeSTTCompareOptions(
-                candidate: candidate,
-                datasetPath: datasetPath,
-                datasetHash: datasetHash,
-                runtimeHash: runtimeHash,
-                benchmarkKey: key,
-                benchmarkWorkers: options.benchmarkWorkers
-            )
-            try await runSTTCaseBenchmark(options: sttOptions)
-            print("candidate: \(candidate.id)\tstatus: done")
+            do {
+                let sttOptions = try makeSTTCompareOptions(
+                    candidate: candidate,
+                    datasetPath: datasetPath,
+                    datasetHash: datasetHash,
+                    runtimeHash: runtimeHash,
+                    benchmarkKey: key,
+                    benchmarkWorkers: options.benchmarkWorkers
+                )
+                try await runSTTCaseBenchmark(options: sttOptions)
+                print("candidate: \(candidate.id)\tstatus: done")
+            } catch {
+                let reason = error.localizedDescription
+                failures.append((candidateID: candidate.id, reason: reason))
+                print("candidate: \(candidate.id)\tstatus: failed\treason: \(reason)")
+            }
+        }
+
+        if !failures.isEmpty {
+            print("stt_compare_failures: \(failures.count)")
+            for failure in failures {
+                print("failed_candidate: \(failure.candidateID)\treason: \(failure.reason)")
+            }
         }
     }
 
@@ -302,8 +319,11 @@ extension WhispCLI {
         guard let provider = STTProvider(rawValue: candidate.model) else {
             throw AppError.invalidArgument("candidate \(candidate.id): stt provider が不正です: \(candidate.model)")
         }
-        if provider != .deepgram, sttMode == .stream {
-            throw AppError.invalidArgument("candidate \(candidate.id): provider=\(provider.rawValue) は stt_mode=rest のみ対応です")
+        if sttMode == .stream, !STTProviderCatalog.supportsStreaming(provider) {
+            throw AppError.invalidArgument("candidate \(candidate.id): provider=\(provider.rawValue) は stt_mode=stream 未対応です")
+        }
+        if sttMode == .rest, !STTProviderCatalog.supportsREST(provider) {
+            throw AppError.invalidArgument("candidate \(candidate.id): provider=\(provider.rawValue) は stt_mode=rest 未対応です")
         }
 
         return STTBenchmarkOptions(

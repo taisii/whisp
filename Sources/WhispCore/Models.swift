@@ -62,6 +62,42 @@ public enum STTProvider: String, Codable, Equatable, Sendable, CaseIterable {
     case appleSpeech = "apple_speech"
 }
 
+public enum STTCredential: Equatable, Sendable {
+    case apiKey(String)
+    case none
+}
+
+public enum STTTransport: String, Codable, Equatable, Sendable {
+    case websocket
+    case rest
+    case onDevice = "on_device"
+}
+
+public struct STTProviderSpec: Equatable, Sendable {
+    public let id: STTProvider
+    public let displayName: String
+    public let supportsStreaming: Bool
+    public let supportsREST: Bool
+    public let preferredTransport: STTTransport
+    public let isVisibleInSettings: Bool
+
+    public init(
+        id: STTProvider,
+        displayName: String,
+        supportsStreaming: Bool,
+        supportsREST: Bool,
+        preferredTransport: STTTransport,
+        isVisibleInSettings: Bool = true
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.supportsStreaming = supportsStreaming
+        self.supportsREST = supportsREST
+        self.preferredTransport = preferredTransport
+        self.isVisibleInSettings = isVisibleInSettings
+    }
+}
+
 public enum RecordingMode: String, Codable, Equatable, Sendable {
     case toggle
     case pushToTalk = "push_to_talk"

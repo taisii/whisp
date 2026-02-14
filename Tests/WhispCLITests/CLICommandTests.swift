@@ -205,6 +205,15 @@ final class CLICommandTests: XCTestCase {
         XCTAssertFalse(options.useCache)
         XCTAssertEqual(options.sttProvider, .appleSpeech)
 
+        let appleStreamOptions = try WhispCLI.parseSTTBenchmarkOptions(args: [
+            "--benchmark-stt-cases",
+            "/tmp/manual.jsonl",
+            "--stt-provider", "apple_speech",
+            "--stt", "stream",
+        ])
+        XCTAssertEqual(appleStreamOptions.sttProvider, .appleSpeech)
+        XCTAssertEqual(appleStreamOptions.sttMode, .stream)
+
         XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",
             "/tmp/manual.jsonl",

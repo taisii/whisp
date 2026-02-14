@@ -38,13 +38,7 @@ struct BenchmarkComparisonView: View {
 
     private var sttComparisonBody: some View {
         VStack(spacing: 0) {
-            HSplitView {
-                comparisonTable
-                    .frame(minWidth: 980)
-
-                candidateDetail
-                    .frame(minWidth: 360, maxWidth: 480)
-            }
+            comparisonTable
 
             Divider()
             caseBreakdown
@@ -175,12 +169,8 @@ struct BenchmarkComparisonView: View {
         VStack(spacing: 0) {
             generationSummary
             Divider()
-            VStack(spacing: 0) {
-                generationCaseList
-                    .frame(minHeight: 430)
-                Divider()
-                generationCaseListBottomArea
-            }
+            generationCaseList
+                .frame(minHeight: 430)
         }
     }
 
@@ -232,57 +222,6 @@ struct BenchmarkComparisonView: View {
         }
         .font(.system(size: 11, design: .monospaced))
         .padding(.vertical, 2)
-    }
-
-    private var candidateDetail: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Candidate Detail")
-                .font(.system(size: 13, weight: .semibold))
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-
-            if let row = viewModel.selectedComparisonRow {
-                VStack(alignment: .leading, spacing: 8) {
-                    detailLine("candidate", candidateDisplayLabel(row.candidate))
-                    detailLine("candidate_id", row.candidate.id)
-                    detailLine("task", row.candidate.task.rawValue)
-                    detailLine("model", row.candidate.model)
-                    detailLine("prompt_name", row.candidate.promptName ?? "-")
-                    detailLine("prompt_hash", row.candidate.generationPromptHash ?? "-")
-                    detailLine("latest_run", row.latestRunID ?? "-")
-                    detailLine("last_run_at", row.lastRunAt ?? "-")
-
-                    Divider()
-                    Text("options")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    if row.candidate.options.isEmpty {
-                        Text("-")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(row.candidate.options.keys.sorted(), id: \.self) { key in
-                            detailLine(key, row.candidate.options[key] ?? "")
-                        }
-                    }
-                }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color(NSColor.textBackgroundColor))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                }
-                .padding(.horizontal, 12)
-            } else {
-                Text("Candidateを選択してください。")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-            }
-
-            Spacer(minLength: 0)
-        }
     }
 
     private var caseBreakdown: some View {
@@ -386,100 +325,6 @@ struct BenchmarkComparisonView: View {
             .listStyle(.plain)
         }
         .padding(.bottom, 8)
-    }
-
-    private var generationCaseListBottomArea: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text("Case Quick View")
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                    if let caseID = viewModel.selectedGenerationPairwiseCaseID {
-                        Text("case_id: \(caseID)")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.top, 8)
-
-                if let detail = viewModel.generationPairwiseCaseDetail {
-                    HStack(spacing: 10) {
-                        summaryChip("overall", text: winnerText(detail.overallWinner))
-                        summaryChip("intent", text: winnerText(detail.intentWinner))
-                        summaryChip("hallucination", text: winnerText(detail.hallucinationWinner))
-                        summaryChip("style_context", text: winnerText(detail.styleContextWinner))
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
-
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("overall / intent / hallucination / style_context")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Text("overall: \(detail.overallReason ?? "-")")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Text("intent: \(detail.intentReason ?? "-")")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Text("hallucination: \(detail.hallucinationReason ?? "-")")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        Text("style_context: \(detail.styleContextReason ?? "-")")
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 12)
-                } else if viewModel.selectedGenerationPairwiseCaseID != nil {
-                    Text("詳細を読み込み中です。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                } else {
-                    Text("左側のケースを選択してください。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                }
-
-            }
-        }
-    }
-
-    private func summaryChip(_ title: String, text: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            Text(text)
-                .font(.system(size: 11, design: .monospaced))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color(NSColor.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-        }
-    }
-
-    private func summaryChip(_ title: String, a: Int, b: Int, tie: Int) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-            Text("A:\(a) B:\(b) tie:\(tie)")
-                .font(.system(size: 11, design: .monospaced))
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color(NSColor.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-        }
     }
 
     private func pairwiseSummaryRows(_ summary: PairwiseRunSummary) -> [PairwiseSummaryRow] {
@@ -681,19 +526,6 @@ struct BenchmarkComparisonView: View {
             .frame(width: width, alignment: .leading)
             .lineLimit(1)
             .truncationMode(.tail)
-    }
-
-    private func detailLine(_ key: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(key)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 120, alignment: .leading)
-            Text(value)
-                .font(.system(size: 11, design: .monospaced))
-                .textSelection(.enabled)
-                .lineLimit(2)
-        }
     }
 
     private func statusChip(_ status: BenchmarkCaseStatus) -> some View {

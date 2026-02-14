@@ -12,9 +12,7 @@ let package = Package(
         .executable(name: "WhispApp", targets: ["WhispApp"]),
     ],
     targets: [
-        .target(
-            name: "WhispCore"
-        ),
+        .target(name: "WhispCore"),
         .executableTarget(
             name: "whisp",
             dependencies: ["WhispCore"]

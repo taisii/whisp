@@ -160,6 +160,7 @@ public struct DebugRecordingLog: Equatable, Sendable {
 public struct DebugSTTLog: Equatable, Sendable {
     public let base: DebugRunLogBase
     public let provider: String
+    public let transport: STTTransport
     public let route: DebugSTTRoute
     public let source: String
     public let textChars: Int
@@ -170,6 +171,7 @@ public struct DebugSTTLog: Equatable, Sendable {
     public init(
         base: DebugRunLogBase,
         provider: String,
+        transport: STTTransport,
         route: DebugSTTRoute,
         source: String,
         textChars: Int,
@@ -179,6 +181,7 @@ public struct DebugSTTLog: Equatable, Sendable {
     ) {
         self.base = base
         self.provider = provider
+        self.transport = transport
         self.route = route
         self.source = source
         self.textChars = textChars
@@ -352,6 +355,7 @@ extension DebugRunLog: Codable {
         case pcmBytes = "pcm_bytes"
 
         case provider
+        case transport
         case route
         case source
         case textChars = "text_chars"
@@ -404,10 +408,14 @@ extension DebugRunLog: Codable {
                 pcmBytes: try attrs.decode(Int.self, forKey: .pcmBytes)
             ))
         case .stt:
+            let route = try attrs.decode(DebugSTTRoute.self, forKey: .route)
+            let transport = try attrs.decodeIfPresent(STTTransport.self, forKey: .transport)
+                ?? Self.fallbackTransport(for: route)
             self = .stt(DebugSTTLog(
                 base: base,
                 provider: try attrs.decode(String.self, forKey: .provider),
-                route: try attrs.decode(DebugSTTRoute.self, forKey: .route),
+                transport: transport,
+                route: route,
                 source: try attrs.decode(String.self, forKey: .source),
                 textChars: try attrs.decode(Int.self, forKey: .textChars),
                 sampleRate: try attrs.decode(Int.self, forKey: .sampleRate),
@@ -484,6 +492,7 @@ extension DebugRunLog: Codable {
             try attrs.encode(log.pcmBytes, forKey: .pcmBytes)
         case let .stt(log):
             try attrs.encode(log.provider, forKey: .provider)
+            try attrs.encode(log.transport, forKey: .transport)
             try attrs.encode(log.route, forKey: .route)
             try attrs.encode(log.source, forKey: .source)
             try attrs.encode(log.textChars, forKey: .textChars)
@@ -518,6 +527,17 @@ extension DebugRunLog: Codable {
             try attrs.encode(log.summaryChars, forKey: .summaryChars)
             try attrs.encode(log.termsCount, forKey: .termsCount)
             try attrs.encodeIfPresent(log.error, forKey: .error)
+        }
+    }
+
+    private static func fallbackTransport(for route: DebugSTTRoute) -> STTTransport {
+        switch route {
+        case .streaming, .streamingFallbackREST:
+            return .websocket
+        case .rest:
+            return .rest
+        case .onDevice:
+            return .onDevice
         }
     }
 }

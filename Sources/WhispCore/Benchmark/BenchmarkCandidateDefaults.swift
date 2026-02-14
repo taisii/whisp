@@ -7,9 +7,7 @@ public enum BenchmarkCandidateDefaults {
     }
 
     public static func ensureSeededIfNeeded(store: BenchmarkCandidateStore) throws {
-        if try store.hasCompletedInitialSeed() {
-            return
-        }
+        let completedInitialSeed = try store.hasCompletedInitialSeed()
         let existing = try store.listCandidates()
         let now = WhispTime.isoNow()
         let defaults = defaultCandidates(now: now)
@@ -27,7 +25,9 @@ public enum BenchmarkCandidateDefaults {
             }
         }
 
-        try store.markInitialSeedCompleted()
+        if !completedInitialSeed {
+            try store.markInitialSeedCompleted()
+        }
     }
 
     public static func normalizeGenerationCandidates(store: BenchmarkCandidateStore) throws {
@@ -56,11 +56,25 @@ public enum BenchmarkCandidateDefaults {
                 updatedAt: now
             ),
             BenchmarkCandidate(
-                id: "stt-apple-speech-rest-default",
+                id: "stt-apple-speech-stream-default",
                 task: .stt,
                 model: "apple_speech",
                 options: [
-                    "stt_mode": "rest",
+                    "stt_mode": "stream",
+                    "chunk_ms": "120",
+                    "realtime": "true",
+                    "min_audio_seconds": "2.0",
+                    "use_cache": "true",
+                ],
+                createdAt: now,
+                updatedAt: now
+            ),
+            BenchmarkCandidate(
+                id: "stt-whisper-stream-default",
+                task: .stt,
+                model: "whisper",
+                options: [
+                    "stt_mode": "stream",
                     "chunk_ms": "120",
                     "realtime": "true",
                     "min_audio_seconds": "2.0",

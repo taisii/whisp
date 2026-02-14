@@ -1,21 +1,23 @@
 import Foundation
 
 public enum APIKeyResolver {
-    public static func sttKey(config: Config, provider: STTProvider) throws -> String {
+    public static func sttCredential(config: Config, provider: STTProvider) throws -> STTCredential {
         switch provider {
         case .deepgram:
-            let key = config.apiKeys.value(for: .deepgram)
-            guard !key.isEmpty else {
-                throw AppError.invalidArgument("Deepgram APIキーが未設定です")
-            }
-            return key
+            return .apiKey(try resolveDeepgramKey(config))
         case .whisper:
-            let key = config.apiKeys.value(for: .openai)
-            guard !key.isEmpty else {
-                throw AppError.invalidArgument("OpenAI APIキーが未設定です（Whisper STT）")
-            }
-            return key
+            return .apiKey(try resolveOpenAIKeyForWhisper(config))
         case .appleSpeech:
+            return .none
+        }
+    }
+
+    @available(*, deprecated, message: "Use sttCredential(config:provider:) instead.")
+    public static func sttKey(config: Config, provider: STTProvider) throws -> String {
+        switch try sttCredential(config: config, provider: provider) {
+        case let .apiKey(value):
+            return value
+        case .none:
             return ""
         }
     }
@@ -101,5 +103,21 @@ public enum APIKeyResolver {
         default:
             return provider.rawValue
         }
+    }
+
+    private static func resolveDeepgramKey(_ config: Config) throws -> String {
+        let key = config.apiKeys.value(for: .deepgram)
+        guard !key.isEmpty else {
+            throw AppError.invalidArgument("Deepgram APIキーが未設定です")
+        }
+        return key
+    }
+
+    private static func resolveOpenAIKeyForWhisper(_ config: Config) throws -> String {
+        let key = config.apiKeys.value(for: .openai)
+        guard !key.isEmpty else {
+            throw AppError.invalidArgument("OpenAI APIキーが未設定です（Whisper STT）")
+        }
+        return key
     }
 }

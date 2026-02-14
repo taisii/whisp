@@ -16,6 +16,7 @@ struct STTMainSpanTrace {
 
 struct STTTrace {
     let provider: String
+    let transport: STTTransport
     let route: DebugSTTRoute
     let mainSpan: STTMainSpanTrace
     let attempts: [DebugSTTAttempt]

@@ -2,11 +2,11 @@ import XCTest
 @testable import WhispCore
 
 final class APIKeyResolverTests: XCTestCase {
-    func testResolvesSTTKeyByProvider() throws {
+    func testResolvesSTTCredentialByProvider() throws {
         let config = Config(apiKeys: APIKeys(deepgram: "dg", gemini: "gm", openai: "oa", moonshot: "ms"))
-        XCTAssertEqual(try APIKeyResolver.sttKey(config: config, provider: .deepgram), "dg")
-        XCTAssertEqual(try APIKeyResolver.sttKey(config: config, provider: .whisper), "oa")
-        XCTAssertEqual(try APIKeyResolver.sttKey(config: config, provider: .appleSpeech), "")
+        XCTAssertEqual(try APIKeyResolver.sttCredential(config: config, provider: .deepgram), .apiKey("dg"))
+        XCTAssertEqual(try APIKeyResolver.sttCredential(config: config, provider: .whisper), .apiKey("oa"))
+        XCTAssertEqual(try APIKeyResolver.sttCredential(config: config, provider: .appleSpeech), .none)
     }
 
     func testResolvesLLMKeyByModel() throws {

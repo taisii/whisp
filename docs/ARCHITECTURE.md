@@ -80,8 +80,8 @@
 2. 録音停止時: 音声データを予約済みrunへ確定保存し、非同期で処理継続。
 3. STT:
    - `sttProvider=deepgram`: stream優先、失敗時restフォールバック
-   - `sttProvider=whisper`: OpenAI Whisper REST
-   - `sttProvider=apple_speech`: Apple Speech（OS内蔵）
+   - `sttProvider=whisper`: OpenAI Realtime stream優先、失敗時Whisper RESTフォールバック
+   - `sttProvider=apple_speech`: Apple Speech stream優先（Speech.framework on-device）、失敗時REST（URL request）フォールバック
    - 直接音声モデル時は LLMで音声→テキスト整形
 4. Context:
    - アクセシビリティ文脈を収集

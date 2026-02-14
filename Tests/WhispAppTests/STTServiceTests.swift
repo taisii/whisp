@@ -211,6 +211,58 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(whisperCalls, 1)
     }
 
+    func testWhisperServiceUsesStreamingFinalizeWhenSessionSucceeds() async throws {
+        let whisper = FakeWhisperRESTTranscriber(transcript: "whisper-rest-unused", usage: nil)
+        let service = WhisperSTTService(client: whisper)
+        let session = FakeStreamingSession(result: STTStreamingFinalizeResult(
+            transcript: "whisper-stream-text",
+            usage: STTUsage(durationSeconds: 0.9, requestID: nil, provider: STTProvider.whisper.rawValue),
+            drainStats: STTStreamingDrainStats(submittedChunks: 3, submittedBytes: 128, droppedChunks: 0)
+        ))
+
+        let result = try await service.transcribe(
+            config: config(sttProvider: .whisper),
+            recording: recording,
+            language: "ja",
+            runID: "run-whisper-stream",
+            streamingSession: session,
+            logger: { _, _ in }
+        )
+
+        XCTAssertEqual(result.transcript, "whisper-stream-text")
+        XCTAssertEqual(result.trace.route, .streaming)
+        XCTAssertEqual(result.trace.attempts.count, 1)
+        XCTAssertEqual(result.trace.attempts[0].kind, .streamFinalize)
+        let whisperCalls = await whisper.callCount()
+        XCTAssertEqual(whisperCalls, 0)
+    }
+
+    func testWhisperServiceFallsBackToRESTWhenStreamingFails() async throws {
+        let whisper = FakeWhisperRESTTranscriber(
+            transcript: "whisper-rest-fallback",
+            usage: STTUsage(durationSeconds: 1.1, requestID: nil, provider: STTProvider.whisper.rawValue)
+        )
+        let service = WhisperSTTService(client: whisper)
+        let session = FakeStreamingSession(error: AppError.io("stream failed"))
+
+        let result = try await service.transcribe(
+            config: config(sttProvider: .whisper),
+            recording: recording,
+            language: "en",
+            runID: "run-whisper-fallback",
+            streamingSession: session,
+            logger: { _, _ in }
+        )
+
+        XCTAssertEqual(result.transcript, "whisper-rest-fallback")
+        XCTAssertEqual(result.trace.route, .streamingFallbackREST)
+        XCTAssertEqual(result.trace.attempts.count, 2)
+        XCTAssertEqual(result.trace.attempts[0].status, .error)
+        XCTAssertEqual(result.trace.attempts[1].kind, .restFallback)
+        let whisperCalls = await whisper.callCount()
+        XCTAssertEqual(whisperCalls, 1)
+    }
+
     func testAppleSpeechServiceProducesOnDeviceTrace() async throws {
         let apple = FakeAppleSpeechTranscriber(
             transcript: "apple-text",
@@ -231,9 +283,103 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(result.trace.route, .onDevice)
         XCTAssertEqual(result.trace.attempts.count, 1)
         XCTAssertEqual(result.trace.attempts[0].kind, .appleSpeech)
-        XCTAssertEqual(result.trace.attempts[0].source, "apple_speech")
+        XCTAssertEqual(result.trace.attempts[0].source, "apple_speech_rest")
         let appleCalls = await apple.callCount()
         XCTAssertEqual(appleCalls, 1)
+    }
+
+    func testAppleSpeechServiceUsesStreamingFinalizeWhenSessionSucceeds() async throws {
+        let apple = FakeAppleSpeechTranscriber(transcript: "apple-rest-unused", usage: nil)
+        let service = AppleSpeechSTTService(client: apple)
+        let session = FakeStreamingSession(result: STTStreamingFinalizeResult(
+            transcript: "apple-stream-text",
+            usage: STTUsage(durationSeconds: 0.7, requestID: nil, provider: STTProvider.appleSpeech.rawValue),
+            drainStats: STTStreamingDrainStats(submittedChunks: 5, submittedBytes: 240, droppedChunks: 0)
+        ))
+
+        let result = try await service.transcribe(
+            config: config(sttProvider: .appleSpeech),
+            recording: recording,
+            language: "ja",
+            runID: "run-apple-stream",
+            streamingSession: session,
+            logger: { _, _ in }
+        )
+
+        XCTAssertEqual(result.transcript, "apple-stream-text")
+        XCTAssertEqual(result.trace.route, .streaming)
+        XCTAssertEqual(result.trace.transport, .onDevice)
+        XCTAssertEqual(result.trace.attempts.count, 1)
+        XCTAssertEqual(result.trace.attempts[0].kind, .streamFinalize)
+        XCTAssertEqual(result.trace.attempts[0].submittedChunks, 5)
+        let appleCalls = await apple.callCount()
+        XCTAssertEqual(appleCalls, 0)
+    }
+
+    func testAppleSpeechServiceFallsBackToRESTWhenStreamingFails() async throws {
+        let apple = FakeAppleSpeechTranscriber(
+            transcript: "apple-rest-fallback",
+            usage: STTUsage(durationSeconds: 1.1, requestID: nil, provider: STTProvider.appleSpeech.rawValue)
+        )
+        let service = AppleSpeechSTTService(client: apple)
+        let session = FakeStreamingSession(error: AppError.io("apple stream failed"))
+
+        let result = try await service.transcribe(
+            config: config(sttProvider: .appleSpeech),
+            recording: recording,
+            language: "en",
+            runID: "run-apple-fallback",
+            streamingSession: session,
+            logger: { _, _ in }
+        )
+
+        XCTAssertEqual(result.transcript, "apple-rest-fallback")
+        XCTAssertEqual(result.trace.route, .streamingFallbackREST)
+        XCTAssertEqual(result.trace.transport, .onDevice)
+        XCTAssertEqual(result.trace.attempts.count, 2)
+        XCTAssertEqual(result.trace.attempts[0].status, .error)
+        XCTAssertEqual(result.trace.attempts[1].kind, .restFallback)
+        let appleCalls = await apple.callCount()
+        XCTAssertEqual(appleCalls, 1)
+    }
+
+    func testAppleSpeechStartStreamingSessionBuildsLiveSession() async throws {
+        let apple = FakeAppleSpeechTranscriber(transcript: "unused", usage: nil)
+        let service = AppleSpeechSTTService(client: apple)
+        let logCollector = PipelineLogCollector()
+        let session = service.startStreamingSessionIfNeeded(
+            config: config(sttProvider: .appleSpeech),
+            runID: "run-apple-builder",
+            language: "ja",
+            logger: { event, attrs in
+                logCollector.record(event: event, attrs: attrs)
+            }
+        )
+
+        XCTAssertNotNil(session)
+        XCTAssertEqual(logCollector.count(for: "stt_stream_connected"), 0)
+        session?.submit(chunk: Data(repeating: 1, count: 320))
+        _ = try await session?.finish()
+        let startCalls = await apple.streamingStartCallCount()
+        let finishCalls = await apple.streamingFinishCallCount()
+        XCTAssertEqual(startCalls, 1)
+        XCTAssertEqual(finishCalls, 1)
+        XCTAssertEqual(logCollector.count(for: "stt_stream_connected"), 1)
+    }
+
+    func testAppleSpeechStartStreamingSessionReturnsNilForDirectAudioModel() {
+        var conf = config(sttProvider: .appleSpeech)
+        conf.llmModel = .gemini25FlashLiteAudio
+        let service = AppleSpeechSTTService(client: FakeAppleSpeechTranscriber(transcript: "unused", usage: nil))
+
+        let session = service.startStreamingSessionIfNeeded(
+            config: conf,
+            runID: "run-apple-direct-audio",
+            language: "ja",
+            logger: { _, _ in }
+        )
+
+        XCTAssertNil(session)
     }
 
     private let recording = RecordingResult(sampleRate: 16_000, pcmData: Data(repeating: 1, count: 3_200))
@@ -304,11 +450,28 @@ private actor FakeWhisperRESTTranscriber: WhisperRESTTranscriber {
 private actor FakeAppleSpeechTranscriber: AppleSpeechTranscriber {
     private let transcript: String
     private let usage: STTUsage?
+    private let streamTranscript: String
+    private let streamUsage: STTUsage?
+    private let streamStartError: Error?
+    private let streamFinishError: Error?
     private var calls: Int = 0
+    private var streamStartCalls: Int = 0
+    private var streamFinishCalls: Int = 0
 
-    init(transcript: String, usage: STTUsage?) {
+    init(
+        transcript: String,
+        usage: STTUsage?,
+        streamTranscript: String? = nil,
+        streamUsage: STTUsage? = nil,
+        streamStartError: Error? = nil,
+        streamFinishError: Error? = nil
+    ) {
         self.transcript = transcript
         self.usage = usage
+        self.streamTranscript = streamTranscript ?? transcript
+        self.streamUsage = streamUsage ?? usage
+        self.streamStartError = streamStartError
+        self.streamFinishError = streamFinishError
     }
 
     func transcribe(
@@ -320,7 +483,31 @@ private actor FakeAppleSpeechTranscriber: AppleSpeechTranscriber {
         return (transcript, usage)
     }
 
+    func startStreaming(
+        sampleRate _: Int,
+        language _: String?
+    ) async throws {
+        streamStartCalls += 1
+        if let streamStartError {
+            throw streamStartError
+        }
+    }
+
+    func enqueueStreamingAudioChunk(_ chunk: Data) async {
+        _ = chunk
+    }
+
+    func finishStreaming() async throws -> (transcript: String, usage: STTUsage?) {
+        streamFinishCalls += 1
+        if let streamFinishError {
+            throw streamFinishError
+        }
+        return (streamTranscript, streamUsage)
+    }
+
     func callCount() -> Int { calls }
+    func streamingStartCallCount() -> Int { streamStartCalls }
+    func streamingFinishCallCount() -> Int { streamFinishCalls }
 }
 
 private final class FakeStreamingSession: STTStreamingSession, @unchecked Sendable {
@@ -375,5 +562,25 @@ private final class StreamingBuilderRecorder: @unchecked Sendable {
         lastRunID = runID
         lock.unlock()
         return sessionToReturn
+    }
+}
+
+private final class PipelineLogCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+    private var attrsList: [[String: String]] = []
+
+    func record(event: String, attrs: [String: String]) {
+        lock.lock()
+        events.append(event)
+        attrsList.append(attrs)
+        lock.unlock()
+    }
+
+    func count(for event: String) -> Int {
+        lock.lock()
+        let result = events.filter { $0 == event }.count
+        lock.unlock()
+        return result
     }
 }

@@ -8,7 +8,7 @@ Whisp is now implemented as a native macOS app in Swift.
 - Global shortcut (`Cmd+J` default, configurable)
 - Recording modes: Toggle / Push-to-talk
 - Microphone recording (AVAudioEngine, mono PCM)
-- STT provider: Deepgram / Whisper (OpenAI) / Apple Speech (OS built-in)
+- STT provider: Deepgram / Whisper (OpenAI Realtime + REST) / Apple Speech (OS built-in)
 - LLM post processing (Gemini / OpenAI)
 - Direct text input via Accessibility (CGEvent)
 - Optional screenshot context collection at recording start (`save_only` / `ocr`)
@@ -208,7 +208,7 @@ swift run whisp --benchmark-compare \
   --task stt \
   --cases ~/.config/whisp/debug/manual_test_cases.jsonl \
   --candidate-id stt-deepgram-stream-default \
-  --candidate-id stt-apple-speech-rest-default
+  --candidate-id stt-apple-speech-stream-default
 
 # Generation比較（強制再実行）
 swift run whisp --benchmark-compare \
@@ -225,8 +225,8 @@ swift run whisp --benchmark-scan-integrity \
 
 STT candidate 設計メモ:
 - `model` は `deepgram|whisper|apple_speech` を指定
-- `deepgram` は `stt_mode=rest|stream` 対応
-- `whisper` / `apple_speech` は `stt_mode=rest` のみ対応
+- `deepgram` / `whisper` は `stt_mode=rest|stream` 対応
+- `apple_speech` は `stt_mode=rest|stream` 対応（Speech.framework の on-device streaming）
 
 Generation入力ポリシー:
 - `stt_text` は必須

@@ -19,6 +19,8 @@ extension WhispCLI {
 
     static func normalizedEvalText(_ text: String) -> String {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined()
     }
 
     static func levenshteinDistance(_ left: [Character], _ right: [Character]) -> Int {

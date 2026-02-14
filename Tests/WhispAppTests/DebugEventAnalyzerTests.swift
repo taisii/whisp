@@ -10,6 +10,7 @@ final class DebugEventAnalyzerTests: XCTestCase {
             .stt(DebugSTTLog(
                 base: base(type: .stt, start: 2000, end: 2120),
                 provider: STTProvider.whisper.rawValue,
+                transport: .rest,
                 route: .rest,
                 source: "whisper_rest",
                 textChars: 16,

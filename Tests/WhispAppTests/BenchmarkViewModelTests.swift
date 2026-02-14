@@ -615,7 +615,7 @@ final class BenchmarkViewModelTests: XCTestCase {
         viewModel.refresh()
 
         XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.model == STTProvider.appleSpeech.rawValue }))
-        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.id == "stt-apple-speech-rest-default" }))
+        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.id == "stt-apple-speech-stream-default" }))
     }
 
     func testSavePromptCandidateModalCreatesGenerationCandidate() throws {

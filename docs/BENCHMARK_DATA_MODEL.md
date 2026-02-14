@@ -53,7 +53,7 @@
 - `generationPromptTemplate`: generation 用のプロンプト本文（generation では必須）
 - `generationPromptHash`: `sha256("prompt-v1|<canonical_prompt>")`
 - `options`: 実行オプション文字列辞書（`chunk_ms`, `realtime`, `require_context` など）
-  - STT では `whisper` / `apple_speech` は `stt_mode=rest` のみ対応
+  - STT では `deepgram` / `whisper` / `apple_speech` が `stt_mode=rest|stream` に対応
 
 ### Generation プロンプト変数（candidate内包テンプレート）
 

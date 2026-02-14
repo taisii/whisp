@@ -12,7 +12,7 @@ struct SettingsView: View {
     private let preserveGenerationPrimaryOnSave: Bool
 
     private let recordingModes: [RecordingMode] = [.toggle, .pushToTalk]
-    private let sttProviders: [STTProvider] = [.deepgram, .whisper, .appleSpeech]
+    private let sttProviderSpecs: [STTProviderSpec]
     private let visionModes: [VisionContextMode] = VisionContextMode.allCases
     private let llmModels: [LLMModel] = LLMModelCatalog.selectableModelIDs(for: .appSettings)
     private static let noGenerationPrimaryCandidateID = "__none__"
@@ -25,6 +25,7 @@ struct SettingsView: View {
         onSave: @escaping @MainActor (Config) -> Void,
         onCancel: @escaping @MainActor () -> Void
     ) {
+        let filteredProviderSpecs = STTProviderCatalog.settingsSpecs()
         _config = State(initialValue: config)
         let candidateIDs = Set(generationCandidates.map(\.id))
         let initialSelection: String
@@ -38,6 +39,7 @@ struct SettingsView: View {
             initialSelection = Self.noGenerationPrimaryCandidateID
         }
         _selectedGenerationPrimaryCandidateID = State(initialValue: initialSelection)
+        sttProviderSpecs = filteredProviderSpecs
         self.generationCandidates = generationCandidates.sorted { $0.id < $1.id }
         self.preserveGenerationPrimaryOnSave = preserveGenerationPrimaryOnSave
         self.onSave = onSave
@@ -78,9 +80,14 @@ struct SettingsView: View {
 
                 Section("モデル") {
                     Picker("STT", selection: binding(\.sttProvider)) {
-                        ForEach(sttProviders, id: \.self) { provider in
-                            Text(sttProviderLabel(provider)).tag(provider)
+                        ForEach(sttProviderSpecs, id: \.id) { spec in
+                            Text(spec.displayName).tag(spec.id)
                         }
+                    }
+                    if let sttHint = sttCredentialHint(provider: config.sttProvider) {
+                        Text(sttHint)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
                     }
                     Picker("LLM", selection: binding(\.llmModel)) {
                         ForEach(llmModels, id: \.self) { model in
@@ -146,17 +153,6 @@ struct SettingsView: View {
         }
     }
 
-    private func sttProviderLabel(_ provider: STTProvider) -> String {
-        switch provider {
-        case .deepgram:
-            return "Deepgram (Streaming)"
-        case .whisper:
-            return "Whisper (OpenAI)"
-        case .appleSpeech:
-            return "Apple Speech (OS内蔵)"
-        }
-    }
-
     private func visionModeLabel(_ mode: VisionContextMode) -> String {
         switch mode {
         case .saveOnly:
@@ -202,6 +198,23 @@ struct SettingsView: View {
 
     private var shouldShowKeepExistingGenerationPrimaryOption: Bool {
         preserveGenerationPrimaryOnSave && config.generationPrimary != nil
+    }
+
+    private func sttCredentialHint(provider: STTProvider) -> String? {
+        switch provider {
+        case .deepgram:
+            if config.apiKeys.deepgram.isEmpty {
+                return "Deepgram APIキーが未設定です。録音開始前にAPI Keysで設定してください。"
+            }
+            return nil
+        case .whisper:
+            if config.apiKeys.openai.isEmpty {
+                return "Whisper(OpenAI)用に OpenAI APIキーが必要です。"
+            }
+            return nil
+        case .appleSpeech:
+            return "Apple Speech はOS権限のみで利用できます。"
+        }
     }
 }
 

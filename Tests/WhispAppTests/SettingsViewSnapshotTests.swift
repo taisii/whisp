@@ -90,6 +90,102 @@ final class SettingsViewSnapshotTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: outputURL.path))
     }
 
+    func testCaptureSettingsViewSTTProviderBeforeAfter() throws {
+        let beforeView = SettingsView(
+            config: Config(
+                apiKeys: APIKeys(deepgram: "dg", gemini: "gm", openai: "oa"),
+                shortcut: "Cmd+J",
+                inputLanguage: "ja",
+                recordingMode: .toggle,
+                sttProvider: .deepgram,
+                appPromptRules: [],
+                llmModel: .gpt5Nano,
+                context: ContextConfig(visionEnabled: true, visionMode: .ocr),
+                generationPrimary: nil
+            ),
+            generationCandidates: [],
+            preserveGenerationPrimaryOnSave: false,
+            onSave: { _ in },
+            onCancel: {}
+        )
+
+        let afterView = SettingsView(
+            config: Config(
+                apiKeys: APIKeys(deepgram: "dg", gemini: "gm", openai: "oa"),
+                shortcut: "Cmd+J",
+                inputLanguage: "ja",
+                recordingMode: .toggle,
+                sttProvider: .appleSpeech,
+                appPromptRules: [],
+                llmModel: .gpt5Nano,
+                context: ContextConfig(visionEnabled: true, visionMode: .ocr),
+                generationPrimary: nil
+            ),
+            generationCandidates: [],
+            preserveGenerationPrimaryOnSave: false,
+            onSave: { _ in },
+            onCancel: {}
+        )
+
+        let beforeBitmap = try renderSnapshot(view: beforeView)
+        let afterBitmap = try renderSnapshot(view: afterView)
+        let artifactDir = try makeArtifactDirectory()
+        let beforeURL = artifactDir.appendingPathComponent("settings_view_stt_provider_before.png")
+        let afterURL = artifactDir.appendingPathComponent("settings_view_stt_provider_after.png")
+        try pngData(from: beforeBitmap).write(to: beforeURL, options: .atomic)
+        try pngData(from: afterBitmap).write(to: afterURL, options: .atomic)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
+    func testCaptureSettingsViewSTTCredentialHintBeforeAfter() throws {
+        let beforeView = SettingsView(
+            config: Config(
+                apiKeys: APIKeys(deepgram: "dg", gemini: "gm", openai: ""),
+                shortcut: "Cmd+J",
+                inputLanguage: "ja",
+                recordingMode: .toggle,
+                sttProvider: .whisper,
+                appPromptRules: [],
+                llmModel: .gpt5Nano,
+                context: ContextConfig(visionEnabled: true, visionMode: .ocr),
+                generationPrimary: nil
+            ),
+            generationCandidates: [],
+            preserveGenerationPrimaryOnSave: false,
+            onSave: { _ in },
+            onCancel: {}
+        )
+
+        let afterView = SettingsView(
+            config: Config(
+                apiKeys: APIKeys(deepgram: "dg", gemini: "gm", openai: "oa"),
+                shortcut: "Cmd+J",
+                inputLanguage: "ja",
+                recordingMode: .toggle,
+                sttProvider: .whisper,
+                appPromptRules: [],
+                llmModel: .gpt5Nano,
+                context: ContextConfig(visionEnabled: true, visionMode: .ocr),
+                generationPrimary: nil
+            ),
+            generationCandidates: [],
+            preserveGenerationPrimaryOnSave: false,
+            onSave: { _ in },
+            onCancel: {}
+        )
+
+        let beforeBitmap = try renderSnapshot(view: beforeView)
+        let afterBitmap = try renderSnapshot(view: afterView)
+        let artifactDir = try makeArtifactDirectory()
+        let beforeURL = artifactDir.appendingPathComponent("settings_view_stt_hint_before.png")
+        let afterURL = artifactDir.appendingPathComponent("settings_view_stt_hint_after.png")
+        try pngData(from: beforeBitmap).write(to: beforeURL, options: .atomic)
+        try pngData(from: afterBitmap).write(to: afterURL, options: .atomic)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
     private func renderSnapshot(view: SettingsView) throws -> NSBitmapImageRep {
         let root = view.frame(width: CGFloat(width), height: CGFloat(height))
         let hosting = NSHostingView(rootView: root)

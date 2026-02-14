@@ -4,7 +4,10 @@ import WhispCore
 extension WhispCLI {
     static func runSTTFile(path: String) async throws {
         let config = try loadConfig()
-        let key = try APIKeyResolver.sttKey(config: config, provider: .deepgram)
+        let credential = try APIKeyResolver.sttCredential(config: config, provider: .deepgram)
+        guard case let .apiKey(key) = credential else {
+            throw AppError.invalidArgument("Deepgram APIキーが未設定です")
+        }
 
         let wavData = try Data(contentsOf: URL(fileURLWithPath: path))
         let audio = try parsePCM16MonoWAV(wavData)
@@ -34,7 +37,10 @@ extension WhispCLI {
 
     static func runSTTStreamFile(path: String, chunkMs: Int, realtime: Bool) async throws {
         let config = try loadConfig()
-        let key = try APIKeyResolver.sttKey(config: config, provider: .deepgram)
+        let credential = try APIKeyResolver.sttCredential(config: config, provider: .deepgram)
+        guard case let .apiKey(key) = credential else {
+            throw AppError.invalidArgument("Deepgram APIキーが未設定です")
+        }
 
         let wavData = try Data(contentsOf: URL(fileURLWithPath: path))
         let audio = try parsePCM16MonoWAV(wavData)

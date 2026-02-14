@@ -4,15 +4,18 @@ import WhispCore
 extension WhispCLI {
     static func runSTTCaseBenchmark(options: STTBenchmarkOptions) async throws {
         let config = try loadConfig()
-        if options.sttProvider != .deepgram, options.sttMode == .stream {
-            throw AppError.invalidArgument("--stt stream は deepgram のみ対応です (provider=\(options.sttProvider.rawValue))")
+        if options.sttMode == .stream, !STTProviderCatalog.supportsStreaming(options.sttProvider) {
+            throw AppError.invalidArgument("--stt stream は provider=\(options.sttProvider.rawValue) では未対応です")
         }
-        let key = try APIKeyResolver.sttKey(config: config, provider: options.sttProvider)
+        if options.sttMode == .rest, !STTProviderCatalog.supportsREST(options.sttProvider) {
+            throw AppError.invalidArgument("--stt rest は provider=\(options.sttProvider.rawValue) では未対応です")
+        }
+        let credential = try APIKeyResolver.sttCredential(config: config, provider: options.sttProvider)
         let allCases = try loadManualBenchmarkCases(path: options.jsonlPath)
         let selectedCases = options.limit.map { Array(allCases.prefix($0)) } ?? allCases
         let runID = defaultBenchmarkRunID(kind: .stt)
         let sttExecutionProfile = "file_replay_realtime"
-        let benchmarkWorkers = resolveBenchmarkWorkers(options.benchmarkWorkers)
+        let benchmarkWorkers = resolvedSTTBenchmarkWorkers(options: options)
 
         print("mode: stt_case_benchmark")
         print("jsonl: \(options.jsonlPath)")
@@ -24,6 +27,9 @@ extension WhispCLI {
         print("realtime: \(options.realtime)")
         print("stt_execution_profile: \(sttExecutionProfile)")
         print("benchmark_workers: \(benchmarkWorkers)")
+        if options.sttProvider == .appleSpeech, options.sttMode == .stream, benchmarkWorkers == 1 {
+            print("note: apple_speech stream は安定性のため benchmark_workers を1に制限します")
+        }
         print("min_audio_seconds: \(String(format: "%.2f", options.minAudioSeconds))")
         print("use_cache: \(options.useCache)")
         print("")
@@ -73,8 +79,9 @@ extension WhispCLI {
                 runID: runID,
                 selectedCases: selectedCases,
                 options: options,
+                workers: benchmarkWorkers,
                 config: config,
-                apiKey: key,
+                credential: credential,
                 sttExecutionProfile: sttExecutionProfile,
                 recorder: recorder
             ) { outcome in
@@ -217,15 +224,16 @@ extension WhispCLI {
         runID: String,
         selectedCases: [ManualBenchmarkCase],
         options: STTBenchmarkOptions,
+        workers: Int,
         config: Config,
-        apiKey: String,
+        credential: STTCredential,
         sttExecutionProfile: String,
         recorder: BenchmarkRunRecorder,
         onOutcome: @escaping @Sendable (STTCaseWorkerOutcome) async throws -> Void
     ) async throws {
         try await runBenchmarkCaseWorkers(
             cases: selectedCases,
-            workers: options.benchmarkWorkers
+            workers: workers
         ) { _, item in
             try recorder.markCaseStarted(caseID: item.id)
             return await executeSTTCaseBenchmarkWorker(
@@ -233,7 +241,7 @@ extension WhispCLI {
                 item: item,
                 options: options,
                 config: config,
-                apiKey: apiKey,
+                credential: credential,
                 sttExecutionProfile: sttExecutionProfile
             )
         } onResult: { outcome in
@@ -241,12 +249,20 @@ extension WhispCLI {
         }
     }
 
+    private static func resolvedSTTBenchmarkWorkers(options: STTBenchmarkOptions) -> Int {
+        let requested = resolveBenchmarkWorkers(options.benchmarkWorkers)
+        if options.sttProvider == .appleSpeech, options.sttMode == .stream {
+            return 1
+        }
+        return requested
+    }
+
     private static func executeSTTCaseBenchmarkWorker(
         runID: String,
         item: ManualBenchmarkCase,
         options: STTBenchmarkOptions,
         config: Config,
-        apiKey: String,
+        credential: STTCredential,
         sttExecutionProfile: String
     ) async -> STTCaseWorkerOutcome {
         let caseStartedAtMs = nowEpochMs()
@@ -394,7 +410,7 @@ extension WhispCLI {
                 cacheEndedAtMs = nowEpochMs()
                 let result = try await runSTTInference(
                     provider: options.sttProvider,
-                    apiKey: apiKey,
+                    credential: credential,
                     audio: audio,
                     languageHint: config.inputLanguage,
                     mode: options.sttMode,

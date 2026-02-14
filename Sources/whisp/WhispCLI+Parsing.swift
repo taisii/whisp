@@ -222,7 +222,7 @@ extension WhispCLI {
             if item == "--stt-provider" {
                 let raw = try parser.value(for: "--stt-provider")
                 guard let parsed = STTProvider(rawValue: raw) else {
-                    throw AppError.invalidArgument("--stt-provider は deepgram|whisper|apple_speech を指定してください")
+                    throw AppError.invalidArgument("--stt-provider は \(STTProviderCatalog.allowedProviderRawValueText()) を指定してください")
                 }
                 sttProvider = parsed
                 continue

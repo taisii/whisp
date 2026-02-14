@@ -526,6 +526,7 @@ private final class FakeSTTService: STTService, @unchecked Sendable {
             usage: nil,
             trace: STTTraceFactory.singleAttemptTrace(
                 provider: "deepgram",
+                transport: .rest,
                 route: .rest,
                 kind: .rest,
                 eventStartMs: 100,

@@ -287,6 +287,7 @@ final class PipelineRunner {
                             status: stt.trace.mainSpan.status
                         ),
                         provider: stt.trace.provider,
+                        transport: stt.trace.transport,
                         route: stt.trace.route,
                         source: stt.trace.mainSpan.source,
                         textChars: stt.trace.mainSpan.textChars,

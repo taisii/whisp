@@ -196,6 +196,7 @@ final class DebugViewSnapshotTests: XCTestCase {
                     status: .ok
                 ),
                 provider: STTProvider.deepgram.rawValue,
+                transport: .websocket,
                 route: .streamingFallbackREST,
                 source: "rest_fallback",
                 textChars: 8,

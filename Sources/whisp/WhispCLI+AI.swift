@@ -1,6 +1,7 @@
 import Foundation
 import ImageIO
 #if canImport(Speech)
+import AVFoundation
 import Speech
 #endif
 import Vision
@@ -9,7 +10,7 @@ import WhispCore
 extension WhispCLI {
     static func runSTTInference(
         provider: STTProvider,
-        apiKey: String,
+        credential: STTCredential,
         audio: AudioData,
         languageHint: String,
         mode: STTMode,
@@ -28,6 +29,7 @@ extension WhispCLI {
 
         switch provider {
         case .deepgram:
+            let apiKey = try resolveAPIKey(credential, provider: provider)
             switch mode {
             case .rest:
                 let replayStartedAtMs: Int64?
@@ -120,85 +122,247 @@ extension WhispCLI {
                 )
             }
         case .whisper:
-            guard mode == .rest else {
-                throw AppError.invalidArgument("whisper は --stt rest のみ対応です")
-            }
-            let replayStartedAtMs: Int64?
-            let replayEndedAtMs: Int64?
-            if realtime {
-                replayStartedAtMs = nowEpochMs()
-                let durationNs = audioReplayDurationNanoseconds(audio: audio, sampleRate: sampleRate)
-                if durationNs > 0 {
-                    try? await Task.sleep(nanoseconds: durationNs)
+            let apiKey = try resolveAPIKey(credential, provider: provider)
+            switch mode {
+            case .rest:
+                let replayStartedAtMs: Int64?
+                let replayEndedAtMs: Int64?
+                if realtime {
+                    replayStartedAtMs = nowEpochMs()
+                    let durationNs = audioReplayDurationNanoseconds(audio: audio, sampleRate: sampleRate)
+                    if durationNs > 0 {
+                        try? await Task.sleep(nanoseconds: durationNs)
+                    }
+                    replayEndedAtMs = nowEpochMs()
+                } else {
+                    replayStartedAtMs = nil
+                    replayEndedAtMs = nil
                 }
-                replayEndedAtMs = nowEpochMs()
-            } else {
-                replayStartedAtMs = nil
-                replayEndedAtMs = nil
+                let attemptStartedAtMs = nowEpochMs()
+                let startedAt = DispatchTime.now()
+                let result = try await WhisperClient().transcribe(
+                    apiKey: apiKey,
+                    sampleRate: sampleRate,
+                    audio: audio.pcmBytes,
+                    language: language
+                )
+                let total = elapsedMs(since: startedAt)
+                let attemptEndedAtMs = nowEpochMs()
+                return (
+                    result.transcript,
+                    total,
+                    total,
+                    replayStartedAtMs,
+                    replayEndedAtMs,
+                    [BenchmarkSTTAttempt(
+                        kind: "rest",
+                        status: .ok,
+                        startedAtMs: attemptStartedAtMs,
+                        endedAtMs: attemptEndedAtMs
+                    )]
+                )
+            case .stream:
+                let stream = OpenAIRealtimeStreamingClient()
+                let chunkSamples = max(1, sampleRate * chunkMs / 1000)
+                let chunkBytes = chunkSamples * MemoryLayout<Int16>.size
+
+                try await stream.start(
+                    apiKey: apiKey,
+                    sampleRate: sampleRate,
+                    language: language
+                )
+                let replayStartedAtMs = nowEpochMs()
+                let sendAttemptStartedAtMs = replayStartedAtMs
+                let sendStartedAt = DispatchTime.now()
+                var offset = 0
+                while offset < audio.pcmBytes.count {
+                    let end = min(offset + chunkBytes, audio.pcmBytes.count)
+                    await stream.enqueueAudioChunk(audio.pcmBytes.subdata(in: offset..<end))
+                    if realtime {
+                        let frameCount = (end - offset) / MemoryLayout<Int16>.size
+                        let seconds = Double(frameCount) / Double(sampleRate)
+                        let nanoseconds = UInt64(seconds * 1_000_000_000)
+                        if nanoseconds > 0 {
+                            try? await Task.sleep(nanoseconds: nanoseconds)
+                        }
+                    }
+                    offset = end
+                }
+                let sendMs = elapsedMs(since: sendStartedAt)
+                let replayEndedAtMs = nowEpochMs()
+                let sendAttemptEndedAtMs = replayEndedAtMs
+                let finalizeStartedAt = DispatchTime.now()
+                let finalizeAttemptStartedAtMs = nowEpochMs()
+                let result = try await stream.finish()
+                let finalizeMs = elapsedMs(since: finalizeStartedAt)
+                let finalizeAttemptEndedAtMs = nowEpochMs()
+                return (
+                    result.transcript,
+                    sendMs + finalizeMs,
+                    finalizeMs,
+                    replayStartedAtMs,
+                    replayEndedAtMs,
+                    [
+                        BenchmarkSTTAttempt(
+                            kind: "stream_send",
+                            status: .ok,
+                            startedAtMs: sendAttemptStartedAtMs,
+                            endedAtMs: sendAttemptEndedAtMs
+                        ),
+                        BenchmarkSTTAttempt(
+                            kind: "stream_finalize",
+                            status: .ok,
+                            startedAtMs: finalizeAttemptStartedAtMs,
+                            endedAtMs: finalizeAttemptEndedAtMs
+                        ),
+                    ]
+                )
             }
-            let attemptStartedAtMs = nowEpochMs()
-            let startedAt = DispatchTime.now()
-            let result = try await WhisperClient().transcribe(
-                apiKey: apiKey,
-                sampleRate: sampleRate,
-                audio: audio.pcmBytes,
-                language: language
-            )
-            let total = elapsedMs(since: startedAt)
-            let attemptEndedAtMs = nowEpochMs()
-            return (
-                result.transcript,
-                total,
-                total,
-                replayStartedAtMs,
-                replayEndedAtMs,
-                [BenchmarkSTTAttempt(
-                    kind: "rest",
-                    status: .ok,
-                    startedAtMs: attemptStartedAtMs,
-                    endedAtMs: attemptEndedAtMs
-                )]
-            )
         case .appleSpeech:
-            guard mode == .rest else {
-                throw AppError.invalidArgument("apple_speech は --stt rest のみ対応です")
-            }
-            let replayStartedAtMs: Int64?
-            let replayEndedAtMs: Int64?
-            if realtime {
-                replayStartedAtMs = nowEpochMs()
-                let durationNs = audioReplayDurationNanoseconds(audio: audio, sampleRate: sampleRate)
-                if durationNs > 0 {
-                    try? await Task.sleep(nanoseconds: durationNs)
+            switch mode {
+            case .rest:
+                let replayStartedAtMs: Int64?
+                let replayEndedAtMs: Int64?
+                if realtime {
+                    replayStartedAtMs = nowEpochMs()
+                    let durationNs = audioReplayDurationNanoseconds(audio: audio, sampleRate: sampleRate)
+                    if durationNs > 0 {
+                        try? await Task.sleep(nanoseconds: durationNs)
+                    }
+                    replayEndedAtMs = nowEpochMs()
+                } else {
+                    replayStartedAtMs = nil
+                    replayEndedAtMs = nil
                 }
-                replayEndedAtMs = nowEpochMs()
-            } else {
-                replayStartedAtMs = nil
-                replayEndedAtMs = nil
+                let attemptStartedAtMs = nowEpochMs()
+                let startedAt = DispatchTime.now()
+                let transcript = try await transcribeWithAppleSpeech(
+                    sampleRate: sampleRate,
+                    audio: audio.pcmBytes,
+                    language: language
+                )
+                let total = elapsedMs(since: startedAt)
+                let attemptEndedAtMs = nowEpochMs()
+                return (
+                    transcript,
+                    total,
+                    total,
+                    replayStartedAtMs,
+                    replayEndedAtMs,
+                    [BenchmarkSTTAttempt(
+                        kind: "rest",
+                        status: .ok,
+                        startedAtMs: attemptStartedAtMs,
+                        endedAtMs: attemptEndedAtMs
+                    )]
+                )
+            case .stream:
+#if canImport(Speech)
+                let stream = try await AppleSpeechStreamingRecognizer(sampleRate: sampleRate, language: language)
+                let chunkSamples = max(1, sampleRate * chunkMs / 1000)
+                let chunkBytes = chunkSamples * MemoryLayout<Int16>.size
+                let replayStartedAtMs = nowEpochMs()
+                let sendAttemptStartedAtMs = replayStartedAtMs
+                let sendStartedAt = DispatchTime.now()
+                var offset = 0
+                while offset < audio.pcmBytes.count {
+                    let end = min(offset + chunkBytes, audio.pcmBytes.count)
+                    await stream.enqueue(audio.pcmBytes.subdata(in: offset..<end))
+                    if realtime {
+                        let frameCount = (end - offset) / MemoryLayout<Int16>.size
+                        let seconds = Double(frameCount) / Double(sampleRate)
+                        let nanoseconds = UInt64(seconds * 1_000_000_000)
+                        if nanoseconds > 0 {
+                            try? await Task.sleep(nanoseconds: nanoseconds)
+                        }
+                    }
+                    offset = end
+                }
+                let sendMs = elapsedMs(since: sendStartedAt)
+                let replayEndedAtMs = nowEpochMs()
+                let sendAttemptEndedAtMs = replayEndedAtMs
+                let finalizeStartedAt = DispatchTime.now()
+                let finalizeAttemptStartedAtMs = nowEpochMs()
+                do {
+                    let transcript = try await stream.finish()
+                    let finalizeMs = elapsedMs(since: finalizeStartedAt)
+                    let finalizeAttemptEndedAtMs = nowEpochMs()
+                    return (
+                        transcript,
+                        sendMs + finalizeMs,
+                        finalizeMs,
+                        replayStartedAtMs,
+                        replayEndedAtMs,
+                        [
+                            BenchmarkSTTAttempt(
+                                kind: "stream_send",
+                                status: .ok,
+                                startedAtMs: sendAttemptStartedAtMs,
+                                endedAtMs: sendAttemptEndedAtMs
+                            ),
+                            BenchmarkSTTAttempt(
+                                kind: "stream_finalize",
+                                status: .ok,
+                                startedAtMs: finalizeAttemptStartedAtMs,
+                                endedAtMs: finalizeAttemptEndedAtMs
+                            ),
+                        ]
+                    )
+                } catch {
+                    let finalizeAttemptEndedAtMs = nowEpochMs()
+                    let fallbackAttemptStartedAtMs = nowEpochMs()
+                    let transcript = try await transcribeWithAppleSpeech(
+                        sampleRate: sampleRate,
+                        audio: audio.pcmBytes,
+                        language: language
+                    )
+                    let fallbackAttemptEndedAtMs = nowEpochMs()
+                    let afterStopMs = Double(max(0, fallbackAttemptEndedAtMs - replayEndedAtMs))
+                    return (
+                        transcript,
+                        sendMs + afterStopMs,
+                        afterStopMs,
+                        replayStartedAtMs,
+                        replayEndedAtMs,
+                        [
+                            BenchmarkSTTAttempt(
+                                kind: "stream_send",
+                                status: .ok,
+                                startedAtMs: sendAttemptStartedAtMs,
+                                endedAtMs: sendAttemptEndedAtMs
+                            ),
+                            BenchmarkSTTAttempt(
+                                kind: "stream_finalize",
+                                status: .error,
+                                startedAtMs: finalizeAttemptStartedAtMs,
+                                endedAtMs: finalizeAttemptEndedAtMs,
+                                error: error.localizedDescription
+                            ),
+                            BenchmarkSTTAttempt(
+                                kind: "rest_fallback",
+                                status: .ok,
+                                startedAtMs: fallbackAttemptStartedAtMs,
+                                endedAtMs: fallbackAttemptEndedAtMs
+                            ),
+                        ]
+                    )
+                }
+#else
+                throw AppError.invalidArgument("この環境では Speech.framework が利用できません")
+#endif
             }
-            let attemptStartedAtMs = nowEpochMs()
-            let startedAt = DispatchTime.now()
-            let transcript = try await transcribeWithAppleSpeech(
-                sampleRate: sampleRate,
-                audio: audio.pcmBytes,
-                language: language
-            )
-            let total = elapsedMs(since: startedAt)
-            let attemptEndedAtMs = nowEpochMs()
-            return (
-                transcript,
-                total,
-                total,
-                replayStartedAtMs,
-                replayEndedAtMs,
-                [BenchmarkSTTAttempt(
-                    kind: "rest",
-                    status: .ok,
-                    startedAtMs: attemptStartedAtMs,
-                    endedAtMs: attemptEndedAtMs
-                )]
-            )
         }
+    }
+
+    private static func resolveAPIKey(_ credential: STTCredential, provider: STTProvider) throws -> String {
+        guard case let .apiKey(apiKey) = credential else {
+            throw AppError.invalidArgument("provider=\(provider.rawValue) は APIキー認証が必要です")
+        }
+        let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw AppError.invalidArgument("provider=\(provider.rawValue) の APIキーが空です")
+        }
+        return trimmed
     }
 
     private static func audioReplayDurationNanoseconds(audio: AudioData, sampleRate: Int) -> UInt64 {
@@ -593,18 +757,7 @@ extension WhispCLI {
         language: String?
     ) async throws -> String {
 #if canImport(Speech)
-        let status = await resolveSpeechAuthorizationStatus()
-        guard status == .authorized else {
-            throw AppError.invalidArgument(speechAuthorizationErrorMessage(status))
-        }
-
-        let locale = localeForSpeechLanguage(language)
-        guard let recognizer = SFSpeechRecognizer(locale: locale) else {
-            throw AppError.invalidArgument("Apple Speechが locale=\(locale.identifier) に対応していません")
-        }
-        guard recognizer.isAvailable else {
-            throw AppError.io("Apple Speechが現在利用できません")
-        }
+        let recognizer = try await resolveSpeechRecognizer(language: language)
 
         let normalizedSampleRate = max(sampleRate, 1)
         let wavData = buildWAVBytes(sampleRate: UInt32(normalizedSampleRate), pcmData: audio)
@@ -684,6 +837,217 @@ extension WhispCLI {
             return ""
         @unknown default:
             return "音声認識権限の状態を判定できませんでした"
+        }
+    }
+
+    private static func resolveSpeechRecognizer(language: String?) async throws -> SFSpeechRecognizer {
+        let status = await resolveSpeechAuthorizationStatus()
+        guard status == .authorized else {
+            throw AppError.invalidArgument(speechAuthorizationErrorMessage(status))
+        }
+
+        let locale = localeForSpeechLanguage(language)
+        guard let recognizer = SFSpeechRecognizer(locale: locale) else {
+            throw AppError.invalidArgument("Apple Speechが locale=\(locale.identifier) に対応していません")
+        }
+        guard recognizer.isAvailable else {
+            throw AppError.io("Apple Speechが現在利用できません")
+        }
+        return recognizer
+    }
+
+    private final class AppleSpeechStreamingRecognizer: @unchecked Sendable {
+        private final class StreamingState: @unchecked Sendable {
+            private let lock = NSLock()
+            private let sampleRate: Int
+            private var request: SFSpeechAudioBufferRecognitionRequest?
+            private var task: SFSpeechRecognitionTask?
+            private var recognizer: SFSpeechRecognizer?
+            private var completed = false
+            private var latestTranscript = ""
+            private var terminalError: Error?
+
+            init(sampleRate: Int) {
+                self.sampleRate = max(sampleRate, 1)
+            }
+
+            func activate(
+                request: SFSpeechAudioBufferRecognitionRequest,
+                task: SFSpeechRecognitionTask,
+                recognizer: SFSpeechRecognizer
+            ) {
+                lock.lock()
+                self.request = request
+                self.task = task
+                self.recognizer = recognizer
+                lock.unlock()
+            }
+
+            func append(_ chunk: Data) {
+                guard !chunk.isEmpty else {
+                    return
+                }
+
+                let request: SFSpeechAudioBufferRecognitionRequest?
+                lock.lock()
+                let canAppend = !completed && terminalError == nil
+                request = canAppend ? self.request : nil
+                lock.unlock()
+                guard canAppend, let request else {
+                    return
+                }
+
+                guard let buffer = makePCMBuffer(from: chunk, sampleRate: sampleRate) else {
+                    setTerminalError(AppError.encode("Apple Speech streaming chunk の変換に失敗しました"))
+                    return
+                }
+                request.append(buffer)
+            }
+
+            func finish(timeoutNanoseconds: UInt64 = 8_000_000_000) async throws -> String {
+                endAudio()
+                let started = DispatchTime.now().uptimeNanoseconds
+                while true {
+                    let snapshot = stateSnapshot()
+                    if let error = snapshot.error {
+                        throw error
+                    }
+                    if snapshot.completed {
+                        return snapshot.transcript
+                    }
+                    let now = DispatchTime.now().uptimeNanoseconds
+                    if now - started >= timeoutNanoseconds {
+                        if snapshot.transcript.isEmpty {
+                            throw AppError.io("Apple Speech ストリーミング最終結果の待機がタイムアウトしました")
+                        }
+                        return snapshot.transcript
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+
+            func handle(result: SFSpeechRecognitionResult?, error: Error?) {
+                if let error {
+                    setTerminalError(error)
+                    return
+                }
+                guard let result else {
+                    return
+                }
+
+                let transcript = result.bestTranscription.formattedString
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                lock.lock()
+                if !transcript.isEmpty {
+                    latestTranscript = transcript
+                }
+                if result.isFinal {
+                    completed = true
+                    request = nil
+                    task = nil
+                    recognizer = nil
+                }
+                lock.unlock()
+            }
+
+            func cancel() {
+                let task: SFSpeechRecognitionTask?
+                let request: SFSpeechAudioBufferRecognitionRequest?
+                lock.lock()
+                task = self.task
+                request = self.request
+                self.task = nil
+                self.request = nil
+                recognizer = nil
+                completed = true
+                lock.unlock()
+                request?.endAudio()
+                task?.cancel()
+            }
+
+            private func setTerminalError(_ error: Error) {
+                let task: SFSpeechRecognitionTask?
+                lock.lock()
+                terminalError = error
+                completed = true
+                task = self.task
+                self.task = nil
+                request = nil
+                recognizer = nil
+                lock.unlock()
+                task?.cancel()
+            }
+
+            private func stateSnapshot() -> (completed: Bool, transcript: String, error: Error?) {
+                lock.lock()
+                let snapshot = (completed: completed, transcript: latestTranscript, error: terminalError)
+                lock.unlock()
+                return snapshot
+            }
+
+            private func endAudio() {
+                let request: SFSpeechAudioBufferRecognitionRequest?
+                lock.lock()
+                request = self.request
+                lock.unlock()
+                request?.endAudio()
+            }
+
+            private func makePCMBuffer(from chunk: Data, sampleRate: Int) -> AVAudioPCMBuffer? {
+                let usableBytes = chunk.count - (chunk.count % MemoryLayout<Int16>.size)
+                guard usableBytes > 0 else {
+                    return nil
+                }
+
+                guard let format = AVAudioFormat(
+                    commonFormat: .pcmFormatInt16,
+                    sampleRate: Double(sampleRate),
+                    channels: 1,
+                    interleaved: false
+                ) else {
+                    return nil
+                }
+
+                let frameCount = AVAudioFrameCount(usableBytes / MemoryLayout<Int16>.size)
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount),
+                      let channel = buffer.int16ChannelData?.pointee
+                else {
+                    return nil
+                }
+                buffer.frameLength = frameCount
+                chunk.withUnsafeBytes { rawBuffer in
+                    guard let base = rawBuffer.baseAddress else {
+                        return
+                    }
+                    memcpy(channel, base, usableBytes)
+                }
+                return buffer
+            }
+        }
+
+        private let state: StreamingState
+
+        init(sampleRate: Int, language: String?) async throws {
+            let recognizer = try await WhispCLI.resolveSpeechRecognizer(language: language)
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            request.shouldReportPartialResults = true
+            request.requiresOnDeviceRecognition = true
+            let state = StreamingState(sampleRate: sampleRate)
+            let task = recognizer.recognitionTask(with: request) { result, error in
+                state.handle(result: result, error: error)
+            }
+            state.activate(request: request, task: task, recognizer: recognizer)
+            self.state = state
+        }
+
+        func enqueue(_ chunk: Data) async {
+            state.append(chunk)
+        }
+
+        func finish() async throws -> String {
+            defer { state.cancel() }
+            let transcript = try await state.finish()
+            return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
 #endif
