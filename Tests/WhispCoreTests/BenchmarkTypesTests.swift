@@ -94,8 +94,8 @@ final class BenchmarkTypesTests: XCTestCase {
                 common: BenchmarkRunCommonOptions(
                     sourceCasesPath: "/tmp/cases.jsonl"
                 ),
-                pairCandidateAID: "generation-a",
-                pairCandidateBID: "generation-b",
+                pairCanonicalID: BenchmarkPairwiseNormalizer.canonicalize("generation-a", "generation-b"),
+                pairExecutionOrder: BenchmarkPairExecutionOrder(firstCandidateID: "generation-a", secondCandidateID: "generation-b"),
                 pairJudgeModel: "gpt-5-nano",
                 llmModel: "gpt-5-nano|gemini-2.5-flash-lite"
             )),

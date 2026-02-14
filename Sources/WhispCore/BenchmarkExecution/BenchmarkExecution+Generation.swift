@@ -1,7 +1,6 @@
 import Foundation
-import WhispCore
 
-extension WhispCLI {
+extension BenchmarkExecutor {
     static func runGenerationCaseBenchmark(options: GenerationBenchmarkOptions) async throws {
         let config = try loadConfig()
         let resolved = options.modelOverride ?? config.llmModel
@@ -632,7 +631,7 @@ extension WhispCLI {
                         PairwiseJudgeInputMeta(
                             visionImagePath: judgeImageInput.path,
                             visionImageMimeType: judgeImageInput.mimeType,
-                            imageAttached: WhispCLI.pairwiseJudgeHasImagePayload(
+                            imageAttached: BenchmarkExecutor.pairwiseJudgeHasImagePayload(
                                 visionImageData: judgeImageInput.data,
                                 visionImageMimeType: judgeImageInput.mimeType
                             ),

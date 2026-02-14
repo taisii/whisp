@@ -547,8 +547,8 @@ public struct BenchmarkGenerationRunOptions: Codable, Equatable, Sendable {
 
 public struct BenchmarkGenerationPairwiseRunOptions: Codable, Equatable, Sendable {
     public var common: BenchmarkRunCommonOptions
-    public var pairCandidateAID: String
-    public var pairCandidateBID: String
+    public var pairCanonicalID: BenchmarkPairCanonicalID
+    public var pairExecutionOrder: BenchmarkPairExecutionOrder
     public var pairJudgeModel: String
     public var llmModel: String?
     public var pairCandidateASnapshot: BenchmarkCandidateSnapshot?
@@ -556,21 +556,72 @@ public struct BenchmarkGenerationPairwiseRunOptions: Codable, Equatable, Sendabl
 
     public init(
         common: BenchmarkRunCommonOptions,
-        pairCandidateAID: String,
-        pairCandidateBID: String,
+        pairCanonicalID: BenchmarkPairCanonicalID,
+        pairExecutionOrder: BenchmarkPairExecutionOrder,
         pairJudgeModel: String,
         llmModel: String? = nil,
         pairCandidateASnapshot: BenchmarkCandidateSnapshot? = nil,
         pairCandidateBSnapshot: BenchmarkCandidateSnapshot? = nil
     ) {
         self.common = common
-        self.pairCandidateAID = pairCandidateAID
-        self.pairCandidateBID = pairCandidateBID
+        self.pairCanonicalID = pairCanonicalID
+        self.pairExecutionOrder = pairExecutionOrder
         self.pairJudgeModel = pairJudgeModel
         self.llmModel = llmModel
         self.pairCandidateASnapshot = pairCandidateASnapshot
         self.pairCandidateBSnapshot = pairCandidateBSnapshot
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case common
+        case pairCanonicalID
+        case pairExecutionOrder
+        case pairCandidateAID
+        case pairCandidateBID
+        case pairJudgeModel
+        case llmModel
+        case pairCandidateASnapshot
+        case pairCandidateBSnapshot
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        common = try container.decode(BenchmarkRunCommonOptions.self, forKey: .common)
+        pairJudgeModel = try container.decode(String.self, forKey: .pairJudgeModel)
+        llmModel = try container.decodeIfPresent(String.self, forKey: .llmModel)
+        pairCandidateASnapshot = try container.decodeIfPresent(BenchmarkCandidateSnapshot.self, forKey: .pairCandidateASnapshot)
+        pairCandidateBSnapshot = try container.decodeIfPresent(BenchmarkCandidateSnapshot.self, forKey: .pairCandidateBSnapshot)
+
+        if let canonical = try container.decodeIfPresent(BenchmarkPairCanonicalID.self, forKey: .pairCanonicalID),
+           let execution = try container.decodeIfPresent(BenchmarkPairExecutionOrder.self, forKey: .pairExecutionOrder)
+        {
+            pairCanonicalID = canonical
+            pairExecutionOrder = execution
+            return
+        }
+
+        let legacyAID = try container.decode(String.self, forKey: .pairCandidateAID)
+        let legacyBID = try container.decode(String.self, forKey: .pairCandidateBID)
+        let normalized = BenchmarkPairwiseNormalizer.normalize(first: legacyAID, second: legacyBID)
+        pairCanonicalID = normalized.canonical
+        pairExecutionOrder = normalized.execution
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(common, forKey: .common)
+        try container.encode(pairCanonicalID, forKey: .pairCanonicalID)
+        try container.encode(pairExecutionOrder, forKey: .pairExecutionOrder)
+        try container.encode(pairExecutionOrder.firstCandidateID, forKey: .pairCandidateAID)
+        try container.encode(pairExecutionOrder.secondCandidateID, forKey: .pairCandidateBID)
+        try container.encode(pairJudgeModel, forKey: .pairJudgeModel)
+        try container.encodeIfPresent(llmModel, forKey: .llmModel)
+        try container.encodeIfPresent(pairCandidateASnapshot, forKey: .pairCandidateASnapshot)
+        try container.encodeIfPresent(pairCandidateBSnapshot, forKey: .pairCandidateBSnapshot)
+    }
+
+    public var pairCandidateAID: String { pairExecutionOrder.firstCandidateID }
+    public var pairCandidateBID: String { pairExecutionOrder.secondCandidateID }
 }
 
 public struct BenchmarkVisionRunOptions: Codable, Equatable, Sendable {
@@ -774,6 +825,20 @@ public enum BenchmarkRunOptions: Codable, Equatable, Sendable {
     public var pairJudgeModel: String? {
         if case let .generationPairwise(value) = self {
             return value.pairJudgeModel
+        }
+        return nil
+    }
+
+    public var pairCanonicalID: BenchmarkPairCanonicalID? {
+        if case let .generationPairwise(value) = self {
+            return value.pairCanonicalID
+        }
+        return nil
+    }
+
+    public var pairExecutionOrder: BenchmarkPairExecutionOrder? {
+        if case let .generationPairwise(value) = self {
+            return value.pairExecutionOrder
         }
         return nil
     }

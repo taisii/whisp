@@ -1,7 +1,6 @@
 import Foundation
-import WhispCore
 
-extension WhispCLI {
+extension BenchmarkExecutor {
     static func runBenchmarkCompare(options: BenchmarkCompareOptions) async throws {
         let candidateStore = BenchmarkCandidateStore()
         try BenchmarkCandidateDefaults.ensureSeededAndNormalized(store: candidateStore)

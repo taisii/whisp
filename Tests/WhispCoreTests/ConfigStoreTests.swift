@@ -54,7 +54,7 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
     }
 
-    func testStrictDecodeRejectsMissingSTTPreset() throws {
+    func testLossyDecodeUsesDefaultForMissingSTTPreset() throws {
         let path = tempFile("config.json")
         let json = """
         {
@@ -77,10 +77,19 @@ final class ConfigStoreTests: XCTestCase {
         try data.write(to: path)
 
         let store = try ConfigStore(path: path)
-        XCTAssertThrowsError(try store.load())
+        let loaded = try store.load()
+        XCTAssertEqual(loaded.apiKeys.deepgram, "dg")
+        XCTAssertEqual(loaded.apiKeys.gemini, "gm")
+        XCTAssertEqual(loaded.apiKeys.openai, "oa")
+        XCTAssertEqual(loaded.shortcut, "Cmd+J")
+        XCTAssertEqual(loaded.inputLanguage, "ja")
+        XCTAssertEqual(loaded.recordingMode, .toggle)
+        XCTAssertEqual(loaded.llmModel, .gpt5Nano)
+        XCTAssertEqual(loaded.sttPreset, .deepgramStream)
+        XCTAssertEqual(loaded.context, ContextConfig())
     }
 
-    func testStrictDecodeRejectsMissingVisionMode() throws {
+    func testLossyDecodeKeepsContextFieldAndFallsBackInvalidVisionMode() throws {
         let path = tempFile("config.json")
         let json = """
         {
@@ -91,7 +100,8 @@ final class ConfigStoreTests: XCTestCase {
           },
           "appPromptRules" : [],
           "context" : {
-            "visionEnabled" : true
+            "visionEnabled" : false,
+            "visionMode" : "invalid_mode"
           },
           "inputLanguage" : "ja",
           "llmModel" : "gpt-5-nano",
@@ -107,6 +117,45 @@ final class ConfigStoreTests: XCTestCase {
         try data.write(to: path)
 
         let store = try ConfigStore(path: path)
-        XCTAssertThrowsError(try store.load())
+        let loaded = try store.load()
+        XCTAssertEqual(loaded.context.visionEnabled, false)
+        XCTAssertEqual(loaded.context.visionMode, .saveOnly)
+    }
+
+    func testLossyDecodeKeepsValidSTTSegmentationValues() throws {
+        let path = tempFile("config.json")
+        let json = """
+        {
+          "apiKeys" : {},
+          "appPromptRules" : [],
+          "context" : {
+            "visionEnabled" : true,
+            "visionMode" : "ocr"
+          },
+          "inputLanguage" : "ja",
+          "llmModel" : "gpt-5-nano",
+          "recordingMode" : "toggle",
+          "shortcut" : "Cmd+J",
+          "sttPreset" : "deepgram_stream",
+          "sttSegmentation" : {
+            "silenceMs" : "oops",
+            "maxSegmentMs" : 11000,
+            "preRollMs" : 150,
+            "livePreviewEnabled" : true
+          }
+        }
+        """
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("JSON文字列のエンコードに失敗")
+            return
+        }
+        try data.write(to: path)
+
+        let store = try ConfigStore(path: path)
+        let loaded = try store.load()
+        XCTAssertEqual(loaded.sttSegmentation.silenceMs, 700)
+        XCTAssertEqual(loaded.sttSegmentation.maxSegmentMs, 11_000)
+        XCTAssertEqual(loaded.sttSegmentation.preRollMs, 150)
+        XCTAssertEqual(loaded.sttSegmentation.livePreviewEnabled, true)
     }
 }

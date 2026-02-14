@@ -773,8 +773,8 @@ final class BenchmarkViewModelTests: XCTestCase {
                         evaluatorVersion: "pairwise-v1",
                         codeVersion: "dev"
                     ),
-                    pairCandidateAID: candidateA.id,
-                    pairCandidateBID: candidateB.id,
+                    pairCanonicalID: BenchmarkPairwiseNormalizer.canonicalize(candidateA.id, candidateB.id),
+                    pairExecutionOrder: BenchmarkPairExecutionOrder(firstCandidateID: candidateA.id, secondCandidateID: candidateB.id),
                     pairJudgeModel: LLMModel.gpt4oMini.rawValue
                 )),
                 benchmarkKey: BenchmarkKey(
@@ -916,8 +916,8 @@ final class BenchmarkViewModelTests: XCTestCase {
                 updatedAt: "2026-02-12T10:00:00.000Z",
                 options: .generationPairwise(BenchmarkGenerationPairwiseRunOptions(
                     common: BenchmarkRunCommonOptions(sourceCasesPath: casesPath.path),
-                    pairCandidateAID: candidateA.id,
-                    pairCandidateBID: candidateB.id,
+                    pairCanonicalID: BenchmarkPairwiseNormalizer.canonicalize(candidateA.id, candidateB.id),
+                    pairExecutionOrder: BenchmarkPairExecutionOrder(firstCandidateID: candidateA.id, secondCandidateID: candidateB.id),
                     pairJudgeModel: LLMModel.gemini25FlashLite.rawValue
                 )),
                 metrics: .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(
@@ -944,8 +944,8 @@ final class BenchmarkViewModelTests: XCTestCase {
                 updatedAt: "2026-02-12T10:05:00.000Z",
                 options: .generationPairwise(BenchmarkGenerationPairwiseRunOptions(
                     common: BenchmarkRunCommonOptions(sourceCasesPath: casesPath.path),
-                    pairCandidateAID: candidateA.id,
-                    pairCandidateBID: candidateB.id,
+                    pairCanonicalID: BenchmarkPairwiseNormalizer.canonicalize(candidateA.id, candidateB.id),
+                    pairExecutionOrder: BenchmarkPairExecutionOrder(firstCandidateID: candidateA.id, secondCandidateID: candidateB.id),
                     pairJudgeModel: LLMModel.gpt4oMini.rawValue
                 )),
                 metrics: .generationPairwise(BenchmarkGenerationPairwiseRunMetrics(

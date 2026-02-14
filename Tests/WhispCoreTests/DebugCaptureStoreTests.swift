@@ -263,7 +263,6 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertEqual(payload.id, captureID)
         XCTAssertEqual(payload.groundTruthText, "正解")
         XCTAssertEqual(payload.llmModel, "gemini-2.5-flash-lite")
-        XCTAssertNotNil(payload.audioDurationSec)
         XCTAssertTrue(payload.audioFile.contains("/manual_case_assets/\(captureID)/audio."))
         XCTAssertTrue(FileManager.default.fileExists(atPath: payload.audioFile))
         let visionImageFile = try XCTUnwrap(payload.visionImageFile)

@@ -77,8 +77,8 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                         evaluatorVersion: "pairwise-v1",
                         codeVersion: "dev"
                     ),
-                    pairCandidateAID: candidateB.id,
-                    pairCandidateBID: candidateA.id,
+                    pairCanonicalID: BenchmarkPairwiseNormalizer.canonicalize(candidateB.id, candidateA.id),
+                    pairExecutionOrder: BenchmarkPairExecutionOrder(firstCandidateID: candidateB.id, secondCandidateID: candidateA.id),
                     pairJudgeModel: "gpt-4o-mini"
                 )),
                 benchmarkKey: BenchmarkKey(
@@ -614,8 +614,8 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
                         evaluatorVersion: "pairwise-v1",
                         codeVersion: "dev"
                     ),
-                    pairCandidateAID: generationA.id,
-                    pairCandidateBID: generationB.id,
+                    pairCanonicalID: BenchmarkPairwiseNormalizer.canonicalize(generationA.id, generationB.id),
+                    pairExecutionOrder: BenchmarkPairExecutionOrder(firstCandidateID: generationA.id, secondCandidateID: generationB.id),
                     pairJudgeModel: "gpt-4o-mini"
                 )),
                 benchmarkKey: BenchmarkKey(

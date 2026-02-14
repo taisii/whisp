@@ -272,22 +272,28 @@ final class BenchmarkViewModel: ObservableObject {
     private let store: BenchmarkStore
     private let candidateStore: BenchmarkCandidateStore
     private let integrityStore: BenchmarkIntegrityStore
+    private let datasetStore: BenchmarkDatasetStore
+    private let executionService: BenchmarkExecutionService
     private let benchmarkDatasetPath: String
     private let caseEventAnalyzer = BenchmarkCaseEventAnalyzer()
     private var caseAudioPlayer: AVAudioPlayer?
     private var caseAudioPollingTimer: Timer?
-    private var integrityRecordsByCaseID: [String: IntegrityDatasetCaseRecord] = [:]
+    private var integrityRecordsByCaseID: [String: BenchmarkDatasetCaseRecord] = [:]
     private var integrityAutoScanTask: Task<Void, Never>?
 
     init(
         store: BenchmarkStore,
         candidateStore: BenchmarkCandidateStore = BenchmarkCandidateStore(),
         integrityStore: BenchmarkIntegrityStore = BenchmarkIntegrityStore(),
+        datasetStore: BenchmarkDatasetStore = BenchmarkDatasetStore(),
+        executionService: BenchmarkExecutionService = BenchmarkExecutionService(),
         datasetPathOverride: String? = nil
     ) {
         self.store = store
         self.candidateStore = candidateStore
         self.integrityStore = integrityStore
+        self.datasetStore = datasetStore
+        self.executionService = executionService
         benchmarkDatasetPath = Self.resolveDatasetPath(pathOverride: datasetPathOverride)
         synchronizeSelectionForCurrentTab()
     }
@@ -395,20 +401,16 @@ final class BenchmarkViewModel: ObservableObject {
         Task {
             defer { isExecutingBenchmark = false }
             do {
-        let output = try await Task.detached(priority: .userInitiated) {
-                    try Self.runCompareCommand(
-                        flow: .stt,
-                        datasetPath: dataset,
-                        candidateIDs: candidateIDs,
-                        judgeModel: judgeModel,
-                        force: force
-                    )
-                }.value
+                try await executionService.runCompare(request: BenchmarkExecutionRequest(
+                    flow: .stt,
+                    datasetPath: dataset,
+                    candidateIDs: candidateIDs,
+                    judgeModel: judgeModel?.rawValue,
+                    force: force
+                ))
                 try reloadAll()
                 setStatus("比較実行が完了しました。", isError: false, clearErrorLog: true)
-                if !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    benchmarkErrorLog = ""
-                }
+                benchmarkErrorLog = ""
             } catch {
                 let log = normalizedErrorLog(error.localizedDescription)
                 setStatus("比較実行に失敗: \(compactHeadline(for: log))", isError: true, errorLog: log)
@@ -446,21 +448,17 @@ final class BenchmarkViewModel: ObservableObject {
 
         Task {
             defer { isExecutingBenchmark = false }
-                do {
-                    let output = try await Task.detached(priority: .userInitiated) {
-                    try Self.runCompareCommand(
-                        flow: .generationBattle,
-                        datasetPath: dataset,
-                        candidateIDs: candidateIDs,
-                        judgeModel: judgeModel,
-                        force: force
-                    )
-                    }.value
-                    try reloadAll()
+            do {
+                try await executionService.runCompare(request: BenchmarkExecutionRequest(
+                    flow: .generationBattle,
+                    datasetPath: dataset,
+                    candidateIDs: candidateIDs,
+                    judgeModel: judgeModel?.rawValue,
+                    force: force
+                ))
+                try reloadAll()
                 setStatus("比較実行が完了しました。", isError: false, clearErrorLog: true)
-                if !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    benchmarkErrorLog = ""
-                }
+                benchmarkErrorLog = ""
             } catch {
                 let log = normalizedErrorLog(error.localizedDescription)
                 setStatus("比較実行に失敗: \(compactHeadline(for: log))", isError: true, errorLog: log)
@@ -1302,6 +1300,7 @@ final class BenchmarkViewModel: ObservableObject {
             return
         }
 
+        let selectedCanonicalPair = BenchmarkPairwiseNormalizer.canonicalize(candidateAID, candidateBID)
         let normalizedDatasetPath = normalizePath(benchmarkDatasetPath)
         let runs = try store.listRuns(limit: 2_000)
         let matching = runs.filter { run in
@@ -1310,7 +1309,13 @@ final class BenchmarkViewModel: ObservableObject {
             guard run.options.compareMode == .pairwise else { return false }
             guard normalizePath(run.options.sourceCasesPath) == normalizedDatasetPath else { return false }
             guard run.options.pairJudgeModel == generationPairJudgeModel.rawValue else { return false }
-            return run.options.pairCandidateAID == candidateAID && run.options.pairCandidateBID == candidateBID
+            if let canonical = run.options.pairCanonicalID {
+                return canonical == selectedCanonicalPair
+            }
+            return BenchmarkPairwiseNormalizer.canonicalize(
+                run.options.pairCandidateAID ?? "",
+                run.options.pairCandidateBID ?? ""
+            ) == selectedCanonicalPair
         }
         let latest = matching.sorted { $0.updatedAt > $1.updatedAt }.first
         generationPairwiseRunID = latest?.id
@@ -1499,7 +1504,7 @@ final class BenchmarkViewModel: ObservableObject {
 
     private func loadIntegrityCaseRows() throws {
         let allRecords = try loadAllIntegrityDatasetCaseRecords(path: benchmarkDatasetPath)
-        var latestRecordByCaseID: [String: IntegrityDatasetCaseRecord] = [:]
+        var latestRecordByCaseID: [String: BenchmarkDatasetCaseRecord] = [:]
         var caseOrder: [String] = []
         for record in allRecords {
             if latestRecordByCaseID[record.id] == nil {
@@ -1521,7 +1526,7 @@ final class BenchmarkViewModel: ObservableObject {
             return BenchmarkIntegrityCaseRow(
                 id: caseID,
                 sttPreview: preview(item.sttText),
-                referencePreview: preview(item.referenceText),
+                referencePreview: preview(item.normalizedReferenceText()),
                 status: integrityStatusBadge(
                     activeIssueCount: activeIssueCount,
                     issueCount: caseIssues.count,
@@ -1774,58 +1779,17 @@ final class BenchmarkViewModel: ObservableObject {
         return changedCaseIDs.count + removedCaseIDs.count
     }
 
-    private func loadAllIntegrityDatasetCaseRecords(path: String) throws -> [IntegrityDatasetCaseRecord] {
+    private func loadAllIntegrityDatasetCaseRecords(path: String) throws -> [BenchmarkDatasetCaseRecord] {
         try Self.loadIntegrityDatasetCaseRecords(path: path)
     }
 
-    nonisolated private static func loadIntegrityDatasetCaseRecords(path: String) throws -> [IntegrityDatasetCaseRecord] {
-        let normalizedPath = normalizePathForStorage(path)
-        guard !normalizedPath.isEmpty else {
-            return []
-        }
-        guard FileManager.default.fileExists(atPath: normalizedPath) else {
-            return []
-        }
-
-        let content = try String(contentsOfFile: normalizedPath, encoding: .utf8)
-        let decoder = JSONDecoder()
-        var results: [IntegrityDatasetCaseRecord] = []
-        for (index, rawLine) in content.components(separatedBy: .newlines).enumerated() {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if line.isEmpty {
-                continue
-            }
-            guard let data = line.data(using: .utf8) else {
-                throw AppError.invalidArgument("ケース一覧の読み込みに失敗しました(line=\(index + 1))")
-            }
-            do {
-                let item = try decoder.decode(IntegrityDatasetCaseRecord.self, from: data)
-                results.append(item)
-            } catch {
-                throw AppError.invalidArgument("ケース一覧JSONLのデコードに失敗しました(line=\(index + 1)): \(error.localizedDescription)")
-            }
-        }
-        return results
+    nonisolated private static func loadIntegrityDatasetCaseRecords(path: String) throws -> [BenchmarkDatasetCaseRecord] {
+        let store = BenchmarkDatasetStore()
+        return try store.loadCases(path: path)
     }
 
-    private func saveIntegrityDatasetCaseRecords(path: String, records: [IntegrityDatasetCaseRecord]) throws {
-        let normalizedPath = normalizePath(path)
-        guard !normalizedPath.isEmpty else {
-            throw AppError.invalidArgument("保存先ケースファイルが不正です。")
-        }
-        let url = URL(fileURLWithPath: normalizedPath, isDirectory: false)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let lines: [String] = try records.map { record in
-            let data = try encoder.encode(record)
-            guard let line = String(data: data, encoding: .utf8) else {
-                throw AppError.encode("ケース一覧JSONLのエンコードに失敗しました。")
-            }
-            return line
-        }
-        let payload = lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
-        try payload.write(to: url, atomically: true, encoding: .utf8)
+    private func saveIntegrityDatasetCaseRecords(path: String, records: [BenchmarkDatasetCaseRecord]) throws {
+        try datasetStore.saveCases(path: path, records: records)
     }
 
     private func playCaseAudio() {
@@ -1903,20 +1867,16 @@ final class BenchmarkViewModel: ObservableObject {
         Task {
             defer { isExecutingBenchmark = false }
             do {
-                    let output = try await Task.detached(priority: .userInitiated) {
-                    try Self.runCompareCommand(
-                        flow: BenchmarkFlow.generationSingle,
-                        datasetPath: dataset,
-                        candidateIDs: [candidate.id],
-                        judgeModel: nil,
-                        force: force
-                    )
-                }.value
+                try await executionService.runCompare(request: BenchmarkExecutionRequest(
+                    flow: .generationSingle,
+                    datasetPath: dataset,
+                    candidateIDs: [candidate.id],
+                    judgeModel: nil,
+                    force: force
+                ))
                 try reloadAll()
                 setStatus("比較実行が完了しました。", isError: false, clearErrorLog: true)
-                if !output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    benchmarkErrorLog = ""
-                }
+                benchmarkErrorLog = ""
             } catch {
                 let log = normalizedErrorLog(error.localizedDescription)
                 setStatus("比較実行に失敗: \(compactHeadline(for: log))", isError: true, errorLog: log)
@@ -1986,87 +1946,6 @@ final class BenchmarkViewModel: ObservableObject {
             return firstLine
         }
         return "\(firstLine.prefix(maxChars - 3))..."
-    }
-
-    private struct IntegrityCaseLabels: Codable, Equatable {
-        let transcriptGold: String?
-        let transcriptSilver: String?
-        let intentGold: IntegrityIntentLabel?
-        let intentSilver: IntegrityIntentLabel?
-        let labelConfidence: Double?
-
-        enum CodingKeys: String, CodingKey {
-            case transcriptGold = "transcript_gold"
-            case transcriptSilver = "transcript_silver"
-            case intentGold = "intent_gold"
-            case intentSilver = "intent_silver"
-            case labelConfidence = "label_confidence"
-        }
-    }
-
-    private struct IntegrityIntentLabel: Codable, Equatable {
-        let intent: String
-        let slots: [String: String]
-    }
-
-    private struct IntegrityDatasetCaseRecord: Codable, Equatable {
-        let id: String
-        let runID: String?
-        let runDir: String?
-        let audioFile: String?
-        let eventsFile: String?
-        var sttText: String?
-        var outputText: String?
-        var groundTruthText: String?
-        let createdAt: String?
-        let llmModel: String?
-        let appName: String?
-        let context: ContextInfo?
-        let accessibility: AccessibilitySnapshot?
-        let visionImageFile: String?
-        let visionImageMimeType: String?
-        let intentGold: IntegrityIntentLabel?
-        let intentSilver: IntegrityIntentLabel?
-        let labelConfidence: Double?
-        let labels: IntegrityCaseLabels?
-
-        enum CodingKeys: String, CodingKey {
-            case id
-            case runID = "run_id"
-            case runDir = "run_dir"
-            case audioFile = "audio_file"
-            case eventsFile = "events_file"
-            case sttText = "stt_text"
-            case outputText = "output_text"
-            case groundTruthText = "ground_truth_text"
-            case createdAt = "created_at"
-            case llmModel = "llm_model"
-            case appName = "app_name"
-            case context
-            case accessibility
-            case visionImageFile = "vision_image_file"
-            case visionImageMimeType = "vision_image_mime_type"
-            case intentGold = "intent_gold"
-            case intentSilver = "intent_silver"
-            case labelConfidence = "label_confidence"
-            case labels
-        }
-
-        var referenceText: String? {
-            let direct = (groundTruthText ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !direct.isEmpty {
-                return direct
-            }
-            let gold = (labels?.transcriptGold ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !gold.isEmpty {
-                return gold
-            }
-            let silver = (labels?.transcriptSilver ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !silver.isEmpty {
-                return silver
-            }
-            return nil
-        }
     }
 
     private func preview(_ text: String?, maxLength: Int = 56) -> String {
@@ -2219,79 +2098,6 @@ final class BenchmarkViewModel: ObservableObject {
             description: descriptor.description,
             sample: descriptor.sample
         )
-    }
-
-    nonisolated private static func runCompareCommand(
-        flow: BenchmarkFlow,
-        datasetPath: String,
-        candidateIDs: [String],
-        judgeModel: LLMModel?,
-        force: Bool
-    ) throws -> String {
-        var args = [
-            "--benchmark-compare",
-            "--task", flow.rawValue,
-            "--cases", datasetPath,
-        ]
-        for candidateID in candidateIDs {
-            args.append("--candidate-id")
-            args.append(candidateID)
-        }
-        if flow == .generationBattle, let judgeModel {
-            args.append("--judge-model")
-            args.append(judgeModel.rawValue)
-        }
-        if force {
-            args.append("--force")
-        }
-        return try runWhispCLI(args)
-    }
-
-    nonisolated private static func runWhispCLI(_ arguments: [String]) throws -> String {
-        let projectRoot = try resolveProjectRoot()
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env", isDirectory: false)
-        process.arguments = ["swift", "run", "whisp"] + arguments
-        process.currentDirectoryURL = projectRoot
-
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe
-
-        try process.run()
-        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        let output = String(data: data, encoding: .utf8) ?? ""
-        if process.terminationStatus != 0 {
-            let tail = tailLines(output, maxLines: 50)
-            throw AppError.io("benchmark command failed (exit: \(process.terminationStatus))\n\(tail)")
-        }
-        return output
-    }
-
-    nonisolated private static func tailLines(_ text: String, maxLines: Int) -> String {
-        let lines = text.split(whereSeparator: \.isNewline)
-        guard !lines.isEmpty else {
-            return ""
-        }
-        return lines.suffix(maxLines).joined(separator: "\n")
-    }
-
-    nonisolated private static func resolveProjectRoot() throws -> URL {
-        var directory = URL(fileURLWithPath: #filePath, isDirectory: false).deletingLastPathComponent()
-        while true {
-            let packageFile = directory.appendingPathComponent("Package.swift", isDirectory: false)
-            if FileManager.default.fileExists(atPath: packageFile.path) {
-                return directory
-            }
-            let parent = directory.deletingLastPathComponent()
-            if parent.path == directory.path {
-                break
-            }
-            directory = parent
-        }
-        throw AppError.io("Package.swift not found from source path")
     }
 
 }

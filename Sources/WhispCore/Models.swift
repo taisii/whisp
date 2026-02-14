@@ -3,6 +3,14 @@ import Foundation
 public struct APIKeys: Codable, Equatable, Sendable {
     public var values: [String: String]
 
+    enum CodingKeys: String, CodingKey {
+        case values
+        case deepgram
+        case gemini
+        case openai
+        case moonshot
+    }
+
     public init(values: [String: String] = [:]) {
         self.values = values
     }
@@ -53,6 +61,25 @@ public struct APIKeys: Codable, Equatable, Sendable {
         } else {
             values[key] = trimmed
         }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.values) {
+            values = container.decodeLossy([String: String].self, forKey: .values, default: [:])
+            return
+        }
+
+        values = [:]
+        deepgram = container.decodeLossy(String.self, forKey: .deepgram, default: "")
+        gemini = container.decodeLossy(String.self, forKey: .gemini, default: "")
+        openai = container.decodeLossy(String.self, forKey: .openai, default: "")
+        moonshot = container.decodeLossy(String.self, forKey: .moonshot, default: "")
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(values, forKey: .values)
     }
 }
 
@@ -256,6 +283,17 @@ public struct ContextConfig: Codable, Equatable, Sendable {
         self.visionEnabled = visionEnabled
         self.visionMode = visionMode
     }
+
+    enum CodingKeys: String, CodingKey {
+        case visionEnabled
+        case visionMode
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        visionEnabled = container.decodeLossy(Bool.self, forKey: .visionEnabled, default: true)
+        visionMode = container.decodeLossy(VisionContextMode.self, forKey: .visionMode, default: .saveOnly)
+    }
 }
 
 public enum VisionContextMode: String, Codable, Equatable, Sendable, CaseIterable {
@@ -279,6 +317,21 @@ public struct STTSegmentationConfig: Codable, Equatable, Sendable {
         self.maxSegmentMs = maxSegmentMs
         self.preRollMs = preRollMs
         self.livePreviewEnabled = livePreviewEnabled
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case silenceMs
+        case maxSegmentMs
+        case preRollMs
+        case livePreviewEnabled
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        silenceMs = container.decodeLossy(Int.self, forKey: .silenceMs, default: 700)
+        maxSegmentMs = container.decodeLossy(Int.self, forKey: .maxSegmentMs, default: 25_000)
+        preRollMs = container.decodeLossy(Int.self, forKey: .preRollMs, default: 250)
+        livePreviewEnabled = container.decodeLossy(Bool.self, forKey: .livePreviewEnabled, default: false)
     }
 }
 
@@ -367,17 +420,16 @@ public struct Config: Codable, Equatable, Sendable {
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        apiKeys = try container.decode(APIKeys.self, forKey: .apiKeys)
-        shortcut = try container.decode(String.self, forKey: .shortcut)
-        inputLanguage = try container.decode(String.self, forKey: .inputLanguage)
-        recordingMode = try container.decode(RecordingMode.self, forKey: .recordingMode)
-        sttPreset = try container.decode(STTPresetID.self, forKey: .sttPreset)
-        sttSegmentation = try container.decodeIfPresent(STTSegmentationConfig.self, forKey: .sttSegmentation)
-            ?? STTSegmentationConfig()
-        appPromptRules = try container.decode([AppPromptRule].self, forKey: .appPromptRules)
-        llmModel = try container.decode(LLMModel.self, forKey: .llmModel)
-        context = try container.decode(ContextConfig.self, forKey: .context)
-        generationPrimary = try container.decodeIfPresent(GenerationPrimarySelection.self, forKey: .generationPrimary)
+        apiKeys = container.decodeLossy(APIKeys.self, forKey: .apiKeys, default: APIKeys())
+        shortcut = container.decodeLossy(String.self, forKey: .shortcut, default: "Cmd+J")
+        inputLanguage = container.decodeLossy(String.self, forKey: .inputLanguage, default: "ja")
+        recordingMode = container.decodeLossy(RecordingMode.self, forKey: .recordingMode, default: .toggle)
+        sttPreset = container.decodeLossy(STTPresetID.self, forKey: .sttPreset, default: .deepgramStream)
+        sttSegmentation = container.decodeLossy(STTSegmentationConfig.self, forKey: .sttSegmentation, default: STTSegmentationConfig())
+        appPromptRules = container.decodeLossy([AppPromptRule].self, forKey: .appPromptRules, default: [])
+        llmModel = container.decodeLossy(LLMModel.self, forKey: .llmModel, default: .gemini25FlashLite)
+        context = container.decodeLossy(ContextConfig.self, forKey: .context, default: ContextConfig())
+        generationPrimary = container.decodeLossyOptional(GenerationPrimarySelection.self, forKey: .generationPrimary)
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -392,6 +444,31 @@ public struct Config: Codable, Equatable, Sendable {
         try container.encode(llmModel, forKey: .llmModel)
         try container.encode(context, forKey: .context)
         try container.encodeIfPresent(generationPrimary, forKey: .generationPrimary)
+    }
+}
+
+private extension KeyedDecodingContainer {
+    func decodeLossy<T: Decodable>(
+        _ type: T.Type,
+        forKey key: Key,
+        default defaultValue: @autoclosure () -> T
+    ) -> T {
+        do {
+            if let value = try decodeIfPresent(type, forKey: key) {
+                return value
+            }
+        } catch {
+            return defaultValue()
+        }
+        return defaultValue()
+    }
+
+    func decodeLossyOptional<T: Decodable>(_ type: T.Type, forKey key: Key) -> T? {
+        do {
+            return try decodeIfPresent(type, forKey: key)
+        } catch {
+            return nil
+        }
     }
 }
 

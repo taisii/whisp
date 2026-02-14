@@ -71,62 +71,38 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.emitMode, .stdout)
         XCTAssertEqual(options.contextFilePath, "/tmp/context.json")
 
-        let vision = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
+        let vision = try WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-vision-cases", "/tmp/manual.jsonl", "--no-cache",
-        ]))
-        guard case let .benchmarkVision(options) = vision else {
-            return XCTFail("unexpected vision benchmark command")
-        }
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertFalse(options.useCache)
+        ])
+        XCTAssertNil(vision)
 
-        let stt = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
+        let stt = try WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-stt-cases", "/tmp/manual.jsonl", "--stt-preset", "apple_speech_recognizer_rest", "--no-realtime",
-        ]))
-        guard case let .benchmarkSTT(options) = stt else {
-            return XCTFail("unexpected stt benchmark command")
-        }
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(options.sttMode, .rest)
-        XCTAssertFalse(options.realtime)
+        ])
+        XCTAssertNil(stt)
 
-        let generation = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
+        let generation = try WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-generation-cases", "/tmp/manual.jsonl", "--require-context",
-        ]))
-        guard case let .benchmarkGeneration(options) = generation else {
-            return XCTFail("unexpected generation benchmark command")
-        }
-        XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
-        XCTAssertTrue(options.requireContext)
+        ])
+        XCTAssertNil(generation)
 
-        let compare = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
+        let compare = try WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-compare",
             "--task", "stt",
             "--cases", "/tmp/manual.jsonl",
             "--candidate-id", "stt-a",
-        ]))
-        guard case let .benchmarkCompare(compareOptions) = compare else {
-            return XCTFail("unexpected benchmark compare command")
-        }
-        XCTAssertEqual(compareOptions.task, .stt)
-        XCTAssertEqual(compareOptions.casesPath, "/tmp/manual.jsonl")
-        XCTAssertEqual(compareOptions.candidateIDs, ["stt-a"])
+        ])
+        XCTAssertNil(compare)
 
-        let listCandidates = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: ["--benchmark-list-candidates"]))
-        guard case .benchmarkListCandidates = listCandidates else {
-            return XCTFail("unexpected list candidates command")
-        }
+        let listCandidates = try WhispCLI.CLICommand.parse(arguments: ["--benchmark-list-candidates"])
+        XCTAssertNil(listCandidates)
 
-        let integrity = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
+        let integrity = try WhispCLI.CLICommand.parse(arguments: [
             "--benchmark-scan-integrity",
             "--task", "generation",
             "--cases", "/tmp/manual.jsonl",
-        ]))
-        guard case let .benchmarkScanIntegrity(integrityOptions) = integrity else {
-            return XCTFail("unexpected integrity command")
-        }
-        XCTAssertEqual(integrityOptions.task, .generation)
-        XCTAssertEqual(integrityOptions.casesPath, "/tmp/manual.jsonl")
+        ])
+        XCTAssertNil(integrity)
     }
 
     func testParseUnknownTopLevelCommandReturnsNil() throws {
