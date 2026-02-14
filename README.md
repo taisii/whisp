@@ -8,7 +8,7 @@ Whisp is now implemented as a native macOS app in Swift.
 - Global shortcut (`Cmd+J` default, configurable)
 - Recording modes: Toggle / Push-to-talk
 - Microphone recording (AVAudioEngine, mono PCM)
-- STT provider: Deepgram / Whisper (OpenAI Realtime + REST) / Apple Speech (OS built-in)
+- STT preset: Deepgram (Streaming/REST) / Apple Speech (Streaming/REST) / ChatGPT Whisper (Streaming)
 - LLM post processing (Gemini / OpenAI)
 - Direct text input via Accessibility (CGEvent)
 - Optional screenshot context collection at recording start (`save_only` / `ocr`)
@@ -105,9 +105,9 @@ swift run whisp --stt-stream-file Tests/Fixtures/benchmark_ja_10s.wav --chunk-ms
 
 Requirements:
 - `~/.config/whisp/config.json` に必要なAPIキーが設定されていること
-  - `sttProvider=deepgram` の場合: `apiKeys.deepgram`
-  - `sttProvider=whisper` の場合: `apiKeys.openai`
-  - `sttProvider=apple_speech` の場合: APIキー不要（音声認識権限は必要）
+  - `sttPreset=deepgram_stream|deepgram_rest` の場合: `apiKeys.deepgram`
+  - `sttPreset=chatgpt_whisper_stream` の場合: `apiKeys.openai`
+  - `sttPreset=apple_speech_recognizer_stream|apple_speech_recognizer_rest|apple_speech_analyzer_stream|apple_speech_analyzer_rest` の場合: APIキー不要（音声認識権限は必要）
 
 ### STT latency benchmark example
 
@@ -166,7 +166,7 @@ scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --r
 scripts/benchmark_cases.sh vision ~/.config/whisp/debug/manual_test_cases.jsonl
 
 # 2) 音声 -> transcript（STT）
-scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --stt stream --min-audio-seconds 2.0
+scripts/benchmark_cases.sh stt ~/.config/whisp/debug/manual_test_cases.jsonl --stt-preset deepgram_stream --min-audio-seconds 2.0
 
 # 3) stt_text + context -> 最終テキスト（生成）
 scripts/benchmark_cases.sh generation ~/.config/whisp/debug/manual_test_cases.jsonl
@@ -208,7 +208,8 @@ swift run whisp --benchmark-compare \
   --task stt \
   --cases ~/.config/whisp/debug/manual_test_cases.jsonl \
   --candidate-id stt-deepgram-stream-default \
-  --candidate-id stt-apple-speech-stream-default
+  --candidate-id stt-apple-speech-recognizer-stream-default \
+  --candidate-id stt-apple-speech-analyzer-stream-default
 
 # Generation比較（強制再実行）
 swift run whisp --benchmark-compare \
@@ -224,9 +225,9 @@ swift run whisp --benchmark-scan-integrity \
 ```
 
 STT candidate 設計メモ:
-- `model` は `deepgram|whisper|apple_speech` を指定
-- `deepgram` / `whisper` は `stt_mode=rest|stream` 対応
-- `apple_speech` は `stt_mode=rest|stream` 対応（Speech.framework の on-device streaming）
+- `model` は `STTPresetID` を指定（例: `deepgram_stream`, `apple_speech_recognizer_stream`, `apple_speech_analyzer_stream`）
+- STT候補のモードは `model`（preset）で決まり、`stt_mode` option は不要
+- 無音区切り系は `silence_ms` / `max_segment_ms` / `pre_roll_ms` を option に保持する
 
 Generation入力ポリシー:
 - `stt_text` は必須
@@ -372,27 +373,19 @@ scripts/capture_debug_view_snapshot.sh --sample -o .codex-artifacts/debugview-sa
   "event_end_ms": 1770757820829,
   "recorded_at_ms": 1770757820831,
   "status": "ok",
-  "provider": "deepgram",
-  "route": "streaming_fallback_rest",
-  "source": "rest_fallback",
+  "provider": "deepgram_stream",
+  "route": "streaming",
+  "source": "stream_finalize",
   "text_chars": 16,
   "sample_rate": 16000,
   "audio_bytes": 240000,
   "attempts": [
     {
       "kind": "stream_finalize",
-      "status": "error",
-      "event_start_ms": 1770757820523,
-      "event_end_ms": 1770757820600,
-      "source": "stream_finalize",
-      "error": "timeout"
-    },
-    {
-      "kind": "rest_fallback",
       "status": "ok",
-      "event_start_ms": 1770757820601,
+      "event_start_ms": 1770757820523,
       "event_end_ms": 1770757820829,
-      "source": "rest_fallback",
+      "source": "stream_finalize",
       "text_chars": 16
     }
   ]
@@ -455,7 +448,7 @@ scripts/reset_permissions.sh --open-settings
 
 Whisp requires these permissions:
 - Microphone
-- Speech Recognition (when `sttProvider=apple_speech`)
+- Speech Recognition (when `sttPreset=apple_speech_recognizer_stream|apple_speech_recognizer_rest|apple_speech_analyzer_stream|apple_speech_analyzer_rest`)
 - Accessibility (for direct input)
 - Screen Recording (when screenshot analysis is enabled)
 
@@ -480,7 +473,8 @@ Main fields:
 - `shortcut` (e.g. `Cmd+J`, `Ctrl+Alt+Shift+F1`)
 - `recordingMode` (`toggle` / `push_to_talk`)
 - `inputLanguage` (`auto` / `ja` / `en`)
-- `sttProvider` (`deepgram` / `whisper` / `apple_speech`)
+- `sttPreset` (`deepgram_stream` / `deepgram_rest` / `apple_speech_recognizer_stream` / `apple_speech_recognizer_rest` / `apple_speech_analyzer_stream` / `apple_speech_analyzer_rest` / `chatgpt_whisper_stream`)
+- `sttSegmentation.silenceMs` / `sttSegmentation.maxSegmentMs` / `sttSegmentation.preRollMs` / `sttSegmentation.livePreviewEnabled`
 - `llmModel`
 - `generationPrimary` (optional)
   - `candidateID`

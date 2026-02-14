@@ -86,7 +86,7 @@ public struct MoonshotProviderClient: LLMProviderClient, Sendable {
                 model: request.model.modelName,
                 messages: [MoonshotProviderTextMessage(role: "user", content: prompt)]
             )
-            data = try await client.sendJSONRequest(url: endpointURL(), method: "POST", headers: headers, body: body)
+            data = try await sendWithEndpointFallback(headers: headers, body: body)
         case let .textWithImage(prompt, image):
             let dataURL = "data:\(image.mimeType);base64,\(image.base64Data)"
             let body = MoonshotProviderChatRequest(
@@ -101,7 +101,7 @@ public struct MoonshotProviderClient: LLMProviderClient, Sendable {
                     ),
                 ]
             )
-            data = try await client.sendJSONRequest(url: endpointURL(), method: "POST", headers: headers, body: body)
+            data = try await sendWithEndpointFallback(headers: headers, body: body)
         case .audio:
             throw AppError.invalidArgument("Moonshot provider は audio 入力に未対応です")
         }
@@ -120,10 +120,48 @@ public struct MoonshotProviderClient: LLMProviderClient, Sendable {
         return LLMProviderResponse(text: text, usage: usage)
     }
 
-    private func endpointURL() throws -> URL {
-        guard let url = URL(string: "https://api.moonshot.cn/v1/chat/completions") else {
-            throw AppError.invalidArgument("Moonshot URL生成に失敗")
+    private func sendWithEndpointFallback<T: Encodable>(headers: [String: String], body: T) async throws -> Data {
+        let endpoints = try endpointURLs()
+        var firstError: Error?
+
+        for (index, url) in endpoints.enumerated() {
+            do {
+                return try await client.sendJSONRequest(url: url, method: "POST", headers: headers, body: body)
+            } catch {
+                if index == 0 {
+                    firstError = error
+                }
+                if index == 0, shouldRetryOnSecondaryEndpoint(error) {
+                    continue
+                }
+                throw error
+            }
         }
-        return url
+
+        throw firstError ?? AppError.io("Moonshot API request failed")
+    }
+
+    private func shouldRetryOnSecondaryEndpoint(_ error: Error) -> Bool {
+        guard case let .io(message) = (error as? AppError) else {
+            return false
+        }
+        let normalized = message.lowercased()
+        return normalized.contains("401") && normalized.contains("invalid_authentication_error")
+    }
+
+    private func endpointURLs() throws -> [URL] {
+        let rawValues = [
+            "https://api.moonshot.ai/v1/chat/completions",
+            "https://api.moonshot.cn/v1/chat/completions",
+        ]
+        var urls: [URL] = []
+        urls.reserveCapacity(rawValues.count)
+        for raw in rawValues {
+            guard let url = URL(string: raw) else {
+                throw AppError.invalidArgument("Moonshot URL生成に失敗")
+            }
+            urls.append(url)
+        }
+        return urls
     }
 }

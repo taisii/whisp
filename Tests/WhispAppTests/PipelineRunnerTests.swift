@@ -247,7 +247,7 @@ final class PipelineRunnerTests: XCTestCase {
                 accessibilitySummaryTask: summaryTask,
                 recordingMode: "toggle",
                 model: harness.config.llmModel.rawValue,
-                sttProvider: harness.config.sttProvider.rawValue,
+                sttPreset: harness.config.sttPreset.rawValue,
                 sttStreaming: false,
                 visionEnabled: false,
                 accessibilitySummaryStarted: true
@@ -359,7 +359,7 @@ final class PipelineRunnerTests: XCTestCase {
                 accessibilitySummaryTask: nil,
                 recordingMode: "toggle",
                 model: config.llmModel.rawValue,
-                sttProvider: config.sttProvider.rawValue,
+                sttPreset: config.sttPreset.rawValue,
                 sttStreaming: false,
                 visionEnabled: false,
                 accessibilitySummaryStarted: false
@@ -451,7 +451,7 @@ final class PipelineRunnerTests: XCTestCase {
             shortcut: "Cmd+J",
             inputLanguage: "ja",
             recordingMode: .toggle,
-            sttProvider: .deepgram,
+            sttPreset: .deepgramStream,
             appPromptRules: [],
             llmModel: .gemini25FlashLite,
             context: ContextConfig(visionEnabled: false, visionMode: .saveOnly)
@@ -505,7 +505,8 @@ private final class FakeSTTService: STTService, @unchecked Sendable {
         config _: Config,
         runID _: String,
         language _: String?,
-        logger _: @escaping PipelineEventLogger
+        logger _: @escaping PipelineEventLogger,
+        onSegmentCommitted _: STTSegmentCommitHandler?
     ) -> (any STTStreamingSession)? {
         nil
     }

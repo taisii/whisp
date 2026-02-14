@@ -32,11 +32,13 @@
 type Candidate = {
   candidate_id: string;        // 例: deepgram_stream_120_v1
   task: "stt" | "generation" | "vision";
-  model: string;               // 例: deepgram / apple_speech / gemini-2.5-flash-lite
+  model: string;               // 例: deepgram_stream / apple_speech_recognizer_stream / apple_speech_analyzer_stream / gemini-2.5-flash-lite
   prompt_profile_id?: string;  // generation の場合
   options: {
-    stt_mode?: "rest" | "stream";
     chunk_ms?: number;
+    silence_ms?: number;
+    max_segment_ms?: number;
+    pre_roll_ms?: number;
     realtime?: boolean;
     require_context?: boolean;
     llm_eval?: boolean;

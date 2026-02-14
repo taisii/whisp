@@ -18,7 +18,7 @@ final class ConfigStoreTests: XCTestCase {
             shortcut: "Option+Space",
             inputLanguage: "ja",
             recordingMode: .pushToTalk,
-            sttProvider: .appleSpeech,
+            sttPreset: .appleSpeechRecognizerStream,
             appPromptRules: [AppPromptRule(appName: "Slack", template: "入力: {STT結果}")],
             llmModel: .gpt5Nano,
             context: ContextConfig(visionEnabled: true, visionMode: .ocr),
@@ -54,7 +54,7 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: path.path))
     }
 
-    func testStrictDecodeRejectsMissingSTTProvider() throws {
+    func testStrictDecodeRejectsMissingSTTPreset() throws {
         let path = tempFile("config.json")
         let json = """
         {
@@ -97,7 +97,7 @@ final class ConfigStoreTests: XCTestCase {
           "llmModel" : "gpt-5-nano",
           "recordingMode" : "toggle",
           "shortcut" : "Cmd+J",
-          "sttProvider" : "deepgram"
+          "sttPreset" : "deepgram_stream"
         }
         """
         guard let data = json.data(using: .utf8) else {

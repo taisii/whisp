@@ -49,6 +49,10 @@ extension DebugCaptureStore {
         }
     }
 
+    private struct ManualCaseIDLine: Decodable {
+        let id: String
+    }
+
     @discardableResult
     public func appendManualTestCase(captureID: String) throws -> String {
         lock.lock()
@@ -56,6 +60,10 @@ extension DebugCaptureStore {
 
         guard let record = try loadRecord(path: recordPath(captureID: captureID)) else {
             throw AppError.invalidArgument("capture not found: \(captureID)")
+        }
+        let existingIDs = try loadExistingManualCaseIDs()
+        if existingIDs.contains(record.id) {
+            throw AppError.invalidArgument("manual test case は既に追加済みです: \(record.id)")
         }
 
         try ensureDirectories()
@@ -112,6 +120,35 @@ extension DebugCaptureStore {
         }
         try appendLine(data: data, to: manualCasesURL)
         return manualCasesURL.path
+    }
+
+    private func loadExistingManualCaseIDs() throws -> Set<String> {
+        guard fileManager.fileExists(atPath: manualCasesURL.path) else {
+            return []
+        }
+        let content = try String(contentsOf: manualCasesURL, encoding: .utf8)
+        if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return []
+        }
+
+        let decoder = JSONDecoder()
+        var ids = Set<String>()
+        for (index, rawLine) in content.components(separatedBy: .newlines).enumerated() {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty {
+                continue
+            }
+            guard let data = line.data(using: .utf8) else {
+                throw AppError.invalidArgument("manual test case JSONL の読み込みに失敗しました(line=\(index + 1))")
+            }
+            do {
+                let row = try decoder.decode(ManualCaseIDLine.self, from: data)
+                ids.insert(row.id)
+            } catch {
+                throw AppError.invalidArgument("manual test case JSONL のデコードに失敗しました(line=\(index + 1)): \(error.localizedDescription)")
+            }
+        }
+        return ids
     }
 
     private func normalizedContext(_ context: ContextInfo?) -> ContextInfo? {

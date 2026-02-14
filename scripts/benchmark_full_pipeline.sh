@@ -96,9 +96,9 @@ for i in $(seq 1 "$runs"); do
   trace_dir="$result_root/traces/rest-$i"
   mkdir -p "$trace_dir"
   if [[ -n "$context_file" ]]; then
-    WHISP_PROMPT_TRACE_DIR="$trace_dir" ./.build/debug/whisp --pipeline-file "$input_wav" --stt rest --emit "$emit_mode" --context-file "$context_file" >"$result_root/logs/rest-$i.log"
+    WHISP_PROMPT_TRACE_DIR="$trace_dir" ./.build/debug/whisp --pipeline-file "$input_wav" --stt-preset deepgram_rest --emit "$emit_mode" --context-file "$context_file" >"$result_root/logs/rest-$i.log"
   else
-    WHISP_PROMPT_TRACE_DIR="$trace_dir" ./.build/debug/whisp --pipeline-file "$input_wav" --stt rest --emit "$emit_mode" >"$result_root/logs/rest-$i.log"
+    WHISP_PROMPT_TRACE_DIR="$trace_dir" ./.build/debug/whisp --pipeline-file "$input_wav" --stt-preset deepgram_rest --emit "$emit_mode" >"$result_root/logs/rest-$i.log"
   fi
 done
 
@@ -107,9 +107,9 @@ for i in $(seq 1 "$runs"); do
   trace_dir="$result_root/traces/stream-$i"
   mkdir -p "$trace_dir"
   if [[ -n "$context_file" ]]; then
-    WHISP_PROMPT_TRACE_DIR="$trace_dir" ./.build/debug/whisp --pipeline-file "$input_wav" --stt stream --chunk-ms 120 --realtime --emit "$emit_mode" --context-file "$context_file" >"$result_root/logs/stream-$i.log"
+    WHISP_PROMPT_TRACE_DIR="$trace_dir" ./.build/debug/whisp --pipeline-file "$input_wav" --stt-preset deepgram_stream --chunk-ms 120 --realtime --emit "$emit_mode" --context-file "$context_file" >"$result_root/logs/stream-$i.log"
   else
-    WHISP_PROMPT_TRACE_DIR="$trace_dir" ./.build/debug/whisp --pipeline-file "$input_wav" --stt stream --chunk-ms 120 --realtime --emit "$emit_mode" >"$result_root/logs/stream-$i.log"
+    WHISP_PROMPT_TRACE_DIR="$trace_dir" ./.build/debug/whisp --pipeline-file "$input_wav" --stt-preset deepgram_stream --chunk-ms 120 --realtime --emit "$emit_mode" >"$result_root/logs/stream-$i.log"
   fi
 done
 

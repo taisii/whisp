@@ -25,8 +25,8 @@ final class BenchmarkViewModelTests: XCTestCase {
         let candidate = BenchmarkCandidate(
             id: "stt-deepgram-a",
             task: .stt,
-            model: "deepgram",
-            options: ["stt_mode": "stream"],
+            model: "deepgram_stream",
+            options: [:],
             createdAt: now,
             updatedAt: now
         )
@@ -368,8 +368,8 @@ final class BenchmarkViewModelTests: XCTestCase {
         let candidate = BenchmarkCandidate(
             id: "stt-deepgram-detail",
             task: .stt,
-            model: "deepgram",
-            options: ["stt_mode": "stream"],
+            model: "deepgram_stream",
+            options: [:],
             createdAt: now,
             updatedAt: now
         )
@@ -494,8 +494,8 @@ final class BenchmarkViewModelTests: XCTestCase {
         let candidate = BenchmarkCandidate(
             id: "stt-deepgram-oldrun",
             task: .stt,
-            model: "deepgram",
-            options: ["stt_mode": "stream"],
+            model: "deepgram_stream",
+            options: [:],
             createdAt: now,
             updatedAt: now
         )
@@ -599,8 +599,8 @@ final class BenchmarkViewModelTests: XCTestCase {
             BenchmarkCandidate(
                 id: "stt-custom-deepgram-only",
                 task: .stt,
-                model: "deepgram",
-                options: ["stt_mode": "stream"],
+                model: "deepgram_stream",
+                options: [:],
                 createdAt: now,
                 updatedAt: now
             ),
@@ -614,8 +614,9 @@ final class BenchmarkViewModelTests: XCTestCase {
         )
         viewModel.refresh()
 
-        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.model == STTProvider.appleSpeech.rawValue }))
-        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.id == "stt-apple-speech-stream-default" }))
+        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.model == STTPresetID.appleSpeechRecognizerStream.rawValue }))
+        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.model == STTPresetID.appleSpeechAnalyzerStream.rawValue }))
+        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.id == "stt-apple-speech-recognizer-stream-default" }))
     }
 
     func testSavePromptCandidateModalCreatesGenerationCandidate() throws {

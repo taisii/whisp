@@ -62,6 +62,27 @@ public enum STTProvider: String, Codable, Equatable, Sendable, CaseIterable {
     case appleSpeech = "apple_speech"
 }
 
+public enum STTPresetID: String, Codable, Equatable, Sendable, CaseIterable {
+    case deepgramStream = "deepgram_stream"
+    case deepgramRest = "deepgram_rest"
+    case appleSpeechRecognizerStream = "apple_speech_recognizer_stream"
+    case appleSpeechRecognizerRest = "apple_speech_recognizer_rest"
+    case appleSpeechAnalyzerStream = "apple_speech_analyzer_stream"
+    case appleSpeechAnalyzerRest = "apple_speech_analyzer_rest"
+    case chatgptWhisperStream = "chatgpt_whisper_stream"
+}
+
+public enum STTEngine: String, Codable, Equatable, Sendable {
+    case deepgram
+    case appleSpeech = "apple_speech"
+    case openAIWhisper = "openai_whisper"
+}
+
+public enum STTExecutionMode: String, Codable, Equatable, Sendable {
+    case stream
+    case rest
+}
+
 public enum STTCredential: Equatable, Sendable {
     case apiKey(String)
     case none
@@ -95,6 +116,31 @@ public struct STTProviderSpec: Equatable, Sendable {
         self.supportsREST = supportsREST
         self.preferredTransport = preferredTransport
         self.isVisibleInSettings = isVisibleInSettings
+    }
+}
+
+public struct STTPresetSpec: Equatable, Sendable {
+    public let id: STTPresetID
+    public let displayName: String
+    public let engine: STTEngine
+    public let mode: STTExecutionMode
+    public let transport: STTTransport
+    public let selectableInSettings: Bool
+
+    public init(
+        id: STTPresetID,
+        displayName: String,
+        engine: STTEngine,
+        mode: STTExecutionMode,
+        transport: STTTransport,
+        selectableInSettings: Bool = true
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.engine = engine
+        self.mode = mode
+        self.transport = transport
+        self.selectableInSettings = selectableInSettings
     }
 }
 
@@ -217,23 +263,91 @@ public enum VisionContextMode: String, Codable, Equatable, Sendable, CaseIterabl
     case ocr
 }
 
+public struct STTSegmentationConfig: Codable, Equatable, Sendable {
+    public var silenceMs: Int
+    public var maxSegmentMs: Int
+    public var preRollMs: Int
+    public var livePreviewEnabled: Bool
+
+    public init(
+        silenceMs: Int = 700,
+        maxSegmentMs: Int = 25_000,
+        preRollMs: Int = 250,
+        livePreviewEnabled: Bool = false
+    ) {
+        self.silenceMs = silenceMs
+        self.maxSegmentMs = maxSegmentMs
+        self.preRollMs = preRollMs
+        self.livePreviewEnabled = livePreviewEnabled
+    }
+}
+
+public struct STTCommittedSegment: Codable, Equatable, Sendable {
+    public let index: Int
+    public let startMs: Int64
+    public let endMs: Int64
+    public let text: String
+    public let reason: String
+
+    public init(
+        index: Int,
+        startMs: Int64,
+        endMs: Int64,
+        text: String,
+        reason: String
+    ) {
+        self.index = index
+        self.startMs = startMs
+        self.endMs = endMs
+        self.text = text
+        self.reason = reason
+    }
+}
+
+public struct VADInterval: Codable, Equatable, Sendable {
+    public let startMs: Int64
+    public let endMs: Int64
+    public let kind: String
+
+    public init(startMs: Int64, endMs: Int64, kind: String) {
+        self.startMs = startMs
+        self.endMs = endMs
+        self.kind = kind
+    }
+}
+
 public struct Config: Codable, Equatable, Sendable {
     public var apiKeys: APIKeys
     public var shortcut: String
     public var inputLanguage: String
     public var recordingMode: RecordingMode
-    public var sttProvider: STTProvider
+    public var sttPreset: STTPresetID
+    public var sttSegmentation: STTSegmentationConfig
     public var appPromptRules: [AppPromptRule]
     public var llmModel: LLMModel
     public var context: ContextConfig
     public var generationPrimary: GenerationPrimarySelection?
+
+    enum CodingKeys: String, CodingKey {
+        case apiKeys
+        case shortcut
+        case inputLanguage
+        case recordingMode
+        case sttPreset
+        case sttSegmentation
+        case appPromptRules
+        case llmModel
+        case context
+        case generationPrimary
+    }
 
     public init(
         apiKeys: APIKeys = APIKeys(),
         shortcut: String = "Cmd+J",
         inputLanguage: String = "ja",
         recordingMode: RecordingMode = .toggle,
-        sttProvider: STTProvider = .deepgram,
+        sttPreset: STTPresetID = .deepgramStream,
+        sttSegmentation: STTSegmentationConfig = STTSegmentationConfig(),
         appPromptRules: [AppPromptRule] = [],
         llmModel: LLMModel = .gemini25FlashLite,
         context: ContextConfig = ContextConfig(),
@@ -243,11 +357,41 @@ public struct Config: Codable, Equatable, Sendable {
         self.shortcut = shortcut
         self.inputLanguage = inputLanguage
         self.recordingMode = recordingMode
-        self.sttProvider = sttProvider
+        self.sttPreset = sttPreset
+        self.sttSegmentation = sttSegmentation
         self.appPromptRules = appPromptRules
         self.llmModel = llmModel
         self.context = context
         self.generationPrimary = generationPrimary
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        apiKeys = try container.decode(APIKeys.self, forKey: .apiKeys)
+        shortcut = try container.decode(String.self, forKey: .shortcut)
+        inputLanguage = try container.decode(String.self, forKey: .inputLanguage)
+        recordingMode = try container.decode(RecordingMode.self, forKey: .recordingMode)
+        sttPreset = try container.decode(STTPresetID.self, forKey: .sttPreset)
+        sttSegmentation = try container.decodeIfPresent(STTSegmentationConfig.self, forKey: .sttSegmentation)
+            ?? STTSegmentationConfig()
+        appPromptRules = try container.decode([AppPromptRule].self, forKey: .appPromptRules)
+        llmModel = try container.decode(LLMModel.self, forKey: .llmModel)
+        context = try container.decode(ContextConfig.self, forKey: .context)
+        generationPrimary = try container.decodeIfPresent(GenerationPrimarySelection.self, forKey: .generationPrimary)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(apiKeys, forKey: .apiKeys)
+        try container.encode(shortcut, forKey: .shortcut)
+        try container.encode(inputLanguage, forKey: .inputLanguage)
+        try container.encode(recordingMode, forKey: .recordingMode)
+        try container.encode(sttPreset, forKey: .sttPreset)
+        try container.encode(sttSegmentation, forKey: .sttSegmentation)
+        try container.encode(appPromptRules, forKey: .appPromptRules)
+        try container.encode(llmModel, forKey: .llmModel)
+        try container.encode(context, forKey: .context)
+        try container.encodeIfPresent(generationPrimary, forKey: .generationPrimary)
     }
 }
 

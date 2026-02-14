@@ -60,7 +60,7 @@ final class CLICommandTests: XCTestCase {
         XCTAssertTrue(options.realtime)
 
         let pipeline = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--pipeline-file", "/tmp/in.wav", "--stt", "rest", "--no-realtime", "--emit", "stdout", "--context-file", "/tmp/context.json",
+            "--pipeline-file", "/tmp/in.wav", "--stt-preset", "deepgram_rest", "--no-realtime", "--emit", "stdout", "--context-file", "/tmp/context.json",
         ]))
         guard case let .pipeline(options) = pipeline else {
             return XCTFail("unexpected pipeline command")
@@ -81,7 +81,7 @@ final class CLICommandTests: XCTestCase {
         XCTAssertFalse(options.useCache)
 
         let stt = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: [
-            "--benchmark-stt-cases", "/tmp/manual.jsonl", "--stt", "rest", "--no-realtime",
+            "--benchmark-stt-cases", "/tmp/manual.jsonl", "--stt-preset", "apple_speech_recognizer_rest", "--no-realtime",
         ]))
         guard case let .benchmarkSTT(options) = stt else {
             return XCTFail("unexpected stt benchmark command")
@@ -134,11 +134,11 @@ final class CLICommandTests: XCTestCase {
         XCTAssertNil(command)
     }
 
-    func testParsePipelineCommandRejectsInvalidSTTMode() {
+    func testParsePipelineCommandRejectsInvalidSTTPreset() {
         XCTAssertThrowsError(try WhispCLI.CLICommand.parse(arguments: [
             "--pipeline-file",
             "/tmp/in.wav",
-            "--stt",
+            "--stt-preset",
             "invalid",
         ]))
     }
@@ -183,13 +183,15 @@ final class CLICommandTests: XCTestCase {
         ]))
     }
 
-    func testParseSTTBenchmarkOptionsParsesProviderAndRejectsInvalidValues() throws {
+    func testParseSTTBenchmarkOptionsParsesPresetAndRejectsInvalidValues() throws {
         let options = try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",
             "/tmp/manual.jsonl",
-            "--stt-provider", "apple_speech",
-            "--stt", "rest",
+            "--stt-preset", "apple_speech_analyzer_rest",
             "--chunk-ms", "200",
+            "--silence-ms", "900",
+            "--max-segment-ms", "30000",
+            "--pre-roll-ms", "300",
             "--no-realtime",
             "--limit", "16",
             "--min-audio-seconds", "2.25",
@@ -199,32 +201,27 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.jsonlPath, "/tmp/manual.jsonl")
         XCTAssertEqual(options.sttMode, .rest)
         XCTAssertEqual(options.chunkMs, 200)
+        XCTAssertEqual(options.silenceMs, 900)
+        XCTAssertEqual(options.maxSegmentMs, 30_000)
+        XCTAssertEqual(options.preRollMs, 300)
         XCTAssertFalse(options.realtime)
         XCTAssertEqual(options.limit, 16)
         XCTAssertEqual(options.minAudioSeconds, 2.25, accuracy: 0.0001)
         XCTAssertFalse(options.useCache)
-        XCTAssertEqual(options.sttProvider, .appleSpeech)
+        XCTAssertEqual(options.sttPreset, .appleSpeechAnalyzerRest)
 
         let appleStreamOptions = try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",
             "/tmp/manual.jsonl",
-            "--stt-provider", "apple_speech",
-            "--stt", "stream",
+            "--stt-preset", "apple_speech_analyzer_stream",
         ])
-        XCTAssertEqual(appleStreamOptions.sttProvider, .appleSpeech)
+        XCTAssertEqual(appleStreamOptions.sttPreset, .appleSpeechAnalyzerStream)
         XCTAssertEqual(appleStreamOptions.sttMode, .stream)
 
         XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",
             "/tmp/manual.jsonl",
-            "--stt",
-            "invalid",
-        ]))
-
-        XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
-            "--benchmark-stt-cases",
-            "/tmp/manual.jsonl",
-            "--stt-provider",
+            "--stt-preset",
             "invalid",
         ]))
     }

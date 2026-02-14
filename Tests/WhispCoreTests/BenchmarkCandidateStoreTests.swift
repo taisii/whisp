@@ -17,8 +17,8 @@ final class BenchmarkCandidateStoreTests: XCTestCase {
         let candidate = BenchmarkCandidate(
             id: "stt-a",
             task: .stt,
-            model: "deepgram",
-            options: ["stt_mode": "stream"],
+            model: "deepgram_stream",
+            options: [:],
             createdAt: "2026-02-12T00:00:00.000Z",
             updatedAt: "2026-02-12T00:00:00.000Z"
         )
@@ -31,15 +31,15 @@ final class BenchmarkCandidateStoreTests: XCTestCase {
         let updated = BenchmarkCandidate(
             id: "stt-a",
             task: .stt,
-            model: "deepgram",
-            options: ["stt_mode": "rest"],
+            model: "deepgram_rest",
+            options: [:],
             createdAt: candidate.createdAt,
             updatedAt: "2026-02-12T00:10:00.000Z"
         )
         try store.upsertCandidate(updated)
 
         let after = try store.loadCandidate(id: "stt-a")
-        XCTAssertEqual(after?.options["stt_mode"], "rest")
+        XCTAssertEqual(after?.model, "deepgram_rest")
     }
 
     func testSaveLoadGenerationPromptFields() throws {
@@ -71,7 +71,7 @@ final class BenchmarkCandidateStoreTests: XCTestCase {
         let now = "2026-02-12T00:00:00.000Z"
 
         let candidates = [
-            BenchmarkCandidate(id: "dup", task: .stt, model: "deepgram", createdAt: now, updatedAt: now),
+            BenchmarkCandidate(id: "dup", task: .stt, model: "deepgram_stream", createdAt: now, updatedAt: now),
             BenchmarkCandidate(id: "dup", task: .generation, model: "gpt-5-nano", createdAt: now, updatedAt: now),
         ]
 

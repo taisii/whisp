@@ -9,27 +9,38 @@ import WhispCore
 
 extension WhispCLI {
     static func runSTTInference(
-        provider: STTProvider,
+        preset: STTPresetID,
         credential: STTCredential,
         audio: AudioData,
         languageHint: String,
-        mode: STTMode,
         chunkMs: Int,
-        realtime: Bool
+        realtime: Bool,
+        segmentation: STTSegmentationConfig = STTSegmentationConfig()
     ) async throws -> (
         transcript: String,
         totalMs: Double,
         afterStopMs: Double,
         replayStartedAtMs: Int64?,
         replayEndedAtMs: Int64?,
-        attempts: [BenchmarkSTTAttempt]
+        attempts: [BenchmarkSTTAttempt],
+        segmentCount: Int?,
+        vadSilenceCount: Int?
     ) {
         let sampleRate = Int(audio.sampleRate)
         let language = LanguageResolver.languageParam(languageHint)
+        let presetSpec = STTPresetCatalog.spec(for: preset)
+        let mode: STTMode = {
+            switch presetSpec.mode {
+            case .stream:
+                return .stream
+            case .rest:
+                return .rest
+            }
+        }()
 
-        switch provider {
+        switch presetSpec.engine {
         case .deepgram:
-            let apiKey = try resolveAPIKey(credential, provider: provider)
+            let apiKey = try resolveAPIKey(credential, preset: preset)
             switch mode {
             case .rest:
                 let replayStartedAtMs: Int64?
@@ -66,7 +77,9 @@ extension WhispCLI {
                         status: .ok,
                         startedAtMs: attemptStartedAtMs,
                         endedAtMs: attemptEndedAtMs
-                    )]
+                    )],
+                    1,
+                    0
                 )
             case .stream:
                 let stream = DeepgramStreamingClient()
@@ -118,11 +131,13 @@ extension WhispCLI {
                             startedAtMs: finalizeAttemptStartedAtMs,
                             endedAtMs: finalizeAttemptEndedAtMs
                         ),
-                    ]
+                    ],
+                    1,
+                    0
                 )
             }
-        case .whisper:
-            let apiKey = try resolveAPIKey(credential, provider: provider)
+        case .openAIWhisper:
+            let apiKey = try resolveAPIKey(credential, preset: preset)
             switch mode {
             case .rest:
                 let replayStartedAtMs: Int64?
@@ -159,7 +174,9 @@ extension WhispCLI {
                         status: .ok,
                         startedAtMs: attemptStartedAtMs,
                         endedAtMs: attemptEndedAtMs
-                    )]
+                    )],
+                    1,
+                    0
                 )
             case .stream:
                 let stream = OpenAIRealtimeStreamingClient()
@@ -215,7 +232,9 @@ extension WhispCLI {
                             startedAtMs: finalizeAttemptStartedAtMs,
                             endedAtMs: finalizeAttemptEndedAtMs
                         ),
-                    ]
+                    ],
+                    1,
+                    0
                 )
             }
         case .appleSpeech:
@@ -254,99 +273,21 @@ extension WhispCLI {
                         status: .ok,
                         startedAtMs: attemptStartedAtMs,
                         endedAtMs: attemptEndedAtMs
-                    )]
+                    )],
+                    1,
+                    0
                 )
             case .stream:
 #if canImport(Speech)
-                let stream = try await AppleSpeechStreamingRecognizer(sampleRate: sampleRate, language: language)
-                let chunkSamples = max(1, sampleRate * chunkMs / 1000)
-                let chunkBytes = chunkSamples * MemoryLayout<Int16>.size
-                let replayStartedAtMs = nowEpochMs()
-                let sendAttemptStartedAtMs = replayStartedAtMs
-                let sendStartedAt = DispatchTime.now()
-                var offset = 0
-                while offset < audio.pcmBytes.count {
-                    let end = min(offset + chunkBytes, audio.pcmBytes.count)
-                    await stream.enqueue(audio.pcmBytes.subdata(in: offset..<end))
-                    if realtime {
-                        let frameCount = (end - offset) / MemoryLayout<Int16>.size
-                        let seconds = Double(frameCount) / Double(sampleRate)
-                        let nanoseconds = UInt64(seconds * 1_000_000_000)
-                        if nanoseconds > 0 {
-                            try? await Task.sleep(nanoseconds: nanoseconds)
-                        }
-                    }
-                    offset = end
-                }
-                let sendMs = elapsedMs(since: sendStartedAt)
-                let replayEndedAtMs = nowEpochMs()
-                let sendAttemptEndedAtMs = replayEndedAtMs
-                let finalizeStartedAt = DispatchTime.now()
-                let finalizeAttemptStartedAtMs = nowEpochMs()
-                do {
-                    let transcript = try await stream.finish()
-                    let finalizeMs = elapsedMs(since: finalizeStartedAt)
-                    let finalizeAttemptEndedAtMs = nowEpochMs()
-                    return (
-                        transcript,
-                        sendMs + finalizeMs,
-                        finalizeMs,
-                        replayStartedAtMs,
-                        replayEndedAtMs,
-                        [
-                            BenchmarkSTTAttempt(
-                                kind: "stream_send",
-                                status: .ok,
-                                startedAtMs: sendAttemptStartedAtMs,
-                                endedAtMs: sendAttemptEndedAtMs
-                            ),
-                            BenchmarkSTTAttempt(
-                                kind: "stream_finalize",
-                                status: .ok,
-                                startedAtMs: finalizeAttemptStartedAtMs,
-                                endedAtMs: finalizeAttemptEndedAtMs
-                            ),
-                        ]
-                    )
-                } catch {
-                    let finalizeAttemptEndedAtMs = nowEpochMs()
-                    let fallbackAttemptStartedAtMs = nowEpochMs()
-                    let transcript = try await transcribeWithAppleSpeech(
-                        sampleRate: sampleRate,
-                        audio: audio.pcmBytes,
-                        language: language
-                    )
-                    let fallbackAttemptEndedAtMs = nowEpochMs()
-                    let afterStopMs = Double(max(0, fallbackAttemptEndedAtMs - replayEndedAtMs))
-                    return (
-                        transcript,
-                        sendMs + afterStopMs,
-                        afterStopMs,
-                        replayStartedAtMs,
-                        replayEndedAtMs,
-                        [
-                            BenchmarkSTTAttempt(
-                                kind: "stream_send",
-                                status: .ok,
-                                startedAtMs: sendAttemptStartedAtMs,
-                                endedAtMs: sendAttemptEndedAtMs
-                            ),
-                            BenchmarkSTTAttempt(
-                                kind: "stream_finalize",
-                                status: .error,
-                                startedAtMs: finalizeAttemptStartedAtMs,
-                                endedAtMs: finalizeAttemptEndedAtMs,
-                                error: error.localizedDescription
-                            ),
-                            BenchmarkSTTAttempt(
-                                kind: "rest_fallback",
-                                status: .ok,
-                                startedAtMs: fallbackAttemptStartedAtMs,
-                                endedAtMs: fallbackAttemptEndedAtMs
-                            ),
-                        ]
-                    )
-                }
+                return try await runAppleSpeechSegmentedInference(
+                    preset: preset,
+                    audio: audio,
+                    sampleRate: sampleRate,
+                    language: language,
+                    chunkMs: chunkMs,
+                    realtime: realtime,
+                    segmentation: segmentation
+                )
 #else
                 throw AppError.invalidArgument("この環境では Speech.framework が利用できません")
 #endif
@@ -354,13 +295,13 @@ extension WhispCLI {
         }
     }
 
-    private static func resolveAPIKey(_ credential: STTCredential, provider: STTProvider) throws -> String {
+    private static func resolveAPIKey(_ credential: STTCredential, preset: STTPresetID) throws -> String {
         guard case let .apiKey(apiKey) = credential else {
-            throw AppError.invalidArgument("provider=\(provider.rawValue) は APIキー認証が必要です")
+            throw AppError.invalidArgument("preset=\(preset.rawValue) は APIキー認証が必要です")
         }
         let trimmed = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw AppError.invalidArgument("provider=\(provider.rawValue) の APIキーが空です")
+            throw AppError.invalidArgument("preset=\(preset.rawValue) の APIキーが空です")
         }
         return trimmed
     }
@@ -749,6 +690,239 @@ extension WhispCLI {
             return "none"
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static func runAppleSpeechSegmentedInference(
+        preset _: STTPresetID,
+        audio: AudioData,
+        sampleRate: Int,
+        language: String?,
+        chunkMs: Int,
+        realtime: Bool,
+        segmentation: STTSegmentationConfig
+    ) async throws -> (
+        transcript: String,
+        totalMs: Double,
+        afterStopMs: Double,
+        replayStartedAtMs: Int64?,
+        replayEndedAtMs: Int64?,
+        attempts: [BenchmarkSTTAttempt],
+        segmentCount: Int?,
+        vadSilenceCount: Int?
+    ) {
+#if canImport(Speech)
+        let chunkSamples = max(1, sampleRate * chunkMs / 1_000)
+        let chunkBytes = chunkSamples * MemoryLayout<Int16>.size
+        let silenceMs = max(segmentation.silenceMs, 100)
+        let maxSegmentMs = max(segmentation.maxSegmentMs, 1_000)
+        let preRollMs = max(segmentation.preRollMs, 0)
+        let preRollByteLimit = max(0, (sampleRate * preRollMs / 1_000) * MemoryLayout<Int16>.size)
+
+        let replayStartedAtMs = nowEpochMs()
+        var replayEndedAtMs = replayStartedAtMs
+        var attempts: [BenchmarkSTTAttempt] = []
+        var committedSegments: [STTCommittedSegment] = []
+        var vadIntervals: [VADInterval] = []
+
+        var stream: AppleSpeechStreamingRecognizer? = try await AppleSpeechStreamingRecognizer(sampleRate: sampleRate, language: language)
+        var preRollBuffer = Data()
+        var pendingPreRoll = Data()
+        var segmentStartMs: Int64 = 0
+        var segmentDurationMs = 0
+        var silenceAccumulatedMs = 0
+        var segmentHasSpeech = false
+        var timelineMs: Int64 = 0
+        var activeVADKind: String?
+        var activeVADStartMs: Int64 = 0
+
+        func appendPreRoll(_ chunk: Data) {
+            guard preRollByteLimit > 0 else {
+                return
+            }
+            preRollBuffer.append(chunk)
+            if preRollBuffer.count > preRollByteLimit {
+                preRollBuffer = Data(preRollBuffer.suffix(preRollByteLimit))
+            }
+        }
+
+        func updateVAD(kind: String, startMs: Int64) {
+            if activeVADKind == kind {
+                return
+            }
+            if let activeVADKind {
+                let interval = VADInterval(startMs: activeVADStartMs, endMs: startMs, kind: activeVADKind)
+                if interval.endMs > interval.startMs {
+                    vadIntervals.append(interval)
+                }
+            }
+            activeVADKind = kind
+            activeVADStartMs = startMs
+        }
+
+        func closeVAD(endMs: Int64) {
+            guard let currentKind = activeVADKind else {
+                return
+            }
+            let interval = VADInterval(startMs: activeVADStartMs, endMs: endMs, kind: currentKind)
+            if interval.endMs > interval.startMs {
+                vadIntervals.append(interval)
+            }
+            activeVADKind = nil
+        }
+
+        func ensureSegmentStreamStarted() async throws {
+            if stream == nil {
+                stream = try await AppleSpeechStreamingRecognizer(sampleRate: sampleRate, language: language)
+                let rewind = Int64(min(preRollMs, Int(timelineMs)))
+                segmentStartMs = max(0, timelineMs - rewind)
+                segmentDurationMs = 0
+                silenceAccumulatedMs = 0
+                segmentHasSpeech = false
+                if !pendingPreRoll.isEmpty {
+                    await stream?.enqueue(pendingPreRoll)
+                    pendingPreRoll.removeAll(keepingCapacity: false)
+                }
+            }
+        }
+
+        func commitSegment(reason: String, endMs: Int64) async throws {
+            guard let currentStream = stream else {
+                return
+            }
+            let commitStartedAtMs = nowEpochMs()
+            let transcript = try await currentStream.finish()
+            let commitEndedAtMs = nowEpochMs()
+            attempts.append(BenchmarkSTTAttempt(
+                kind: "segment_commit",
+                status: .ok,
+                startedAtMs: commitStartedAtMs,
+                endedAtMs: commitEndedAtMs
+            ))
+            stream = nil
+            pendingPreRoll = preRollBuffer
+            segmentDurationMs = 0
+            silenceAccumulatedMs = 0
+            segmentHasSpeech = false
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                committedSegments.append(STTCommittedSegment(
+                    index: committedSegments.count,
+                    startMs: segmentStartMs,
+                    endMs: max(segmentStartMs, endMs),
+                    text: trimmed,
+                    reason: reason
+                ))
+            }
+        }
+
+        var offset = 0
+        while offset < audio.pcmBytes.count {
+            let end = min(offset + chunkBytes, audio.pcmBytes.count)
+            let chunk = audio.pcmBytes.subdata(in: offset..<end)
+            let chunkDurationMs = max(1, chunkDurationMs(byteCount: chunk.count, sampleRate: sampleRate))
+            let chunkStartMs = timelineMs
+            timelineMs += Int64(chunkDurationMs)
+
+            appendPreRoll(chunk)
+            try await ensureSegmentStreamStarted()
+            await stream?.enqueue(chunk)
+            segmentDurationMs += chunkDurationMs
+
+            let speech = isSpeechChunk(chunk)
+            updateVAD(kind: speech ? "speech" : "silence", startMs: chunkStartMs)
+            if speech {
+                segmentHasSpeech = true
+                silenceAccumulatedMs = 0
+            } else {
+                silenceAccumulatedMs += chunkDurationMs
+            }
+
+            if !speech, segmentHasSpeech, silenceAccumulatedMs >= silenceMs {
+                try await commitSegment(reason: "silence", endMs: timelineMs)
+            } else if segmentDurationMs >= maxSegmentMs {
+                try await commitSegment(reason: "max_segment", endMs: timelineMs)
+            }
+
+            if realtime {
+                let frameCount = (end - offset) / MemoryLayout<Int16>.size
+                let seconds = Double(frameCount) / Double(sampleRate)
+                let nanoseconds = UInt64(seconds * 1_000_000_000)
+                if nanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: nanoseconds)
+                }
+            }
+            offset = end
+        }
+        replayEndedAtMs = nowEpochMs()
+        attempts.insert(BenchmarkSTTAttempt(
+            kind: "stream_send",
+            status: .ok,
+            startedAtMs: replayStartedAtMs,
+            endedAtMs: replayEndedAtMs
+        ), at: 0)
+
+        let finalizeStartedAt = DispatchTime.now()
+        let finalizeAttemptStartedAtMs = nowEpochMs()
+        try await commitSegment(reason: "stop", endMs: timelineMs)
+        let finalizeMs = elapsedMs(since: finalizeStartedAt)
+        let finalizeAttemptEndedAtMs = nowEpochMs()
+        attempts.append(BenchmarkSTTAttempt(
+            kind: "stream_finalize",
+            status: .ok,
+            startedAtMs: finalizeAttemptStartedAtMs,
+            endedAtMs: finalizeAttemptEndedAtMs
+        ))
+
+        closeVAD(endMs: timelineMs)
+        let transcript = committedSegments.map(\.text).joined(separator: "\n")
+        let vadSilenceCount = vadIntervals.filter { $0.kind == "silence" }.count
+        return (
+            transcript,
+            Double(max(0, finalizeAttemptEndedAtMs - replayStartedAtMs)),
+            finalizeMs,
+            replayStartedAtMs,
+            replayEndedAtMs,
+            attempts,
+            committedSegments.count,
+            vadSilenceCount
+        )
+#else
+        throw AppError.invalidArgument("この環境では Speech.framework が利用できません")
+#endif
+    }
+
+    private static func chunkDurationMs(byteCount: Int, sampleRate: Int) -> Int {
+        guard byteCount > 0, sampleRate > 0 else {
+            return 0
+        }
+        let sampleCount = byteCount / MemoryLayout<Int16>.size
+        guard sampleCount > 0 else {
+            return 0
+        }
+        return Int((Double(sampleCount) / Double(sampleRate)) * 1_000)
+    }
+
+    private static func isSpeechChunk(_ chunk: Data) -> Bool {
+        guard !chunk.isEmpty else {
+            return false
+        }
+
+        var sumSquares = 0.0
+        var count = 0
+        chunk.withUnsafeBytes { rawBuffer in
+            let samples = rawBuffer.bindMemory(to: Int16.self)
+            for sample in samples {
+                let normalized = Double(sample) / 32_768.0
+                sumSquares += normalized * normalized
+                count += 1
+            }
+        }
+
+        guard count > 0 else {
+            return false
+        }
+        let rms = sqrt(sumSquares / Double(count))
+        return rms >= 0.015
     }
 
     private static func transcribeWithAppleSpeech(

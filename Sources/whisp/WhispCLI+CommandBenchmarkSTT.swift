@@ -4,13 +4,13 @@ import WhispCore
 extension WhispCLI {
     static func runSTTCaseBenchmark(options: STTBenchmarkOptions) async throws {
         let config = try loadConfig()
-        if options.sttMode == .stream, !STTProviderCatalog.supportsStreaming(options.sttProvider) {
-            throw AppError.invalidArgument("--stt stream は provider=\(options.sttProvider.rawValue) では未対応です")
+        if options.sttMode == .stream, !STTPresetCatalog.supportsStreaming(options.sttPreset) {
+            throw AppError.invalidArgument("--stt-preset=\(options.sttPreset.rawValue) は stream 未対応です")
         }
-        if options.sttMode == .rest, !STTProviderCatalog.supportsREST(options.sttProvider) {
-            throw AppError.invalidArgument("--stt rest は provider=\(options.sttProvider.rawValue) では未対応です")
+        if options.sttMode == .rest, !STTPresetCatalog.supportsREST(options.sttPreset) {
+            throw AppError.invalidArgument("--stt-preset=\(options.sttPreset.rawValue) は rest 未対応です")
         }
-        let credential = try APIKeyResolver.sttCredential(config: config, provider: options.sttProvider)
+        let credential = try APIKeyResolver.sttCredential(config: config, preset: options.sttPreset)
         let allCases = try loadManualBenchmarkCases(path: options.jsonlPath)
         let selectedCases = options.limit.map { Array(allCases.prefix($0)) } ?? allCases
         let runID = defaultBenchmarkRunID(kind: .stt)
@@ -21,13 +21,19 @@ extension WhispCLI {
         print("jsonl: \(options.jsonlPath)")
         print("cases_total: \(allCases.count)")
         print("cases_selected: \(selectedCases.count)")
-        print("stt_provider: \(options.sttProvider.rawValue)")
+        print("stt_preset: \(options.sttPreset.rawValue)")
         print("stt_mode: \(options.sttMode.rawValue)")
         print("chunk_ms: \(options.chunkMs)")
+        print("silence_ms: \(options.silenceMs)")
+        print("max_segment_ms: \(options.maxSegmentMs)")
+        print("pre_roll_ms: \(options.preRollMs)")
         print("realtime: \(options.realtime)")
         print("stt_execution_profile: \(sttExecutionProfile)")
         print("benchmark_workers: \(benchmarkWorkers)")
-        if options.sttProvider == .appleSpeech, options.sttMode == .stream, benchmarkWorkers == 1 {
+        if STTPresetCatalog.spec(for: options.sttPreset).engine == .appleSpeech,
+           options.sttMode == .stream,
+           benchmarkWorkers == 1
+        {
             print("note: apple_speech stream は安定性のため benchmark_workers を1に制限します")
         }
         print("min_audio_seconds: \(String(format: "%.2f", options.minAudioSeconds))")
@@ -50,7 +56,10 @@ extension WhispCLI {
             sttMode: options.sttMode.rawValue,
             chunkMs: options.chunkMs,
             realtime: options.realtime,
-            minAudioSeconds: options.minAudioSeconds
+            minAudioSeconds: options.minAudioSeconds,
+            silenceMs: options.silenceMs,
+            maxSegmentMs: options.maxSegmentMs,
+            preRollMs: options.preRollMs
         ))
         let recorder = try BenchmarkRunRecorder(
             runID: runID,
@@ -251,7 +260,9 @@ extension WhispCLI {
 
     private static func resolvedSTTBenchmarkWorkers(options: STTBenchmarkOptions) -> Int {
         let requested = resolveBenchmarkWorkers(options.benchmarkWorkers)
-        if options.sttProvider == .appleSpeech, options.sttMode == .stream {
+        if STTPresetCatalog.spec(for: options.sttPreset).engine == .appleSpeech,
+           options.sttMode == .stream
+        {
             return 1
         }
         return requested
@@ -366,7 +377,7 @@ extension WhispCLI {
 
             let audioHash = sha256Hex(data: wavData)
             let cacheKey = sha256Hex(
-                text: "stt-v2|\(options.sttProvider.rawValue)|\(options.sttMode.rawValue)|\(options.chunkMs)|\(options.realtime)|\(config.inputLanguage)|\(audioHash)"
+                text: "stt-v4|\(options.sttPreset.rawValue)|\(options.chunkMs)|\(options.realtime)|\(options.silenceMs)|\(options.maxSegmentMs)|\(options.preRollMs)|\(config.inputLanguage)|\(audioHash)"
             )
             let loadEndedAtMs = nowEpochMs()
             let cacheStartedAtMs = nowEpochMs()
@@ -381,6 +392,8 @@ extension WhispCLI {
                 replayStartedAtMs: Int64?,
                 replayEndedAtMs: Int64?,
                 attempts: [BenchmarkSTTAttempt],
+                segmentCount: Int?,
+                vadSilenceCount: Int?,
                 cached: Bool
             )
             var cachedHits = 0
@@ -403,19 +416,26 @@ extension WhispCLI {
                     cachedOutput.replayStartedAtMs,
                     cachedOutput.replayEndedAtMs,
                     cachedOutput.attempts,
+                    cachedOutput.segmentCount,
+                    cachedOutput.vadSilenceCount,
                     true
                 )
                 cachedHits = 1
             } else {
                 cacheEndedAtMs = nowEpochMs()
                 let result = try await runSTTInference(
-                    provider: options.sttProvider,
+                    preset: options.sttPreset,
                     credential: credential,
                     audio: audio,
                     languageHint: config.inputLanguage,
-                    mode: options.sttMode,
                     chunkMs: options.chunkMs,
-                    realtime: options.realtime
+                    realtime: options.realtime,
+                    segmentation: STTSegmentationConfig(
+                        silenceMs: options.silenceMs,
+                        maxSegmentMs: options.maxSegmentMs,
+                        preRollMs: options.preRollMs,
+                        livePreviewEnabled: false
+                    )
                 )
                 sttOutput = (
                     result.transcript,
@@ -424,6 +444,8 @@ extension WhispCLI {
                     result.replayStartedAtMs,
                     result.replayEndedAtMs,
                     result.attempts,
+                    result.segmentCount,
+                    result.vadSilenceCount,
                     false
                 )
                 sttStartedAtMs = result.attempts.map(\.startedAtMs).min() ?? nowEpochMs()
@@ -435,6 +457,8 @@ extension WhispCLI {
                         transcript: result.transcript,
                         totalMs: result.totalMs,
                         afterStopMs: result.afterStopMs,
+                        segmentCount: result.segmentCount,
+                        vadSilenceCount: result.vadSilenceCount,
                         createdAt: WhispTime.isoNow()
                     )
                     try saveCacheEntry(component: "stt", key: cacheKey, value: cache)
@@ -464,7 +488,9 @@ extension WhispCLI {
                     sttAfterStopMs: sttOutput.afterStopMs,
                     latencyMs: sttOutput.totalMs,
                     audioSeconds: audioSeconds,
-                    outputChars: hypChars.count
+                    outputChars: hypChars.count,
+                    segmentCount: sttOutput.segmentCount,
+                    vadSilenceCount: sttOutput.vadSilenceCount
                 )
             )
 
@@ -527,7 +553,7 @@ extension WhispCLI {
                     startedAtMs: sttStartedAtMs,
                     endedAtMs: sttEndedAtMs
                 ),
-                provider: options.sttProvider.rawValue,
+                provider: options.sttPreset.rawValue,
                 mode: options.sttMode.rawValue,
                 transcriptText: sttOutput.transcript,
                 referenceText: reference.text,
@@ -674,6 +700,8 @@ extension WhispCLI {
         replayStartedAtMs: Int64?,
         replayEndedAtMs: Int64?,
         attempts: [BenchmarkSTTAttempt],
+        segmentCount: Int?,
+        vadSilenceCount: Int?,
         sttStartedAtMs: Int64,
         sttEndedAtMs: Int64
     ) {
@@ -692,6 +720,8 @@ extension WhispCLI {
                     startedAtMs: startedAtMs,
                     endedAtMs: endedAtMs
                 )],
+                cached.segmentCount,
+                cached.vadSilenceCount,
                 startedAtMs,
                 endedAtMs
             )
@@ -731,6 +761,8 @@ extension WhispCLI {
                 startedAtMs: sttStartedAtMs,
                 endedAtMs: sttEndedAtMs
             )],
+            cached.segmentCount,
+            cached.vadSilenceCount,
             sttStartedAtMs,
             sttEndedAtMs
         )

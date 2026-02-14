@@ -6,6 +6,7 @@ import WhispCore
 final class AppCoordinator {
     var onStateChanged: ((PipelineState) -> Void)?
     var onError: ((String) -> Void)?
+    var onSegmentCommitted: ((STTCommittedSegment) -> Void)?
 
     private(set) var state: PipelineState = .idle {
         didSet {
@@ -215,7 +216,12 @@ final class AppCoordinator {
                 config: config,
                 runID: runID,
                 language: LanguageResolver.languageParam(config.inputLanguage),
-                logger: logger
+                logger: logger,
+                onSegmentCommitted: { [weak self] segment in
+                    Task { @MainActor in
+                        self?.onSegmentCommitted?(segment)
+                    }
+                }
             )
             sttStreamingSession = streamingSession
             let accessibilitySummarySource = accessibilitySummarySourceText(from: accessibilityAtStart)
@@ -238,7 +244,7 @@ final class AppCoordinator {
                 accessibilitySummaryTask: accessibilitySummaryTask,
                 recordingMode: config.recordingMode.rawValue,
                 model: config.llmModel.rawValue,
-                sttProvider: config.sttProvider.rawValue,
+                sttPreset: config.sttPreset.rawValue,
                 sttStreaming: streamingSession != nil,
                 visionEnabled: config.context.visionEnabled,
                 accessibilitySummaryStarted: accessibilitySummaryTask != nil
@@ -253,7 +259,7 @@ final class AppCoordinator {
             devLog("recording_start", runID: run.id, fields: [
                 "mode": run.recordingMode,
                 "model": run.model,
-                "stt_provider": run.sttProvider,
+                "stt_provider": run.sttPreset,
                 "vision_enabled": String(run.visionEnabled),
                 "stt_streaming": String(run.sttStreaming),
                 "accessibility_summary_started": String(run.accessibilitySummaryStarted),
@@ -282,7 +288,7 @@ final class AppCoordinator {
             accessibilitySummaryTask: nil,
             recordingMode: config.recordingMode.rawValue,
             model: config.llmModel.rawValue,
-            sttProvider: config.sttProvider.rawValue,
+            sttPreset: config.sttPreset.rawValue,
             sttStreaming: sttStreamingSession != nil,
             visionEnabled: config.context.visionEnabled,
             accessibilitySummaryStarted: false
@@ -326,7 +332,7 @@ final class AppCoordinator {
                 ),
                 mode: run.recordingMode,
                 model: run.model,
-                sttProvider: run.sttProvider,
+                sttProvider: run.sttPreset,
                 sttStreaming: run.sttStreaming,
                 visionEnabled: run.visionEnabled,
                 accessibilitySummaryStarted: run.accessibilitySummaryStarted,

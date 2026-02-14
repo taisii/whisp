@@ -273,6 +273,32 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertEqual(payload.context?.visionSummary, "editor")
     }
 
+    func testAppendManualTestCaseRejectsDuplicateID() throws {
+        let home = tempHome()
+        let store = makeStore(home: home)
+        let captureID = try store.saveRecording(
+            runID: "run-manual-duplicate",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 3, count: 640),
+            llmModel: "gemini-2.5-flash-lite",
+            appName: "Codex"
+        )
+
+        let path = try store.appendManualTestCase(captureID: captureID)
+        XCTAssertThrowsError(try store.appendManualTestCase(captureID: captureID)) { error in
+            guard case AppError.invalidArgument(let message) = error else {
+                return XCTFail("expected invalidArgument, got: \(error)")
+            }
+            XCTAssertTrue(message.contains("既に追加済み"))
+            XCTAssertTrue(message.contains(captureID))
+        }
+
+        let lines = try String(contentsOfFile: path, encoding: .utf8)
+            .components(separatedBy: .newlines)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        XCTAssertEqual(lines.count, 1)
+    }
+
     func testDeleteCaptureRemovesRecordAndAudio() throws {
         let home = tempHome()
         let store = makeStore(home: home)

@@ -79,9 +79,16 @@
 1. 録音開始時: 必要キー検証、debug runディレクトリを先行確保、STTストリーミング準備、録音開始。
 2. 録音停止時: 音声データを予約済みrunへ確定保存し、非同期で処理継続。
 3. STT:
-   - `sttProvider=deepgram`: stream優先、失敗時restフォールバック
-   - `sttProvider=whisper`: OpenAI Realtime stream優先、失敗時Whisper RESTフォールバック
-   - `sttProvider=apple_speech`: Apple Speech stream優先（Speech.framework on-device）、失敗時REST（URL request）フォールバック
+   - `sttPreset=deepgram_stream`: Deepgram Streaming
+   - `sttPreset=deepgram_rest`: Deepgram REST
+   - `sttPreset=apple_speech_recognizer_stream`: Apple Speech Recognizer Streaming（Speech.framework on-device）
+   - `sttPreset=apple_speech_recognizer_rest`: Apple Speech Recognizer REST（on-device URL request）
+   - `sttPreset=apple_speech_analyzer_stream`: Apple Speech Analyzer Streaming（on-device）
+   - `sttPreset=apple_speech_analyzer_rest`: Apple Speech Analyzer REST（on-device）
+   - `sttPreset=chatgpt_whisper_stream`: OpenAI Realtime Streaming（gpt-4o-mini-transcribe）
+   - Apple streaming は `sttSegmentation` に従って VAD区切り（`silence/max_segment/stop`）で segment commit し、セッションを回転する
+   - `segments` と `vadIntervals` を保存し、後段LLMには `segments.map(\.text).joined(separator: "\n")` を渡す
+   - Streaming失敗時はRESTへフォールバックせず、エラーで終了
    - 直接音声モデル時は LLMで音声→テキスト整形
 4. Context:
    - アクセシビリティ文脈を収集

@@ -9,20 +9,20 @@ final class DebugEventAnalyzerTests: XCTestCase {
             makeRecordingLog(start: 1000, end: 2000),
             .stt(DebugSTTLog(
                 base: base(type: .stt, start: 2000, end: 2120),
-                provider: STTProvider.whisper.rawValue,
-                transport: .rest,
-                route: .rest,
-                source: "whisper_rest",
+                provider: STTPresetID.chatgptWhisperStream.rawValue,
+                transport: .websocket,
+                route: .streaming,
+                source: "openai_realtime_stream",
                 textChars: 16,
                 sampleRate: 16_000,
                 audioBytes: 40_000,
                 attempts: [
                     DebugSTTAttempt(
-                        kind: .whisperREST,
+                        kind: .streamFinalize,
                         status: .ok,
                         eventStartMs: 2000,
                         eventEndMs: 2120,
-                        source: "whisper_rest",
+                        source: "openai_realtime_stream",
                         textChars: 16,
                         sampleRate: 16_000,
                         audioBytes: 40_000
@@ -52,8 +52,8 @@ final class DebugEventAnalyzerTests: XCTestCase {
 
         let analysis = analyzer.analyze(logs: logs)
 
-        XCTAssertEqual(analysis.sttInfo.providerName, "Whisper (OpenAI)")
-        XCTAssertEqual(analysis.sttInfo.routeName, "REST")
+        XCTAssertEqual(analysis.sttInfo.providerName, "ChatGPT Whisper (Streaming)")
+        XCTAssertEqual(analysis.sttInfo.routeName, "Streaming")
         XCTAssertEqual(analysis.timings.recordingMs ?? 0, 1000, accuracy: 0.001)
         XCTAssertEqual(analysis.timings.sttMs ?? 0, 120, accuracy: 0.001)
         XCTAssertEqual(analysis.timings.postProcessMs ?? 0, 85, accuracy: 0.001)
@@ -104,7 +104,7 @@ final class DebugEventAnalyzerTests: XCTestCase {
             base: base(type: .recording, start: start, end: end),
             mode: "toggle",
             model: "gpt-5-nano",
-            sttProvider: STTProvider.whisper.rawValue,
+            sttProvider: STTPresetID.chatgptWhisperStream.rawValue,
             sttStreaming: false,
             visionEnabled: true,
             accessibilitySummaryStarted: true,

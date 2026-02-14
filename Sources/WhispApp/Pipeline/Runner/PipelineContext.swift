@@ -22,7 +22,7 @@ struct PipelineRun {
     let accessibilitySummaryTask: PipelineAccessibilitySummaryTask?
     let recordingMode: String
     let model: String
-    let sttProvider: String
+    let sttPreset: String
     let sttStreaming: Bool
     let visionEnabled: Bool
     let accessibilitySummaryStarted: Bool

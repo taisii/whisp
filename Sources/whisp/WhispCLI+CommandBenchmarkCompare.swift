@@ -307,30 +307,26 @@ extension WhispCLI {
         benchmarkKey: BenchmarkKey,
         benchmarkWorkers: Int?
     ) throws -> STTBenchmarkOptions {
-        let sttModeRaw = candidate.options["stt_mode"] ?? "stream"
-        guard let sttMode = STTMode(rawValue: sttModeRaw) else {
-            throw AppError.invalidArgument("candidate \(candidate.id): stt_mode は rest|stream を指定してください")
+        guard let preset = STTPresetID(rawValue: candidate.model) else {
+            throw AppError.invalidArgument("candidate \(candidate.id): stt preset が不正です: \(candidate.model)")
         }
         let chunkMs = try parseCandidateInt(candidate.options, key: "chunk_ms", defaultValue: 120)
         let realtime = true
         let minAudioSeconds = try parseCandidateDouble(candidate.options, key: "min_audio_seconds", defaultValue: 2.0)
+        let silenceMs = try parseCandidateInt(candidate.options, key: "silence_ms", defaultValue: STTSegmentationConfig().silenceMs)
+        let maxSegmentMs = try parseCandidateInt(candidate.options, key: "max_segment_ms", defaultValue: STTSegmentationConfig().maxSegmentMs)
+        let preRollMs = try parseCandidateInt(candidate.options, key: "pre_roll_ms", defaultValue: STTSegmentationConfig().preRollMs)
         let useCache = try parseCandidateBool(candidate.options, key: "use_cache", defaultValue: true)
         let limit = try parseCandidateOptionalInt(candidate.options, key: "limit")
-        guard let provider = STTProvider(rawValue: candidate.model) else {
-            throw AppError.invalidArgument("candidate \(candidate.id): stt provider が不正です: \(candidate.model)")
-        }
-        if sttMode == .stream, !STTProviderCatalog.supportsStreaming(provider) {
-            throw AppError.invalidArgument("candidate \(candidate.id): provider=\(provider.rawValue) は stt_mode=stream 未対応です")
-        }
-        if sttMode == .rest, !STTProviderCatalog.supportsREST(provider) {
-            throw AppError.invalidArgument("candidate \(candidate.id): provider=\(provider.rawValue) は stt_mode=rest 未対応です")
-        }
 
         return STTBenchmarkOptions(
             jsonlPath: datasetPath,
-            sttMode: sttMode,
+            sttPreset: preset,
             chunkMs: chunkMs,
             realtime: realtime,
+            silenceMs: silenceMs,
+            maxSegmentMs: maxSegmentMs,
+            preRollMs: preRollMs,
             benchmarkWorkers: benchmarkWorkers,
             limit: limit,
             minAudioSeconds: minAudioSeconds,
@@ -340,8 +336,7 @@ extension WhispCLI {
             runtimeOptionsHash: runtimeHash,
             evaluatorVersion: benchmarkKey.evaluatorVersion,
             codeVersion: benchmarkKey.codeVersion,
-            benchmarkKey: benchmarkKey,
-            sttProvider: provider
+            benchmarkKey: benchmarkKey
         )
     }
 

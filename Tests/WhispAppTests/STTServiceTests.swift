@@ -14,7 +14,7 @@ final class STTServiceTests: XCTestCase {
         ))
 
         let result = try await service.transcribe(
-            config: config(sttProvider: .deepgram),
+            config: config(sttPreset: .deepgramStream),
             recording: recording,
             language: "ja",
             runID: "run-1",
@@ -34,7 +34,7 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(restCalls, 0)
     }
 
-    func testDeepgramTranscribeFallsBackToRESTWhenFinalizeFails() async throws {
+    func testDeepgramTranscribeThrowsWhenFinalizeFails() async throws {
         let rest = FakeDeepgramRESTTranscriber(
             transcript: "fallback-rest-text",
             usage: STTUsage(durationSeconds: 0.8, requestID: "rest-1", provider: STTProvider.deepgram.rawValue)
@@ -42,26 +42,27 @@ final class STTServiceTests: XCTestCase {
         let service = DeepgramSTTService(restClient: rest)
         let session = FakeStreamingSession(error: AppError.io("finalize failed"))
 
-        let result = try await service.transcribe(
-            config: config(sttProvider: .deepgram),
-            recording: recording,
-            language: "en",
-            runID: "run-2",
-            streamingSession: session,
-            logger: { _, _ in }
-        )
+        do {
+            _ = try await service.transcribe(
+                config: config(sttPreset: .deepgramStream),
+                recording: recording,
+                language: "en",
+                runID: "run-2",
+                streamingSession: session,
+                logger: { _, _ in }
+            )
+            XCTFail("expected transcribe to throw")
+        } catch let error as AppError {
+            guard case .io(let message) = error else {
+                return XCTFail("unexpected AppError: \(error)")
+            }
+            XCTAssertTrue(message.contains("finalize failed"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
 
-        XCTAssertEqual(result.transcript, "fallback-rest-text")
-        XCTAssertEqual(result.trace.route, .streamingFallbackREST)
-        XCTAssertEqual(result.trace.attempts.count, 2)
-        XCTAssertEqual(result.trace.attempts[0].kind, .streamFinalize)
-        XCTAssertEqual(result.trace.attempts[0].status, .error)
-        XCTAssertEqual(result.trace.attempts[1].kind, .restFallback)
-        XCTAssertEqual(result.trace.attempts[1].status, .ok)
         let restCalls = await rest.callCount()
-        let lastLanguage = await rest.lastLanguage()
-        XCTAssertEqual(restCalls, 1)
-        XCTAssertEqual(lastLanguage, "en")
+        XCTAssertEqual(restCalls, 0)
     }
 
     func testDeepgramTranscribeUsesRESTWhenNoStreamingSession() async throws {
@@ -72,7 +73,7 @@ final class STTServiceTests: XCTestCase {
         let service = DeepgramSTTService(restClient: rest)
 
         let result = try await service.transcribe(
-            config: config(sttProvider: .deepgram),
+            config: config(sttPreset: .deepgramRest),
             recording: recording,
             language: nil,
             runID: "run-3",
@@ -105,10 +106,11 @@ final class STTServiceTests: XCTestCase {
         )
 
         _ = service.startStreamingSessionIfNeeded(
-            config: config(sttProvider: .deepgram),
+            config: config(sttPreset: .deepgramStream),
             runID: "run-builder",
             language: "ja",
-            logger: { _, _ in }
+            logger: { _, _ in },
+            onSegmentCommitted: nil
         )
 
         XCTAssertEqual(recorder.callCount, 1)
@@ -123,7 +125,7 @@ final class STTServiceTests: XCTestCase {
             usage: nil,
             drainStats: STTStreamingDrainStats(submittedChunks: 0, submittedBytes: 0, droppedChunks: 0)
         )))
-        var conf = config(sttProvider: .deepgram)
+        var conf = config(sttPreset: .deepgramStream)
         conf.llmModel = .gemini25FlashLiteAudio
 
         let service = DeepgramSTTService(
@@ -137,7 +139,8 @@ final class STTServiceTests: XCTestCase {
             config: conf,
             runID: "run-direct-audio",
             language: "ja",
-            logger: { _, _ in }
+            logger: { _, _ in },
+            onSegmentCommitted: nil
         )
 
         XCTAssertNil(session)
@@ -156,7 +159,7 @@ final class STTServiceTests: XCTestCase {
         )
 
         let deepgramResult = try await switching.transcribe(
-            config: config(sttProvider: .deepgram),
+            config: config(sttPreset: .deepgramRest),
             recording: recording,
             language: nil,
             runID: "run-provider-deepgram",
@@ -165,18 +168,23 @@ final class STTServiceTests: XCTestCase {
         )
         XCTAssertEqual(deepgramResult.transcript, "deepgram")
 
+        let whisperSession = FakeStreamingSession(result: STTStreamingFinalizeResult(
+            transcript: "whisper-stream",
+            usage: nil,
+            drainStats: STTStreamingDrainStats(submittedChunks: 1, submittedBytes: 32, droppedChunks: 0)
+        ))
         let whisperResult = try await switching.transcribe(
-            config: config(sttProvider: .whisper),
+            config: config(sttPreset: .chatgptWhisperStream),
             recording: recording,
             language: nil,
             runID: "run-provider-whisper",
-            streamingSession: nil,
+            streamingSession: whisperSession,
             logger: { _, _ in }
         )
-        XCTAssertEqual(whisperResult.transcript, "whisper")
+        XCTAssertEqual(whisperResult.transcript, "whisper-stream")
 
         let appleResult = try await switching.transcribe(
-            config: config(sttProvider: .appleSpeech),
+            config: config(sttPreset: .appleSpeechRecognizerRest),
             recording: recording,
             language: nil,
             runID: "run-provider-apple",
@@ -184,6 +192,33 @@ final class STTServiceTests: XCTestCase {
             logger: { _, _ in }
         )
         XCTAssertEqual(appleResult.transcript, "apple")
+    }
+
+    func testProviderSwitchingRejectsMissingStreamingSessionForStreamPreset() async {
+        let switching = ProviderSwitchingSTTService(
+            deepgramService: DeepgramSTTService(restClient: FakeDeepgramRESTTranscriber(transcript: "unused", usage: nil)),
+            whisperService: WhisperSTTService(client: FakeWhisperRESTTranscriber(transcript: "unused", usage: nil)),
+            appleSpeechService: AppleSpeechSTTService(client: FakeAppleSpeechTranscriber(transcript: "unused", usage: nil))
+        )
+
+        do {
+            _ = try await switching.transcribe(
+                config: config(sttPreset: .chatgptWhisperStream),
+                recording: recording,
+                language: nil,
+                runID: "run-provider-reject",
+                streamingSession: nil,
+                logger: { _, _ in }
+            )
+            XCTFail("expected transcribe to throw")
+        } catch let error as AppError {
+            guard case .io(let message) = error else {
+                return XCTFail("unexpected AppError: \(error)")
+            }
+            XCTAssertTrue(message.contains("streaming session unavailable"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
     }
 
     func testWhisperServiceProducesWhisperRESTTrace() async throws {
@@ -194,7 +229,7 @@ final class STTServiceTests: XCTestCase {
         let service = WhisperSTTService(client: whisper)
 
         let result = try await service.transcribe(
-            config: config(sttProvider: .whisper),
+            config: config(sttPreset: .chatgptWhisperStream),
             recording: recording,
             language: "en",
             runID: "run-whisper",
@@ -221,7 +256,7 @@ final class STTServiceTests: XCTestCase {
         ))
 
         let result = try await service.transcribe(
-            config: config(sttProvider: .whisper),
+            config: config(sttPreset: .chatgptWhisperStream),
             recording: recording,
             language: "ja",
             runID: "run-whisper-stream",
@@ -237,7 +272,7 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(whisperCalls, 0)
     }
 
-    func testWhisperServiceFallsBackToRESTWhenStreamingFails() async throws {
+    func testWhisperServiceThrowsWhenStreamingFails() async throws {
         let whisper = FakeWhisperRESTTranscriber(
             transcript: "whisper-rest-fallback",
             usage: STTUsage(durationSeconds: 1.1, requestID: nil, provider: STTProvider.whisper.rawValue)
@@ -245,22 +280,27 @@ final class STTServiceTests: XCTestCase {
         let service = WhisperSTTService(client: whisper)
         let session = FakeStreamingSession(error: AppError.io("stream failed"))
 
-        let result = try await service.transcribe(
-            config: config(sttProvider: .whisper),
-            recording: recording,
-            language: "en",
-            runID: "run-whisper-fallback",
-            streamingSession: session,
-            logger: { _, _ in }
-        )
+        do {
+            _ = try await service.transcribe(
+                config: config(sttPreset: .chatgptWhisperStream),
+                recording: recording,
+                language: "en",
+                runID: "run-whisper-fallback",
+                streamingSession: session,
+                logger: { _, _ in }
+            )
+            XCTFail("expected transcribe to throw")
+        } catch let error as AppError {
+            guard case .io(let message) = error else {
+                return XCTFail("unexpected AppError: \(error)")
+            }
+            XCTAssertTrue(message.contains("stream failed"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
 
-        XCTAssertEqual(result.transcript, "whisper-rest-fallback")
-        XCTAssertEqual(result.trace.route, .streamingFallbackREST)
-        XCTAssertEqual(result.trace.attempts.count, 2)
-        XCTAssertEqual(result.trace.attempts[0].status, .error)
-        XCTAssertEqual(result.trace.attempts[1].kind, .restFallback)
         let whisperCalls = await whisper.callCount()
-        XCTAssertEqual(whisperCalls, 1)
+        XCTAssertEqual(whisperCalls, 0)
     }
 
     func testAppleSpeechServiceProducesOnDeviceTrace() async throws {
@@ -271,7 +311,7 @@ final class STTServiceTests: XCTestCase {
         let service = AppleSpeechSTTService(client: apple)
 
         let result = try await service.transcribe(
-            config: config(sttProvider: .appleSpeech),
+            config: config(sttPreset: .appleSpeechRecognizerRest),
             recording: recording,
             language: "ja",
             runID: "run-apple",
@@ -280,10 +320,10 @@ final class STTServiceTests: XCTestCase {
         )
 
         XCTAssertEqual(result.transcript, "apple-text")
-        XCTAssertEqual(result.trace.route, .onDevice)
+        XCTAssertEqual(result.trace.route, .rest)
         XCTAssertEqual(result.trace.attempts.count, 1)
         XCTAssertEqual(result.trace.attempts[0].kind, .appleSpeech)
-        XCTAssertEqual(result.trace.attempts[0].source, "apple_speech_rest")
+        XCTAssertEqual(result.trace.attempts[0].source, "apple_speech_recognizer_rest")
         let appleCalls = await apple.callCount()
         XCTAssertEqual(appleCalls, 1)
     }
@@ -298,7 +338,7 @@ final class STTServiceTests: XCTestCase {
         ))
 
         let result = try await service.transcribe(
-            config: config(sttProvider: .appleSpeech),
+            config: config(sttPreset: .appleSpeechRecognizerStream),
             recording: recording,
             language: "ja",
             runID: "run-apple-stream",
@@ -316,7 +356,104 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(appleCalls, 0)
     }
 
-    func testAppleSpeechServiceFallsBackToRESTWhenStreamingFails() async throws {
+    func testAppleSpeechServiceStreamingReturnsCommittedSegments() async throws {
+        let recognizer = FakeAppleSpeechTranscriber(transcript: "recognizer-rest", usage: nil)
+        let analyzer = FakeAppleSpeechTranscriber(transcript: "analyzer-rest", usage: nil)
+        let service = AppleSpeechSTTService(
+            recognizerClient: recognizer,
+            analyzerClient: analyzer
+        )
+
+        let recognizerSession = FakeStreamingSession(result: STTStreamingFinalizeResult(
+            transcript: "one\ntwo",
+            usage: nil,
+            drainStats: STTStreamingDrainStats(submittedChunks: 2, submittedBytes: 320, droppedChunks: 0),
+            segments: [
+                STTCommittedSegment(index: 0, startMs: 0, endMs: 500, text: "one", reason: "silence"),
+                STTCommittedSegment(index: 1, startMs: 500, endMs: 900, text: "two", reason: "stop"),
+            ],
+            vadIntervals: [
+                VADInterval(startMs: 0, endMs: 450, kind: "speech"),
+                VADInterval(startMs: 450, endMs: 900, kind: "silence"),
+            ]
+        ))
+        let recognizerResult = try await service.transcribe(
+            config: config(sttPreset: .appleSpeechRecognizerStream),
+            recording: recording,
+            language: nil,
+            runID: "run-apple-recognizer-stream-segments",
+            streamingSession: recognizerSession,
+            logger: { _, _ in }
+        )
+        XCTAssertEqual(recognizerResult.segments.count, 2)
+        XCTAssertEqual(recognizerResult.vadIntervals.count, 2)
+
+        let analyzerSession = FakeStreamingSession(result: STTStreamingFinalizeResult(
+            transcript: "three",
+            usage: nil,
+            drainStats: STTStreamingDrainStats(submittedChunks: 1, submittedBytes: 128, droppedChunks: 0),
+            segments: [
+                STTCommittedSegment(index: 0, startMs: 0, endMs: 400, text: "three", reason: "stop"),
+            ],
+            vadIntervals: [
+                VADInterval(startMs: 0, endMs: 400, kind: "speech"),
+            ]
+        ))
+        let analyzerResult = try await service.transcribe(
+            config: config(sttPreset: .appleSpeechAnalyzerStream),
+            recording: recording,
+            language: nil,
+            runID: "run-apple-analyzer-stream-segments",
+            streamingSession: analyzerSession,
+            logger: { _, _ in }
+        )
+        XCTAssertEqual(analyzerResult.segments.count, 1)
+        XCTAssertEqual(analyzerResult.segments.first?.text, "three")
+    }
+
+    func testAppleSpeechSegmentingSessionSplitsOnSilence() async throws {
+        let transcriber = ScriptedAppleSpeechTranscriber(segmentTranscripts: ["first", "second"])
+        let session = AppleSpeechSegmentingSession(
+            transcriber: transcriber,
+            sampleRate: 16_000,
+            language: nil,
+            segmentation: STTSegmentationConfig(silenceMs: 100, maxSegmentMs: 10_000, preRollMs: 0, livePreviewEnabled: false),
+            logger: { _, _ in },
+            runID: "run-segment-silence",
+            onSegmentCommitted: nil
+        )
+        session.submit(chunk: makePCMChunk(ms: 80, amplitude: 10_000))
+        session.submit(chunk: makePCMChunk(ms: 120, amplitude: 0))
+        session.submit(chunk: makePCMChunk(ms: 80, amplitude: 12_000))
+        let result = try await session.finish()
+
+        XCTAssertEqual(result.segments.count, 2)
+        XCTAssertEqual(result.segments.first?.reason, "silence")
+        XCTAssertEqual(result.segments.last?.reason, "stop")
+    }
+
+    func testAppleSpeechSegmentingSessionSplitsOnMaxSegment() async throws {
+        let transcriber = ScriptedAppleSpeechTranscriber(segmentTranscripts: ["part1", "part2"])
+        let session = AppleSpeechSegmentingSession(
+            transcriber: transcriber,
+            sampleRate: 16_000,
+            language: nil,
+            segmentation: STTSegmentationConfig(silenceMs: 1_000, maxSegmentMs: 100, preRollMs: 0, livePreviewEnabled: false),
+            logger: { _, _ in },
+            runID: "run-segment-max",
+            onSegmentCommitted: nil
+        )
+        session.submit(chunk: makePCMChunk(ms: 60, amplitude: 9_000))
+        session.submit(chunk: makePCMChunk(ms: 60, amplitude: 9_000))
+        session.submit(chunk: makePCMChunk(ms: 40, amplitude: 9_000))
+        let result = try await session.finish()
+
+        XCTAssertEqual(result.segments.count, 2)
+        XCTAssertEqual(result.segments.first?.reason, "max_segment")
+        XCTAssertEqual(result.segments.last?.reason, "stop")
+    }
+
+    func testAppleSpeechServiceThrowsWhenStreamingFails() async throws {
         let apple = FakeAppleSpeechTranscriber(
             transcript: "apple-rest-fallback",
             usage: STTUsage(durationSeconds: 1.1, requestID: nil, provider: STTProvider.appleSpeech.rawValue)
@@ -324,23 +461,27 @@ final class STTServiceTests: XCTestCase {
         let service = AppleSpeechSTTService(client: apple)
         let session = FakeStreamingSession(error: AppError.io("apple stream failed"))
 
-        let result = try await service.transcribe(
-            config: config(sttProvider: .appleSpeech),
-            recording: recording,
-            language: "en",
-            runID: "run-apple-fallback",
-            streamingSession: session,
-            logger: { _, _ in }
-        )
+        do {
+            _ = try await service.transcribe(
+                config: config(sttPreset: .appleSpeechRecognizerStream),
+                recording: recording,
+                language: "en",
+                runID: "run-apple-fallback",
+                streamingSession: session,
+                logger: { _, _ in }
+            )
+            XCTFail("expected transcribe to throw")
+        } catch let error as AppError {
+            guard case .io(let message) = error else {
+                return XCTFail("unexpected AppError: \(error)")
+            }
+            XCTAssertTrue(message.contains("apple stream failed"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
 
-        XCTAssertEqual(result.transcript, "apple-rest-fallback")
-        XCTAssertEqual(result.trace.route, .streamingFallbackREST)
-        XCTAssertEqual(result.trace.transport, .onDevice)
-        XCTAssertEqual(result.trace.attempts.count, 2)
-        XCTAssertEqual(result.trace.attempts[0].status, .error)
-        XCTAssertEqual(result.trace.attempts[1].kind, .restFallback)
         let appleCalls = await apple.callCount()
-        XCTAssertEqual(appleCalls, 1)
+        XCTAssertEqual(appleCalls, 0)
     }
 
     func testAppleSpeechStartStreamingSessionBuildsLiveSession() async throws {
@@ -348,12 +489,13 @@ final class STTServiceTests: XCTestCase {
         let service = AppleSpeechSTTService(client: apple)
         let logCollector = PipelineLogCollector()
         let session = service.startStreamingSessionIfNeeded(
-            config: config(sttProvider: .appleSpeech),
+            config: config(sttPreset: .appleSpeechRecognizerStream),
             runID: "run-apple-builder",
             language: "ja",
             logger: { event, attrs in
                 logCollector.record(event: event, attrs: attrs)
-            }
+            },
+            onSegmentCommitted: nil
         )
 
         XCTAssertNotNil(session)
@@ -368,7 +510,7 @@ final class STTServiceTests: XCTestCase {
     }
 
     func testAppleSpeechStartStreamingSessionReturnsNilForDirectAudioModel() {
-        var conf = config(sttProvider: .appleSpeech)
+        var conf = config(sttPreset: .appleSpeechRecognizerStream)
         conf.llmModel = .gemini25FlashLiteAudio
         let service = AppleSpeechSTTService(client: FakeAppleSpeechTranscriber(transcript: "unused", usage: nil))
 
@@ -376,7 +518,8 @@ final class STTServiceTests: XCTestCase {
             config: conf,
             runID: "run-apple-direct-audio",
             language: "ja",
-            logger: { _, _ in }
+            logger: { _, _ in },
+            onSegmentCommitted: nil
         )
 
         XCTAssertNil(session)
@@ -384,17 +527,26 @@ final class STTServiceTests: XCTestCase {
 
     private let recording = RecordingResult(sampleRate: 16_000, pcmData: Data(repeating: 1, count: 3_200))
 
-    private func config(sttProvider: STTProvider) -> Config {
+    private func config(sttPreset: STTPresetID) -> Config {
         Config(
             apiKeys: APIKeys(deepgram: "dg", gemini: "gm", openai: "oa"),
             shortcut: "Cmd+J",
             inputLanguage: "ja",
             recordingMode: .toggle,
-            sttProvider: sttProvider,
+            sttPreset: sttPreset,
             appPromptRules: [],
             llmModel: .gemini25FlashLite,
             context: ContextConfig(visionEnabled: false, visionMode: .saveOnly)
         )
+    }
+}
+
+private func makePCMChunk(ms: Int, amplitude: Int16) -> Data {
+    let sampleRate = 16_000
+    let sampleCount = max(1, sampleRate * ms / 1_000)
+    let samples = [Int16](repeating: amplitude, count: sampleCount)
+    return samples.withUnsafeBytes { rawBuffer in
+        Data(rawBuffer)
     }
 }
 
@@ -508,6 +660,41 @@ private actor FakeAppleSpeechTranscriber: AppleSpeechTranscriber {
     func callCount() -> Int { calls }
     func streamingStartCallCount() -> Int { streamStartCalls }
     func streamingFinishCallCount() -> Int { streamFinishCalls }
+}
+
+private actor ScriptedAppleSpeechTranscriber: AppleSpeechTranscriber {
+    private let segmentTranscripts: [String]
+    private var segmentIndex = 0
+
+    init(segmentTranscripts: [String]) {
+        self.segmentTranscripts = segmentTranscripts
+    }
+
+    func transcribe(
+        sampleRate _: Int,
+        audio _: Data,
+        language _: String?
+    ) async throws -> (transcript: String, usage: STTUsage?) {
+        ("", nil)
+    }
+
+    func startStreaming(
+        sampleRate _: Int,
+        language _: String?
+    ) async throws {}
+
+    func enqueueStreamingAudioChunk(_ chunk: Data) async {
+        _ = chunk
+    }
+
+    func finishStreaming() async throws -> (transcript: String, usage: STTUsage?) {
+        let currentIndex = segmentIndex
+        segmentIndex += 1
+        if currentIndex < segmentTranscripts.count {
+            return (segmentTranscripts[currentIndex], nil)
+        }
+        return ("", nil)
+    }
 }
 
 private final class FakeStreamingSession: STTStreamingSession, @unchecked Sendable {

@@ -26,6 +26,22 @@ struct STTTranscriptionResult {
     let transcript: String
     let usage: STTUsage?
     let trace: STTTrace
+    let segments: [STTCommittedSegment]
+    let vadIntervals: [VADInterval]
+
+    init(
+        transcript: String,
+        usage: STTUsage?,
+        trace: STTTrace,
+        segments: [STTCommittedSegment] = [],
+        vadIntervals: [VADInterval] = []
+    ) {
+        self.transcript = transcript
+        self.usage = usage
+        self.trace = trace
+        self.segments = segments
+        self.vadIntervals = vadIntervals
+    }
 }
 
 struct VisionContextCollectionResult {

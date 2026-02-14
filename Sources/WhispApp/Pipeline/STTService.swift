@@ -19,6 +19,22 @@ struct STTStreamingFinalizeResult {
     let transcript: String
     let usage: STTUsage?
     let drainStats: STTStreamingDrainStats
+    let segments: [STTCommittedSegment]
+    let vadIntervals: [VADInterval]
+
+    init(
+        transcript: String,
+        usage: STTUsage?,
+        drainStats: STTStreamingDrainStats,
+        segments: [STTCommittedSegment] = [],
+        vadIntervals: [VADInterval] = []
+    ) {
+        self.transcript = transcript
+        self.usage = usage
+        self.drainStats = drainStats
+        self.segments = segments
+        self.vadIntervals = vadIntervals
+    }
 }
 
 protocol STTStreamingSession: AnyObject, Sendable {
@@ -31,7 +47,8 @@ protocol STTService: Sendable {
         config: Config,
         runID: String,
         language: String?,
-        logger: @escaping PipelineEventLogger
+        logger: @escaping PipelineEventLogger,
+        onSegmentCommitted: STTSegmentCommitHandler?
     ) -> (any STTStreamingSession)?
 
     func transcribe(
@@ -43,6 +60,8 @@ protocol STTService: Sendable {
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult
 }
+
+typealias STTSegmentCommitHandler = @Sendable (STTCommittedSegment) -> Void
 
 protocol DeepgramRESTTranscriber: Sendable {
     func transcribe(
@@ -93,8 +112,6 @@ protocol AppleSpeechTranscriber: Sendable {
     func finishStreaming() async throws -> (transcript: String, usage: STTUsage?)
 }
 
-extension AppleSpeechClient: AppleSpeechTranscriber {}
-
 typealias DeepgramStreamingSessionBuilder = @Sendable (
     _ apiKey: String,
     _ language: String?,
@@ -113,7 +130,6 @@ final class ProviderSwitchingSTTService: STTService, @unchecked Sendable {
     private let deepgramService: DeepgramSTTService
     private let whisperService: WhisperSTTService
     private let appleSpeechService: AppleSpeechSTTService
-    private let serviceRegistry: [STTProvider: any STTService]
 
     init(
         deepgramService: DeepgramSTTService = DeepgramSTTService(),
@@ -123,24 +139,25 @@ final class ProviderSwitchingSTTService: STTService, @unchecked Sendable {
         self.deepgramService = deepgramService
         self.whisperService = whisperService
         self.appleSpeechService = appleSpeechService
-        serviceRegistry = [
-            .deepgram: deepgramService,
-            .whisper: whisperService,
-            .appleSpeech: appleSpeechService,
-        ]
     }
 
     func startStreamingSessionIfNeeded(
         config: Config,
         runID: String,
         language: String?,
-        logger: @escaping PipelineEventLogger
+        logger: @escaping PipelineEventLogger,
+        onSegmentCommitted: STTSegmentCommitHandler?
     ) -> (any STTStreamingSession)? {
-        service(for: config.sttProvider).startStreamingSessionIfNeeded(
+        let preset = STTPresetCatalog.spec(for: config.sttPreset)
+        guard preset.mode == .stream else {
+            return nil
+        }
+        return service(for: preset.engine).startStreamingSessionIfNeeded(
             config: config,
             runID: runID,
             language: language,
-            logger: logger
+            logger: logger,
+            onSegmentCommitted: onSegmentCommitted
         )
     }
 
@@ -152,18 +169,29 @@ final class ProviderSwitchingSTTService: STTService, @unchecked Sendable {
         streamingSession: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
-        try await service(for: config.sttProvider).transcribe(
+        let preset = STTPresetCatalog.spec(for: config.sttPreset)
+        if preset.mode == .stream, streamingSession == nil {
+            throw AppError.io("STT streaming session unavailable: \(config.sttPreset.rawValue)")
+        }
+        return try await service(for: preset.engine).transcribe(
             config: config,
             recording: recording,
             language: language,
             runID: runID,
-            streamingSession: streamingSession,
+            streamingSession: preset.mode == .stream ? streamingSession : nil,
             logger: logger
         )
     }
 
-    private func service(for provider: STTProvider) -> any STTService {
-        serviceRegistry[provider] ?? deepgramService
+    private func service(for engine: STTEngine) -> any STTService {
+        switch engine {
+        case .deepgram:
+            return deepgramService
+        case .openAIWhisper:
+            return whisperService
+        case .appleSpeech:
+            return appleSpeechService
+        }
     }
 }
 
@@ -183,12 +211,13 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
         config: Config,
         runID: String,
         language: String?,
-        logger: @escaping PipelineEventLogger
+        logger: @escaping PipelineEventLogger,
+        onSegmentCommitted _: STTSegmentCommitHandler?
     ) -> (any STTStreamingSession)? {
         guard !config.llmModel.usesDirectAudio else {
             return nil
         }
-        guard case let .apiKey(deepgramKey) = (try? APIKeyResolver.sttCredential(config: config, provider: .deepgram)) else {
+        guard case let .apiKey(deepgramKey) = (try? APIKeyResolver.sttCredential(config: config, preset: config.sttPreset)) else {
             return nil
         }
 
@@ -231,7 +260,7 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
         streamingSession: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
-        let credential = try APIKeyResolver.sttCredential(config: config, provider: .deepgram)
+        let credential = try APIKeyResolver.sttCredential(config: config, preset: config.sttPreset)
         guard case let .apiKey(deepgramKey) = credential else {
             throw AppError.invalidArgument("Deepgram APIキーが未設定です")
         }
@@ -242,111 +271,43 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
             logger("stt_stream_finalize_start", [
                 "request_sent_at_ms": epochMsString(finalizeRequestedAt),
             ])
+            let result = try await streamingSession.finish()
+            let finalizeResponseAt = Date()
+            let finalizeResponseAtMs = epochMs(finalizeResponseAt)
+            logger("stt_stream_finalize_done", [
+                "request_sent_at_ms": epochMsString(finalizeRequestedAt),
+                "response_received_at_ms": epochMsString(finalizeResponseAt),
+                "text_chars": String(result.transcript.count),
+            ])
 
-            do {
-                let result = try await streamingSession.finish()
-                let finalizeResponseAt = Date()
-                let finalizeResponseAtMs = epochMs(finalizeResponseAt)
-                logger("stt_stream_finalize_done", [
-                    "request_sent_at_ms": epochMsString(finalizeRequestedAt),
-                    "response_received_at_ms": epochMsString(finalizeResponseAt),
-                    "text_chars": String(result.transcript.count),
-                ])
+            let attempt = STTTraceFactory.attempt(
+                kind: .streamFinalize,
+                status: .ok,
+                eventStartMs: finalizeRequestedAtMs,
+                eventEndMs: finalizeResponseAtMs,
+                source: "stream_finalize",
+                textChars: result.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                submittedChunks: result.drainStats.submittedChunks,
+                submittedBytes: result.drainStats.submittedBytes,
+                droppedChunks: result.drainStats.droppedChunks
+            )
 
-                let attempt = STTTraceFactory.attempt(
-                    kind: .streamFinalize,
-                    status: .ok,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: finalizeResponseAtMs,
-                    source: "stream_finalize",
-                    textChars: result.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    submittedChunks: result.drainStats.submittedChunks,
-                    submittedBytes: result.drainStats.submittedBytes,
-                    droppedChunks: result.drainStats.droppedChunks
-                )
-
-                let trace = STTTraceFactory.trace(
-                    provider: config.sttProvider.rawValue,
-                    transport: .websocket,
-                    route: .streaming,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: finalizeResponseAtMs,
-                    status: .ok,
-                    source: "stream_finalize",
-                    textChars: result.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    attempts: [attempt]
-                )
-                return STTTranscriptionResult(transcript: result.transcript, usage: result.usage, trace: trace)
-            } catch {
-                logger("stt_stream_failed_fallback_rest", [
-                    "error": error.localizedDescription,
-                ])
-
-                let failedFinalizeAttempt = STTTraceFactory.attempt(
-                    kind: .streamFinalize,
-                    status: .error,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: epochMs(),
-                    source: "stream_finalize",
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    error: error.localizedDescription
-                )
-
-                let restRequestedAt = Date()
-                let restRequestedAtMs = epochMs(restRequestedAt)
-                logger("stt_start", [
-                    "source": "rest_fallback",
-                    "sample_rate": String(recording.sampleRate),
-                    "audio_bytes": String(recording.pcmData.count),
-                    "request_sent_at_ms": epochMsString(restRequestedAt),
-                ])
-
-                let stt = try await restClient.transcribe(
-                    apiKey: deepgramKey,
-                    sampleRate: recording.sampleRate,
-                    audio: recording.pcmData,
-                    language: language
-                )
-                let restResponseAt = Date()
-                let restResponseAtMs = epochMs(restResponseAt)
-                logger("stt_done", [
-                    "source": "rest_fallback",
-                    "request_sent_at_ms": epochMsString(restRequestedAt),
-                    "response_received_at_ms": epochMsString(restResponseAt),
-                    "text_chars": String(stt.transcript.count),
-                ])
-
-                let restAttempt = STTTraceFactory.attempt(
-                    kind: .restFallback,
-                    status: .ok,
-                    eventStartMs: restRequestedAtMs,
-                    eventEndMs: restResponseAtMs,
-                    source: "rest_fallback",
-                    textChars: stt.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count
-                )
-
-                let trace = STTTraceFactory.trace(
-                    provider: config.sttProvider.rawValue,
-                    transport: .websocket,
-                    route: .streamingFallbackREST,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: restResponseAtMs,
-                    status: .ok,
-                    source: "rest_fallback",
-                    textChars: stt.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    attempts: [failedFinalizeAttempt, restAttempt]
-                )
-                return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
-            }
+            let trace = STTTraceFactory.trace(
+                provider: config.sttPreset.rawValue,
+                transport: .websocket,
+                route: .streaming,
+                eventStartMs: finalizeRequestedAtMs,
+                eventEndMs: finalizeResponseAtMs,
+                status: .ok,
+                source: "stream_finalize",
+                textChars: result.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                attempts: [attempt]
+            )
+            return STTTranscriptionResult(transcript: result.transcript, usage: result.usage, trace: trace)
         }
 
         let restRequestedAt = Date()
@@ -373,7 +334,7 @@ final class DeepgramSTTService: STTService, @unchecked Sendable {
         ])
 
         let trace = STTTraceFactory.singleAttemptTrace(
-            provider: config.sttProvider.rawValue,
+            provider: config.sttPreset.rawValue,
             transport: .rest,
             route: .rest,
             kind: .rest,
@@ -404,12 +365,13 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
         config: Config,
         runID: String,
         language: String?,
-        logger: @escaping PipelineEventLogger
+        logger: @escaping PipelineEventLogger,
+        onSegmentCommitted _: STTSegmentCommitHandler?
     ) -> (any STTStreamingSession)? {
         guard !config.llmModel.usesDirectAudio else {
             return nil
         }
-        guard case let .apiKey(openAIKey) = (try? APIKeyResolver.sttCredential(config: config, provider: .whisper)) else {
+        guard case let .apiKey(openAIKey) = (try? APIKeyResolver.sttCredential(config: config, preset: config.sttPreset)) else {
             return nil
         }
         return streamingSessionBuilder(openAIKey, language, runID, logger)
@@ -453,7 +415,7 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
         streamingSession: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
-        let credential = try APIKeyResolver.sttCredential(config: config, provider: .whisper)
+        let credential = try APIKeyResolver.sttCredential(config: config, preset: config.sttPreset)
         guard case let .apiKey(openAIKey) = credential else {
             throw AppError.invalidArgument("OpenAI APIキーが未設定です（Whisper STT）")
         }
@@ -463,114 +425,46 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
             let finalizeRequestedAtMs = epochMs(finalizeRequestedAt)
             logger("stt_stream_finalize_start", [
                 "request_sent_at_ms": epochMsString(finalizeRequestedAt),
-                "provider": STTProvider.whisper.rawValue,
+                "provider": config.sttPreset.rawValue,
+            ])
+            let result = try await streamingSession.finish()
+            let finalizeResponseAt = Date()
+            let finalizeResponseAtMs = epochMs(finalizeResponseAt)
+            logger("stt_stream_finalize_done", [
+                "request_sent_at_ms": epochMsString(finalizeRequestedAt),
+                "response_received_at_ms": epochMsString(finalizeResponseAt),
+                "text_chars": String(result.transcript.count),
+                "provider": config.sttPreset.rawValue,
             ])
 
-            do {
-                let result = try await streamingSession.finish()
-                let finalizeResponseAt = Date()
-                let finalizeResponseAtMs = epochMs(finalizeResponseAt)
-                logger("stt_stream_finalize_done", [
-                    "request_sent_at_ms": epochMsString(finalizeRequestedAt),
-                    "response_received_at_ms": epochMsString(finalizeResponseAt),
-                    "text_chars": String(result.transcript.count),
-                    "provider": STTProvider.whisper.rawValue,
-                ])
+            let attempt = STTTraceFactory.attempt(
+                kind: .streamFinalize,
+                status: .ok,
+                eventStartMs: finalizeRequestedAtMs,
+                eventEndMs: finalizeResponseAtMs,
+                source: "openai_realtime_stream",
+                textChars: result.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                submittedChunks: result.drainStats.submittedChunks,
+                submittedBytes: result.drainStats.submittedBytes,
+                droppedChunks: result.drainStats.droppedChunks
+            )
 
-                let attempt = STTTraceFactory.attempt(
-                    kind: .streamFinalize,
-                    status: .ok,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: finalizeResponseAtMs,
-                    source: "openai_realtime_stream",
-                    textChars: result.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    submittedChunks: result.drainStats.submittedChunks,
-                    submittedBytes: result.drainStats.submittedBytes,
-                    droppedChunks: result.drainStats.droppedChunks
-                )
-
-                let trace = STTTraceFactory.trace(
-                    provider: config.sttProvider.rawValue,
-                    transport: .websocket,
-                    route: .streaming,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: finalizeResponseAtMs,
-                    status: .ok,
-                    source: "openai_realtime_stream",
-                    textChars: result.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    attempts: [attempt]
-                )
-                return STTTranscriptionResult(transcript: result.transcript, usage: result.usage, trace: trace)
-            } catch {
-                logger("stt_stream_failed_fallback_rest", [
-                    "error": error.localizedDescription,
-                    "provider": STTProvider.whisper.rawValue,
-                ])
-
-                let failedFinalizeAttempt = STTTraceFactory.attempt(
-                    kind: .streamFinalize,
-                    status: .error,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: epochMs(),
-                    source: "openai_realtime_stream",
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    error: error.localizedDescription
-                )
-
-                let restRequestedAt = Date()
-                let restRequestedAtMs = epochMs(restRequestedAt)
-                logger("stt_start", [
-                    "source": "whisper_rest_fallback",
-                    "sample_rate": String(recording.sampleRate),
-                    "audio_bytes": String(recording.pcmData.count),
-                    "request_sent_at_ms": epochMsString(restRequestedAt),
-                ])
-                let stt = try await client.transcribe(
-                    apiKey: openAIKey,
-                    sampleRate: recording.sampleRate,
-                    audio: recording.pcmData,
-                    language: language
-                )
-                let restResponseAt = Date()
-                let restResponseAtMs = epochMs(restResponseAt)
-                logger("stt_done", [
-                    "source": "whisper_rest_fallback",
-                    "request_sent_at_ms": epochMsString(restRequestedAt),
-                    "response_received_at_ms": epochMsString(restResponseAt),
-                    "text_chars": String(stt.transcript.count),
-                ])
-
-                let restAttempt = STTTraceFactory.attempt(
-                    kind: .restFallback,
-                    status: .ok,
-                    eventStartMs: restRequestedAtMs,
-                    eventEndMs: restResponseAtMs,
-                    source: "whisper_rest_fallback",
-                    textChars: stt.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count
-                )
-
-                let trace = STTTraceFactory.trace(
-                    provider: config.sttProvider.rawValue,
-                    transport: .websocket,
-                    route: .streamingFallbackREST,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: restResponseAtMs,
-                    status: .ok,
-                    source: "whisper_rest_fallback",
-                    textChars: stt.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    attempts: [failedFinalizeAttempt, restAttempt]
-                )
-                return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
-            }
+            let trace = STTTraceFactory.trace(
+                provider: config.sttPreset.rawValue,
+                transport: .websocket,
+                route: .streaming,
+                eventStartMs: finalizeRequestedAtMs,
+                eventEndMs: finalizeResponseAtMs,
+                status: .ok,
+                source: "openai_realtime_stream",
+                textChars: result.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                attempts: [attempt]
+            )
+            return STTTranscriptionResult(transcript: result.transcript, usage: result.usage, trace: trace)
         }
 
         let requestSentAt = Date()
@@ -597,7 +491,7 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
         ])
 
         let trace = STTTraceFactory.singleAttemptTrace(
-            provider: config.sttProvider.rawValue,
+            provider: config.sttPreset.rawValue,
             transport: .rest,
             route: .rest,
             kind: .whisperREST,
@@ -613,22 +507,43 @@ final class WhisperSTTService: STTService, @unchecked Sendable {
 }
 
 final class AppleSpeechSTTService: STTService, @unchecked Sendable {
-    private let client: any AppleSpeechTranscriber
+    private let recognizerClient: any AppleSpeechTranscriber
+    private let analyzerClient: any AppleSpeechTranscriber
 
-    init(client: any AppleSpeechTranscriber = AppleSpeechClient()) {
-        self.client = client
+    init(
+        client: (any AppleSpeechTranscriber)? = nil,
+        recognizerClient: (any AppleSpeechTranscriber)? = nil,
+        analyzerClient: (any AppleSpeechTranscriber)? = nil
+    ) {
+        if let client {
+            self.recognizerClient = client
+            self.analyzerClient = client
+            return
+        }
+        self.recognizerClient = recognizerClient ?? AppleSpeechRecognizerClient()
+        self.analyzerClient = analyzerClient ?? AppleSpeechAnalyzerClient()
     }
 
     func startStreamingSessionIfNeeded(
         config: Config,
         runID: String,
         language: String?,
-        logger: @escaping PipelineEventLogger
+        logger: @escaping PipelineEventLogger,
+        onSegmentCommitted: STTSegmentCommitHandler?
     ) -> (any STTStreamingSession)? {
         guard !config.llmModel.usesDirectAudio else {
             return nil
         }
-        return AppleSpeechLiveSession(stream: client, logger: logger, runID: runID, language: language)
+        let client = transcriber(for: config.sttPreset)
+        return AppleSpeechSegmentingSession(
+            transcriber: client,
+            sampleRate: AudioRecorder.targetSampleRate,
+            language: language,
+            segmentation: config.sttSegmentation,
+            logger: logger,
+            runID: runID,
+            onSegmentCommitted: onSegmentCommitted
+        )
     }
 
     func transcribe(
@@ -639,128 +554,76 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         streamingSession: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
+        let sourcePrefix: String
+        switch config.sttPreset {
+        case .appleSpeechAnalyzerStream, .appleSpeechAnalyzerRest:
+            sourcePrefix = "apple_speech_analyzer"
+        default:
+            sourcePrefix = "apple_speech_recognizer"
+        }
+
         if let streamingSession {
             let finalizeRequestedAt = Date()
             let finalizeRequestedAtMs = epochMs(finalizeRequestedAt)
             logger("stt_stream_finalize_start", [
                 "request_sent_at_ms": epochMsString(finalizeRequestedAt),
-                "provider": STTProvider.appleSpeech.rawValue,
+                "provider": config.sttPreset.rawValue,
+            ])
+            let result = try await streamingSession.finish()
+            let finalizeResponseAt = Date()
+            let finalizeResponseAtMs = epochMs(finalizeResponseAt)
+            logger("stt_stream_finalize_done", [
+                "request_sent_at_ms": epochMsString(finalizeRequestedAt),
+                "response_received_at_ms": epochMsString(finalizeResponseAt),
+                "text_chars": String(result.transcript.count),
+                "provider": config.sttPreset.rawValue,
             ])
 
-            do {
-                let result = try await streamingSession.finish()
-                let finalizeResponseAt = Date()
-                let finalizeResponseAtMs = epochMs(finalizeResponseAt)
-                logger("stt_stream_finalize_done", [
-                    "request_sent_at_ms": epochMsString(finalizeRequestedAt),
-                    "response_received_at_ms": epochMsString(finalizeResponseAt),
-                    "text_chars": String(result.transcript.count),
-                    "provider": STTProvider.appleSpeech.rawValue,
-                ])
+            let attempt = STTTraceFactory.attempt(
+                kind: .streamFinalize,
+                status: .ok,
+                eventStartMs: finalizeRequestedAtMs,
+                eventEndMs: finalizeResponseAtMs,
+                source: "\(sourcePrefix)_stream",
+                textChars: result.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                submittedChunks: result.drainStats.submittedChunks,
+                submittedBytes: result.drainStats.submittedBytes,
+                droppedChunks: result.drainStats.droppedChunks
+            )
 
-                let attempt = STTTraceFactory.attempt(
-                    kind: .streamFinalize,
-                    status: .ok,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: finalizeResponseAtMs,
-                    source: "apple_speech_stream",
-                    textChars: result.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    submittedChunks: result.drainStats.submittedChunks,
-                    submittedBytes: result.drainStats.submittedBytes,
-                    droppedChunks: result.drainStats.droppedChunks
-                )
-
-                let trace = STTTraceFactory.trace(
-                    provider: config.sttProvider.rawValue,
-                    transport: .onDevice,
-                    route: .streaming,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: finalizeResponseAtMs,
-                    status: .ok,
-                    source: "apple_speech_stream",
-                    textChars: result.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    attempts: [attempt]
-                )
-                return STTTranscriptionResult(transcript: result.transcript, usage: result.usage, trace: trace)
-            } catch {
-                logger("stt_stream_failed_fallback_rest", [
-                    "error": error.localizedDescription,
-                    "provider": STTProvider.appleSpeech.rawValue,
-                ])
-
-                let failedFinalizeAttempt = STTTraceFactory.attempt(
-                    kind: .streamFinalize,
-                    status: .error,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: epochMs(),
-                    source: "apple_speech_stream",
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    error: error.localizedDescription
-                )
-
-                let restRequestedAt = Date()
-                let restRequestedAtMs = epochMs(restRequestedAt)
-                logger("stt_start", [
-                    "source": "apple_speech_rest_fallback",
-                    "sample_rate": String(recording.sampleRate),
-                    "audio_bytes": String(recording.pcmData.count),
-                    "request_sent_at_ms": epochMsString(restRequestedAt),
-                ])
-                let stt = try await client.transcribe(
-                    sampleRate: recording.sampleRate,
-                    audio: recording.pcmData,
-                    language: language
-                )
-                let restResponseAt = Date()
-                let restResponseAtMs = epochMs(restResponseAt)
-                logger("stt_done", [
-                    "source": "apple_speech_rest_fallback",
-                    "request_sent_at_ms": epochMsString(restRequestedAt),
-                    "response_received_at_ms": epochMsString(restResponseAt),
-                    "text_chars": String(stt.transcript.count),
-                ])
-
-                let restAttempt = STTTraceFactory.attempt(
-                    kind: .restFallback,
-                    status: .ok,
-                    eventStartMs: restRequestedAtMs,
-                    eventEndMs: restResponseAtMs,
-                    source: "apple_speech_rest_fallback",
-                    textChars: stt.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count
-                )
-
-                let trace = STTTraceFactory.trace(
-                    provider: config.sttProvider.rawValue,
-                    transport: .onDevice,
-                    route: .streamingFallbackREST,
-                    eventStartMs: finalizeRequestedAtMs,
-                    eventEndMs: restResponseAtMs,
-                    status: .ok,
-                    source: "apple_speech_rest_fallback",
-                    textChars: stt.transcript.count,
-                    sampleRate: recording.sampleRate,
-                    audioBytes: recording.pcmData.count,
-                    attempts: [failedFinalizeAttempt, restAttempt]
-                )
-                return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
-            }
+            let trace = STTTraceFactory.trace(
+                provider: config.sttPreset.rawValue,
+                transport: .onDevice,
+                route: .streaming,
+                eventStartMs: finalizeRequestedAtMs,
+                eventEndMs: finalizeResponseAtMs,
+                status: .ok,
+                source: "\(sourcePrefix)_stream",
+                textChars: result.transcript.count,
+                sampleRate: recording.sampleRate,
+                audioBytes: recording.pcmData.count,
+                attempts: [attempt]
+            )
+            return STTTranscriptionResult(
+                transcript: result.transcript,
+                usage: result.usage,
+                trace: trace,
+                segments: result.segments,
+                vadIntervals: result.vadIntervals
+            )
         }
 
         let requestSentAt = Date()
         let requestSentAtMs = epochMs(requestSentAt)
         logger("stt_start", [
-            "source": "apple_speech_rest",
+            "source": "\(sourcePrefix)_rest",
             "sample_rate": String(recording.sampleRate),
             "audio_bytes": String(recording.pcmData.count),
             "request_sent_at_ms": epochMsString(requestSentAt),
         ])
+        let client = transcriber(for: config.sttPreset)
         let stt = try await client.transcribe(
             sampleRate: recording.sampleRate,
             audio: recording.pcmData,
@@ -769,25 +632,34 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         let responseReceivedAt = Date()
         let responseReceivedAtMs = epochMs(responseReceivedAt)
         logger("stt_done", [
-            "source": "apple_speech_rest",
+            "source": "\(sourcePrefix)_rest",
             "request_sent_at_ms": epochMsString(requestSentAt),
             "response_received_at_ms": epochMsString(responseReceivedAt),
             "text_chars": String(stt.transcript.count),
         ])
 
         let trace = STTTraceFactory.singleAttemptTrace(
-            provider: STTProvider.appleSpeech.rawValue,
+            provider: config.sttPreset.rawValue,
             transport: .onDevice,
-            route: .onDevice,
+            route: .rest,
             kind: .appleSpeech,
             eventStartMs: requestSentAtMs,
             eventEndMs: responseReceivedAtMs,
-            source: "apple_speech_rest",
+            source: "\(sourcePrefix)_rest",
             textChars: stt.transcript.count,
             sampleRate: recording.sampleRate,
             audioBytes: recording.pcmData.count
         )
         return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
+    }
+
+    private func transcriber(for preset: STTPresetID) -> any AppleSpeechTranscriber {
+        switch preset {
+        case .appleSpeechAnalyzerStream, .appleSpeechAnalyzerRest:
+            return analyzerClient
+        default:
+            return recognizerClient
+        }
     }
 }
 

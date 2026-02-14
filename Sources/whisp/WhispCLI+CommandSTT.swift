@@ -101,6 +101,7 @@ extension WhispCLI {
         let dominant = dominantStage(sttAfterStopMs: run.sttAfterStopMs, postMs: run.postMs, outputMs: run.outputMs)
 
         print("mode: full_pipeline")
+        print("stt_preset: \(options.sttPreset.rawValue)")
         print("stt_mode: \(options.sttMode.rawValue)")
         print("model: \(run.model.rawValue)")
         print("audio_seconds: \(String(format: "%.3f", run.audioSeconds))")

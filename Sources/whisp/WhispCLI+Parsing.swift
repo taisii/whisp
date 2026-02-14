@@ -40,6 +40,13 @@ extension WhispCLI {
         return value
     }
 
+    private static func parseNonNegativeInt(_ raw: String, option: String) throws -> Int {
+        guard let value = Int(raw), value >= 0 else {
+            throw AppError.invalidArgument("\(option) は0以上の整数で指定してください")
+        }
+        return value
+    }
+
     private static func parseNonNegativeDouble(_ raw: String, option: String) throws -> Double {
         guard let value = Double(raw), value >= 0 else {
             throw AppError.invalidArgument("\(option) は0以上の数値で指定してください")
@@ -83,7 +90,7 @@ extension WhispCLI {
         }
 
         let path = args[1]
-        var sttMode: STTMode = .stream
+        var sttPreset: STTPresetID = .deepgramStream
         var chunkMs = 120
         var realtime = true
         var emitMode: EmitMode = .discard
@@ -103,12 +110,12 @@ extension WhispCLI {
                 chunkMs = try parsePositiveInt(try parser.value(for: "--chunk-ms"), option: "--chunk-ms")
                 continue
             }
-            if item == "--stt" {
-                let value = try parser.value(for: "--stt")
-                guard let parsed = STTMode(rawValue: value) else {
-                    throw AppError.invalidArgument("--stt は rest または stream を指定してください")
+            if item == "--stt-preset" {
+                let raw = try parser.value(for: "--stt-preset")
+                guard let parsed = STTPresetID(rawValue: raw) else {
+                    throw AppError.invalidArgument("--stt-preset は \(STTPresetCatalog.allowedPresetRawValueText()) を指定してください")
                 }
-                sttMode = parsed
+                sttPreset = parsed
                 continue
             }
             if item == "--emit" {
@@ -128,7 +135,7 @@ extension WhispCLI {
 
         return PipelineOptions(
             path: path,
-            sttMode: sttMode,
+            sttPreset: sttPreset,
             chunkMs: chunkMs,
             realtime: realtime,
             emitMode: emitMode,
@@ -172,25 +179,19 @@ extension WhispCLI {
 
     static func parseSTTBenchmarkOptions(args: [String]) throws -> STTBenchmarkOptions {
         var jsonlPath = defaultManualCasesPath()
-        var sttMode: STTMode = .stream
+        var sttPreset: STTPresetID = .deepgramStream
         var chunkMs = 120
         var realtime = true
+        var silenceMs = STTSegmentationConfig().silenceMs
+        var maxSegmentMs = STTSegmentationConfig().maxSegmentMs
+        var preRollMs = STTSegmentationConfig().preRollMs
         var benchmarkWorkers: Int?
         var limit: Int?
         var minAudioSeconds = 2.0
         var useCache = true
-        var sttProvider: STTProvider = .deepgram
         var parser = ArgParser(args: args, startIndex: 1)
 
         while let item = parser.next() {
-            if item == "--stt" {
-                let value = try parser.value(for: "--stt")
-                guard let parsed = STTMode(rawValue: value) else {
-                    throw AppError.invalidArgument("--stt は rest または stream を指定してください")
-                }
-                sttMode = parsed
-                continue
-            }
             if item == "--chunk-ms" {
                 chunkMs = try parsePositiveInt(try parser.value(for: "--chunk-ms"), option: "--chunk-ms")
                 continue
@@ -207,6 +208,18 @@ extension WhispCLI {
                 benchmarkWorkers = try parsePositiveInt(try parser.value(for: "--benchmark-workers"), option: "--benchmark-workers")
                 continue
             }
+            if item == "--silence-ms" {
+                silenceMs = try parsePositiveInt(try parser.value(for: "--silence-ms"), option: "--silence-ms")
+                continue
+            }
+            if item == "--max-segment-ms" {
+                maxSegmentMs = try parsePositiveInt(try parser.value(for: "--max-segment-ms"), option: "--max-segment-ms")
+                continue
+            }
+            if item == "--pre-roll-ms" {
+                preRollMs = try parseNonNegativeInt(try parser.value(for: "--pre-roll-ms"), option: "--pre-roll-ms")
+                continue
+            }
             if item == "--limit" {
                 limit = try parsePositiveInt(try parser.value(for: "--limit"), option: "--limit")
                 continue
@@ -219,12 +232,12 @@ extension WhispCLI {
                 useCache = false
                 continue
             }
-            if item == "--stt-provider" {
-                let raw = try parser.value(for: "--stt-provider")
-                guard let parsed = STTProvider(rawValue: raw) else {
-                    throw AppError.invalidArgument("--stt-provider は \(STTProviderCatalog.allowedProviderRawValueText()) を指定してください")
+            if item == "--stt-preset" {
+                let raw = try parser.value(for: "--stt-preset")
+                guard let parsed = STTPresetID(rawValue: raw) else {
+                    throw AppError.invalidArgument("--stt-preset は \(STTPresetCatalog.allowedPresetRawValueText()) を指定してください")
                 }
-                sttProvider = parsed
+                sttPreset = parsed
                 continue
             }
             if item.hasPrefix("--") {
@@ -235,9 +248,12 @@ extension WhispCLI {
 
         return STTBenchmarkOptions(
             jsonlPath: jsonlPath,
-            sttMode: sttMode,
+            sttPreset: sttPreset,
             chunkMs: chunkMs,
             realtime: realtime,
+            silenceMs: silenceMs,
+            maxSegmentMs: maxSegmentMs,
+            preRollMs: preRollMs,
             benchmarkWorkers: benchmarkWorkers,
             limit: limit,
             minAudioSeconds: minAudioSeconds,
@@ -247,8 +263,7 @@ extension WhispCLI {
             runtimeOptionsHash: nil,
             evaluatorVersion: nil,
             codeVersion: nil,
-            benchmarkKey: nil,
-            sttProvider: sttProvider
+            benchmarkKey: nil
         )
     }
 

@@ -10,16 +10,16 @@ final class BenchmarkCandidateDefaultsTests: XCTestCase {
             BenchmarkCandidate(
                 id: "stt-deepgram-stream-default",
                 task: .stt,
-                model: "deepgram",
-                options: ["stt_mode": "stream"],
+                model: "deepgram_stream",
+                options: [:],
                 createdAt: "2026-02-01T00:00:00.000Z",
                 updatedAt: "2026-02-01T00:00:00.000Z"
             ),
             BenchmarkCandidate(
-                id: "stt-apple-speech-stream-default",
+                id: "stt-apple-speech-recognizer-stream-default",
                 task: .stt,
-                model: "apple_speech",
-                options: ["stt_mode": "stream"],
+                model: "apple_speech_recognizer_stream",
+                options: [:],
                 createdAt: "2026-02-01T00:00:00.000Z",
                 updatedAt: "2026-02-01T00:00:00.000Z"
             ),
@@ -30,8 +30,9 @@ final class BenchmarkCandidateDefaultsTests: XCTestCase {
         let ids = try store.listCandidates().map(\.id)
 
         XCTAssertTrue(ids.contains("stt-deepgram-stream-default"))
-        XCTAssertTrue(ids.contains("stt-apple-speech-stream-default"))
-        XCTAssertTrue(ids.contains("stt-whisper-stream-default"))
+        XCTAssertTrue(ids.contains("stt-apple-speech-recognizer-stream-default"))
+        XCTAssertTrue(ids.contains("stt-apple-speech-analyzer-stream-default"))
+        XCTAssertTrue(ids.contains("stt-chatgpt-whisper-stream-default"))
     }
 
     func testEnsureSeededIfNeededDoesNotDuplicateExistingCandidates() throws {
@@ -46,7 +47,14 @@ final class BenchmarkCandidateDefaultsTests: XCTestCase {
         let ids = try store.listCandidates().map(\.id)
 
         XCTAssertEqual(Set(ids).count, ids.count)
-        XCTAssertEqual(ids.filter { $0 == "stt-whisper-stream-default" }.count, 1)
+        XCTAssertEqual(ids.filter { $0 == "stt-chatgpt-whisper-stream-default" }.count, 1)
+    }
+
+    func testDefaultSTTCandidatesMatchSettingsProviders() {
+        let defaults = BenchmarkCandidateDefaults.defaultCandidates(now: "2026-02-01T00:00:00.000Z")
+        let sttModels = Set(defaults.filter { $0.task == .stt }.map(\.model))
+        let settingsModels = Set(STTPresetCatalog.settingsSpecs().map { $0.id.rawValue })
+        XCTAssertEqual(sttModels, settingsModels)
     }
 
     private func makeTempHomeDirectory() throws -> URL {

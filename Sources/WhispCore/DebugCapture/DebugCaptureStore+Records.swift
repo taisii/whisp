@@ -105,6 +105,8 @@ extension DebugCaptureStore {
                 artifacts: existing.artifacts,
                 sttText: existing.sttText,
                 outputText: existing.outputText,
+                segments: existing.segments,
+                vadIntervals: existing.vadIntervals,
                 llmModel: llmModel,
                 appName: appName ?? existing.appName,
                 status: existing.status == "recording" ? "recorded" : existing.status,
@@ -159,6 +161,8 @@ extension DebugCaptureStore {
         captureID: String,
         sttText: String?,
         outputText: String?,
+        segments: [STTCommittedSegment]? = nil,
+        vadIntervals: [VADInterval]? = nil,
         status: String,
         skipReason: String? = nil,
         failureStage: String? = nil,
@@ -172,6 +176,12 @@ extension DebugCaptureStore {
         guard var record = try loadRecord(path: path) else { return }
         record.sttText = sttText
         record.outputText = outputText
+        if let segments {
+            record.segments = segments
+        }
+        if let vadIntervals {
+            record.vadIntervals = vadIntervals
+        }
         record.status = status
         record.errorMessage = errorMessage
         record.skipReason = skipReason

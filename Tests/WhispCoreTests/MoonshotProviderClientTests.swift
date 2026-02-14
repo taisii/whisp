@@ -6,14 +6,14 @@ final class MoonshotProviderClientTests: XCTestCase {
     func testSendTextBuildsOpenAICompatiblePayload() async throws {
         let recorder = HTTPRequestRecorder()
         let provider = MoonshotProviderClient(client: HTTPJSONClient(session: recorder.session))
-        recorder.nextResponseData = Data(
+        recorder.enqueueResponse(statusCode: 200, body: Data(
             """
             {
               "choices": [{"message": {"content": "ok"}}],
               "usage": {"prompt_tokens": 3, "completion_tokens": 4}
             }
             """.utf8
-        )
+        ))
 
         let response = try await provider.send(request: LLMRequest(
             model: .kimiK25,
@@ -25,7 +25,7 @@ final class MoonshotProviderClientTests: XCTestCase {
         XCTAssertEqual(response.usage?.provider, "moonshot")
 
         let request = try XCTUnwrap(recorder.lastRequest)
-        XCTAssertEqual(request.url?.absoluteString, "https://api.moonshot.cn/v1/chat/completions")
+        XCTAssertEqual(request.url?.absoluteString, "https://api.moonshot.ai/v1/chat/completions")
         XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer ms-key")
 
         let bodyString = String(data: try XCTUnwrap(readRequestBody(request)), encoding: .utf8) ?? ""
@@ -37,14 +37,14 @@ final class MoonshotProviderClientTests: XCTestCase {
     func testSendTextWithImageBuildsImageURLPayload() async throws {
         let recorder = HTTPRequestRecorder()
         let provider = MoonshotProviderClient(client: HTTPJSONClient(session: recorder.session))
-        recorder.nextResponseData = Data(
+        recorder.enqueueResponse(statusCode: 200, body: Data(
             """
             {
               "choices": [{"message": {"content": "ok"}}],
               "usage": {"prompt_tokens": 5, "completion_tokens": 6}
             }
             """.utf8
-        )
+        ))
 
         let image = LLMRequestImage(mimeType: "image/png", base64Data: "AAAA")
         let response = try await provider.send(request: LLMRequest(
@@ -61,6 +61,32 @@ final class MoonshotProviderClientTests: XCTestCase {
         XCTAssertTrue(normalizedBodyString.contains("\"image_url\""), normalizedBodyString)
         XCTAssertTrue(normalizedBodyString.contains("\"judge prompt\""), normalizedBodyString)
         XCTAssertTrue(normalizedBodyString.contains("data:image/png;base64,AAAA"), normalizedBodyString)
+    }
+
+    func testSendRetriesSecondaryEndpointOnInvalidAuthenticationFromPrimary() async throws {
+        let recorder = HTTPRequestRecorder()
+        let provider = MoonshotProviderClient(client: HTTPJSONClient(session: recorder.session))
+        recorder.enqueueResponse(
+            statusCode: 401,
+            body: Data("{\"error\":{\"message\":\"Invalid Authentication\",\"type\":\"invalid_authentication_error\"}}".utf8)
+        )
+        recorder.enqueueResponse(
+            statusCode: 200,
+            body: Data("{\"choices\":[{\"message\":{\"content\":\"ok-after-fallback\"}}]}".utf8)
+        )
+
+        let response = try await provider.send(request: LLMRequest(
+            model: .kimiK25,
+            apiKey: "ms-key",
+            payload: .text(prompt: "judge prompt")
+        ))
+
+        XCTAssertEqual(response.text, "ok-after-fallback")
+        let requestedURLs = recorder.requests.compactMap { $0.url?.absoluteString }
+        XCTAssertEqual(requestedURLs, [
+            "https://api.moonshot.ai/v1/chat/completions",
+            "https://api.moonshot.cn/v1/chat/completions",
+        ])
     }
 
     private func readRequestBody(_ request: URLRequest) -> Data? {
@@ -90,6 +116,11 @@ final class MoonshotProviderClientTests: XCTestCase {
 }
 
 private final class HTTPRequestRecorder {
+    struct StubResponse {
+        let statusCode: Int
+        let body: Data
+    }
+
     private final class StubURLProtocol: URLProtocol {
         nonisolated(unsafe) static var owner: HTTPRequestRecorder?
 
@@ -101,24 +132,27 @@ private final class HTTPRequestRecorder {
                 client?.urlProtocol(self, didFailWithError: NSError(domain: "HTTPRequestRecorder", code: -1))
                 return
             }
-            owner.lastRequest = request
+            owner.requests.append(request)
 
-            let response = HTTPURLResponse(
-                url: request.url ?? URL(string: "https://api.moonshot.cn/v1/chat/completions")!,
-                statusCode: 200,
+            let response = owner.dequeueResponse()
+
+            let http = HTTPURLResponse(
+                url: request.url ?? URL(string: "https://api.moonshot.ai/v1/chat/completions")!,
+                statusCode: response.statusCode,
                 httpVersion: nil,
                 headerFields: ["Content-Type": "application/json"]
             )!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: owner.nextResponseData)
+            client?.urlProtocol(self, didReceive: http, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: response.body)
             client?.urlProtocolDidFinishLoading(self)
         }
 
         override func stopLoading() {}
     }
 
-    private(set) var lastRequest: URLRequest?
-    var nextResponseData: Data = Data("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}".utf8)
+    private(set) var requests: [URLRequest] = []
+    private var responses: [StubResponse] = []
+    var lastRequest: URLRequest? { requests.last }
 
     let session: URLSession
 
@@ -127,5 +161,19 @@ private final class HTTPRequestRecorder {
         config.protocolClasses = [StubURLProtocol.self]
         session = URLSession(configuration: config)
         StubURLProtocol.owner = self
+    }
+
+    func enqueueResponse(statusCode: Int, body: Data) {
+        responses.append(StubResponse(statusCode: statusCode, body: body))
+    }
+
+    private func dequeueResponse() -> StubResponse {
+        if responses.isEmpty {
+            return StubResponse(
+                statusCode: 200,
+                body: Data("{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}".utf8)
+            )
+        }
+        return responses.removeFirst()
     }
 }

@@ -32,7 +32,7 @@ final class SettingsViewSnapshotTests: XCTestCase {
                 shortcut: "Cmd+J",
                 inputLanguage: "ja",
                 recordingMode: .toggle,
-                sttProvider: .deepgram,
+                sttPreset: .deepgramStream,
                 appPromptRules: [],
                 llmModel: .gpt5Nano,
                 context: ContextConfig(visionEnabled: true, visionMode: .ocr),
@@ -71,7 +71,7 @@ final class SettingsViewSnapshotTests: XCTestCase {
                 shortcut: "Cmd+J",
                 inputLanguage: "ja",
                 recordingMode: .toggle,
-                sttProvider: .deepgram,
+                sttPreset: .deepgramStream,
                 appPromptRules: [],
                 llmModel: .gpt5Nano,
                 context: ContextConfig(visionEnabled: true, visionMode: .ocr),
@@ -97,7 +97,7 @@ final class SettingsViewSnapshotTests: XCTestCase {
                 shortcut: "Cmd+J",
                 inputLanguage: "ja",
                 recordingMode: .toggle,
-                sttProvider: .deepgram,
+                sttPreset: .deepgramStream,
                 appPromptRules: [],
                 llmModel: .gpt5Nano,
                 context: ContextConfig(visionEnabled: true, visionMode: .ocr),
@@ -115,7 +115,7 @@ final class SettingsViewSnapshotTests: XCTestCase {
                 shortcut: "Cmd+J",
                 inputLanguage: "ja",
                 recordingMode: .toggle,
-                sttProvider: .appleSpeech,
+                sttPreset: .appleSpeechRecognizerStream,
                 appPromptRules: [],
                 llmModel: .gpt5Nano,
                 context: ContextConfig(visionEnabled: true, visionMode: .ocr),
@@ -127,8 +127,8 @@ final class SettingsViewSnapshotTests: XCTestCase {
             onCancel: {}
         )
 
-        let beforeBitmap = try renderSnapshot(view: beforeView)
-        let afterBitmap = try renderSnapshot(view: afterView)
+        let beforeBitmap = try renderSnapshot(view: beforeView.offset(y: -180), scrollY: 0)
+        let afterBitmap = try renderSnapshot(view: afterView.offset(y: -180), scrollY: 0)
         let artifactDir = try makeArtifactDirectory()
         let beforeURL = artifactDir.appendingPathComponent("settings_view_stt_provider_before.png")
         let afterURL = artifactDir.appendingPathComponent("settings_view_stt_provider_after.png")
@@ -145,7 +145,7 @@ final class SettingsViewSnapshotTests: XCTestCase {
                 shortcut: "Cmd+J",
                 inputLanguage: "ja",
                 recordingMode: .toggle,
-                sttProvider: .whisper,
+                sttPreset: .chatgptWhisperStream,
                 appPromptRules: [],
                 llmModel: .gpt5Nano,
                 context: ContextConfig(visionEnabled: true, visionMode: .ocr),
@@ -163,7 +163,7 @@ final class SettingsViewSnapshotTests: XCTestCase {
                 shortcut: "Cmd+J",
                 inputLanguage: "ja",
                 recordingMode: .toggle,
-                sttProvider: .whisper,
+                sttPreset: .chatgptWhisperStream,
                 appPromptRules: [],
                 llmModel: .gpt5Nano,
                 context: ContextConfig(visionEnabled: true, visionMode: .ocr),
@@ -186,17 +186,125 @@ final class SettingsViewSnapshotTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
     }
 
-    private func renderSnapshot(view: SettingsView) throws -> NSBitmapImageRep {
+    func testCaptureSettingsViewLivePreviewToggleBeforeAfter() throws {
+        let beforeView = SettingsView(
+            config: Config(
+                apiKeys: APIKeys(deepgram: "dg", gemini: "gm", openai: "oa"),
+                shortcut: "Cmd+J",
+                inputLanguage: "ja",
+                recordingMode: .toggle,
+                sttPreset: .appleSpeechRecognizerStream,
+                sttSegmentation: STTSegmentationConfig(
+                    silenceMs: 700,
+                    maxSegmentMs: 25_000,
+                    preRollMs: 250,
+                    livePreviewEnabled: false
+                ),
+                appPromptRules: [],
+                llmModel: .gpt5Nano,
+                context: ContextConfig(visionEnabled: true, visionMode: .ocr),
+                generationPrimary: nil
+            ),
+            generationCandidates: [],
+            preserveGenerationPrimaryOnSave: false,
+            onSave: { _ in },
+            onCancel: {}
+        )
+
+        let afterView = SettingsView(
+            config: Config(
+                apiKeys: APIKeys(deepgram: "dg", gemini: "gm", openai: "oa"),
+                shortcut: "Cmd+J",
+                inputLanguage: "ja",
+                recordingMode: .toggle,
+                sttPreset: .appleSpeechRecognizerStream,
+                sttSegmentation: STTSegmentationConfig(
+                    silenceMs: 700,
+                    maxSegmentMs: 25_000,
+                    preRollMs: 250,
+                    livePreviewEnabled: true
+                ),
+                appPromptRules: [],
+                llmModel: .gpt5Nano,
+                context: ContextConfig(visionEnabled: true, visionMode: .ocr),
+                generationPrimary: nil
+            ),
+            generationCandidates: [],
+            preserveGenerationPrimaryOnSave: false,
+            onSave: { _ in },
+            onCancel: {}
+        )
+
+        let beforeBitmap = try renderSnapshot(view: beforeView)
+        let afterBitmap = try renderSnapshot(view: afterView)
+        let artifactDir = try makeArtifactDirectory()
+        let beforeURL = artifactDir.appendingPathComponent("settings_view_live_preview_before.png")
+        let afterURL = artifactDir.appendingPathComponent("settings_view_live_preview_after.png")
+        try pngData(from: beforeBitmap).write(to: beforeURL, options: .atomic)
+        try pngData(from: afterBitmap).write(to: afterURL, options: .atomic)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
+    func testCaptureSettingsViewLivePreviewSectionBeforeAfter() throws {
+        let beforeView = Form {
+            Section("STT区切り") {
+                Toggle("無音区切りのリアルタイム表示", isOn: .constant(false))
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: CGFloat(width), height: 240)
+
+        let afterView = Form {
+            Section("STT区切り") {
+                Toggle("無音区切りのリアルタイム表示", isOn: .constant(true))
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: CGFloat(width), height: 240)
+
+        let beforeBitmap = try renderSnapshot(view: beforeView)
+        let afterBitmap = try renderSnapshot(view: afterView)
+        let artifactDir = try makeArtifactDirectory()
+        let beforeURL = artifactDir.appendingPathComponent("settings_view_live_preview_section_before.png")
+        let afterURL = artifactDir.appendingPathComponent("settings_view_live_preview_section_after.png")
+        try pngData(from: beforeBitmap).write(to: beforeURL, options: .atomic)
+        try pngData(from: afterBitmap).write(to: afterURL, options: .atomic)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: beforeURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: afterURL.path))
+    }
+
+    private func renderSnapshot<V: View>(view: V, scrollY: CGFloat = 0) throws -> NSBitmapImageRep {
         let root = view.frame(width: CGFloat(width), height: CGFloat(height))
         let hosting = NSHostingView(rootView: root)
         hosting.frame = NSRect(x: 0, y: 0, width: width, height: height)
         hosting.layoutSubtreeIfNeeded()
+        if scrollY > 0, let scrollView = firstScrollView(in: hosting) {
+            let documentHeight = scrollView.documentView?.bounds.height ?? 0
+            let viewportHeight = scrollView.contentView.bounds.height
+            let maxOffset = max(0, documentHeight - viewportHeight)
+            scrollView.contentView.scroll(to: NSPoint(x: 0, y: min(scrollY, maxOffset)))
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            hosting.layoutSubtreeIfNeeded()
+        }
 
         guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else {
             throw AppError.io("failed to create settings bitmap")
         }
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
         return bitmap
+    }
+
+    private func firstScrollView(in view: NSView) -> NSScrollView? {
+        if let scrollView = view as? NSScrollView {
+            return scrollView
+        }
+        for subview in view.subviews {
+            if let found = firstScrollView(in: subview) {
+                return found
+            }
+        }
+        return nil
     }
 
     private func makeArtifactDirectory() throws -> URL {

@@ -426,8 +426,8 @@ final class BenchmarkViewSnapshotTests: XCTestCase {
             BenchmarkCandidate(
                 id: "stt-deepgram-stream",
                 task: .stt,
-                model: "deepgram",
-                options: ["stt_mode": "stream", "use_cache": "true", "chunk_ms": "120"],
+                model: "deepgram_stream",
+                options: ["use_cache": "true", "chunk_ms": "120"],
                 createdAt: "2026-02-12T00:00:00.000Z",
                 updatedAt: "2026-02-12T00:00:00.000Z"
             ),

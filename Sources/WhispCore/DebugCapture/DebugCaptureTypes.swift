@@ -195,6 +195,8 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
 
     public var sttText: String?
     public var outputText: String?
+    public var segments: [STTCommittedSegment] = []
+    public var vadIntervals: [VADInterval] = []
     public var llmModel: String
     public var appName: String?
     public var status: String
@@ -223,6 +225,8 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
         artifacts: DebugRunArtifactsSummary = DebugRunArtifactsSummary(),
         sttText: String? = nil,
         outputText: String? = nil,
+        segments: [STTCommittedSegment] = [],
+        vadIntervals: [VADInterval] = [],
         llmModel: String,
         appName: String?,
         status: String,
@@ -250,6 +254,8 @@ public struct DebugCaptureRecord: Codable, Equatable, Identifiable, Sendable {
         self.artifacts = artifacts
         self.sttText = sttText
         self.outputText = outputText
+        self.segments = segments
+        self.vadIntervals = vadIntervals
         self.llmModel = llmModel
         self.appName = appName
         self.status = status

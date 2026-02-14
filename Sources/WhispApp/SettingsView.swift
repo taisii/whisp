@@ -12,7 +12,7 @@ struct SettingsView: View {
     private let preserveGenerationPrimaryOnSave: Bool
 
     private let recordingModes: [RecordingMode] = [.toggle, .pushToTalk]
-    private let sttProviderSpecs: [STTProviderSpec]
+    private let sttPresetSpecs: [STTPresetSpec]
     private let visionModes: [VisionContextMode] = VisionContextMode.allCases
     private let llmModels: [LLMModel] = LLMModelCatalog.selectableModelIDs(for: .appSettings)
     private static let noGenerationPrimaryCandidateID = "__none__"
@@ -25,7 +25,7 @@ struct SettingsView: View {
         onSave: @escaping @MainActor (Config) -> Void,
         onCancel: @escaping @MainActor () -> Void
     ) {
-        let filteredProviderSpecs = STTProviderCatalog.settingsSpecs()
+        let filteredPresetSpecs = STTPresetCatalog.settingsSpecs()
         _config = State(initialValue: config)
         let candidateIDs = Set(generationCandidates.map(\.id))
         let initialSelection: String
@@ -39,7 +39,7 @@ struct SettingsView: View {
             initialSelection = Self.noGenerationPrimaryCandidateID
         }
         _selectedGenerationPrimaryCandidateID = State(initialValue: initialSelection)
-        sttProviderSpecs = filteredProviderSpecs
+        sttPresetSpecs = filteredPresetSpecs
         self.generationCandidates = generationCandidates.sorted { $0.id < $1.id }
         self.preserveGenerationPrimaryOnSave = preserveGenerationPrimaryOnSave
         self.onSave = onSave
@@ -79,12 +79,12 @@ struct SettingsView: View {
                 }
 
                 Section("モデル") {
-                    Picker("STT", selection: binding(\.sttProvider)) {
-                        ForEach(sttProviderSpecs, id: \.id) { spec in
+                    Picker("STT", selection: binding(\.sttPreset)) {
+                        ForEach(sttPresetSpecs, id: \.id) { spec in
                             Text(spec.displayName).tag(spec.id)
                         }
                     }
-                    if let sttHint = sttCredentialHint(provider: config.sttProvider) {
+                    if let sttHint = sttCredentialHint(preset: config.sttPreset) {
                         Text(sttHint)
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
@@ -94,6 +94,10 @@ struct SettingsView: View {
                             Text(model.rawValue).tag(model)
                         }
                     }
+                }
+
+                Section("STT区切り") {
+                    Toggle("無音区切りのリアルタイム表示", isOn: binding(\.sttSegmentation.livePreviewEnabled))
                 }
 
                 Section("Generation主設定") {
@@ -141,7 +145,7 @@ struct SettingsView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 16)
         }
-        .frame(width: 520, height: 520)
+        .frame(width: 520, height: 560)
     }
 
     private func recordingModeLabel(_ mode: RecordingMode) -> String {
@@ -200,16 +204,17 @@ struct SettingsView: View {
         preserveGenerationPrimaryOnSave && config.generationPrimary != nil
     }
 
-    private func sttCredentialHint(provider: STTProvider) -> String? {
-        switch provider {
+    private func sttCredentialHint(preset: STTPresetID) -> String? {
+        let spec = STTPresetCatalog.spec(for: preset)
+        switch spec.engine {
         case .deepgram:
             if config.apiKeys.deepgram.isEmpty {
                 return "Deepgram APIキーが未設定です。録音開始前にAPI Keysで設定してください。"
             }
             return nil
-        case .whisper:
+        case .openAIWhisper:
             if config.apiKeys.openai.isEmpty {
-                return "Whisper(OpenAI)用に OpenAI APIキーが必要です。"
+                return "ChatGPT Whisper用に OpenAI APIキーが必要です。"
             }
             return nil
         case .appleSpeech:

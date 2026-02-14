@@ -161,7 +161,7 @@ final class DebugViewSnapshotTests: XCTestCase {
                 ),
                 mode: "toggle",
                 model: "gpt-5-nano",
-                sttProvider: STTProvider.deepgram.rawValue,
+                sttProvider: STTPresetID.deepgramStream.rawValue,
                 sttStreaming: true,
                 visionEnabled: true,
                 accessibilitySummaryStarted: true,
@@ -195,28 +195,20 @@ final class DebugViewSnapshotTests: XCTestCase {
                     recordedAtMs: t0 + 2451,
                     status: .ok
                 ),
-                provider: STTProvider.deepgram.rawValue,
+                provider: STTPresetID.deepgramStream.rawValue,
                 transport: .websocket,
-                route: .streamingFallbackREST,
-                source: "rest_fallback",
+                route: .streaming,
+                source: "stream_finalize",
                 textChars: 8,
                 sampleRate: 16_000,
                 audioBytes: 3200,
                 attempts: [
                     DebugSTTAttempt(
                         kind: .streamFinalize,
-                        status: .error,
-                        eventStartMs: t0 + 2000,
-                        eventEndMs: t0 + 2210,
-                        source: "stream_finalize",
-                        error: "timeout"
-                    ),
-                    DebugSTTAttempt(
-                        kind: .restFallback,
                         status: .ok,
-                        eventStartMs: t0 + 2211,
+                        eventStartMs: t0 + 2000,
                         eventEndMs: t0 + 2450,
-                        source: "rest_fallback",
+                        source: "stream_finalize",
                         textChars: 8,
                         sampleRate: 16_000,
                         audioBytes: 3200

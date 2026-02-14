@@ -40,49 +40,8 @@ public enum BenchmarkCandidateDefaults {
 
     public static func defaultCandidates(now: String = WhispTime.isoNow()) -> [BenchmarkCandidate] {
         let defaultGenerationModel = LLMModelCatalog.defaultModel(for: .benchmarkPromptCandidate)
-        return [
-            BenchmarkCandidate(
-                id: "stt-deepgram-stream-default",
-                task: .stt,
-                model: "deepgram",
-                options: [
-                    "stt_mode": "stream",
-                    "chunk_ms": "120",
-                    "realtime": "true",
-                    "min_audio_seconds": "2.0",
-                    "use_cache": "true",
-                ],
-                createdAt: now,
-                updatedAt: now
-            ),
-            BenchmarkCandidate(
-                id: "stt-apple-speech-stream-default",
-                task: .stt,
-                model: "apple_speech",
-                options: [
-                    "stt_mode": "stream",
-                    "chunk_ms": "120",
-                    "realtime": "true",
-                    "min_audio_seconds": "2.0",
-                    "use_cache": "true",
-                ],
-                createdAt: now,
-                updatedAt: now
-            ),
-            BenchmarkCandidate(
-                id: "stt-whisper-stream-default",
-                task: .stt,
-                model: "whisper",
-                options: [
-                    "stt_mode": "stream",
-                    "chunk_ms": "120",
-                    "realtime": "true",
-                    "min_audio_seconds": "2.0",
-                    "use_cache": "true",
-                ],
-                createdAt: now,
-                updatedAt: now
-            ),
+        let sttCandidates = defaultSTTCandidates(now: now)
+        return sttCandidates + [
             BenchmarkCandidate(
                 id: "generation-\(defaultGenerationModel.rawValue)-default",
                 task: .generation,
@@ -152,5 +111,30 @@ public enum BenchmarkCandidateDefaults {
         }
 
         return (updated, didChange)
+    }
+
+    private static func defaultSTTCandidates(now: String) -> [BenchmarkCandidate] {
+        let baseOptions: [String: String] = [
+            "chunk_ms": "120",
+            "realtime": "true",
+            "silence_ms": "700",
+            "max_segment_ms": "25000",
+            "pre_roll_ms": "250",
+            "min_audio_seconds": "2.0",
+            "use_cache": "true",
+        ]
+
+        return STTPresetCatalog.settingsSpecs()
+            .map { spec in
+                let presetID = spec.id.rawValue.replacingOccurrences(of: "_", with: "-")
+                return BenchmarkCandidate(
+                    id: "stt-\(presetID)-default",
+                    task: .stt,
+                    model: spec.id.rawValue,
+                    options: baseOptions,
+                    createdAt: now,
+                    updatedAt: now
+                )
+            }
     }
 }

@@ -12,9 +12,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menu = NSMenu()
 
     private lazy var stateItem = NSMenuItem(title: "状態: 待機中", action: nil, keyEquivalent: "")
+    private lazy var livePreviewItem = NSMenuItem(title: "途中確定: -", action: nil, keyEquivalent: "")
     private lazy var accessibilityStateItem = NSMenuItem(title: "アクセシビリティ権限: 確認中", action: nil, keyEquivalent: "")
     private lazy var startStopItem = NSMenuItem(title: "録音開始", action: #selector(toggleRecording), keyEquivalent: "")
     private lazy var requestAccessibilityItem = NSMenuItem(title: "アクセシビリティ権限を要求", action: #selector(requestAccessibilityPermission), keyEquivalent: "")
+    private var latestSegmentPreview: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -123,9 +125,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func buildMenu() {
         stateItem.isEnabled = false
+        livePreviewItem.isEnabled = false
         accessibilityStateItem.isEnabled = false
 
         menu.addItem(stateItem)
+        menu.addItem(livePreviewItem)
         menu.addItem(accessibilityStateItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(startStopItem)
@@ -155,6 +159,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startStopItem.isEnabled = !(state == .sttStreaming || state == .postProcessing || state == .directInput)
 
         statusItem.button?.title = state.symbol
+
+        if state == .idle || state == .recording {
+            if state == .recording {
+                latestSegmentPreview = nil
+            }
+            refreshLivePreviewItem()
+        }
     }
 
     private func refreshAccessibilityPermissionState() {
@@ -165,6 +176,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         refreshAccessibilityPermissionState()
+        refreshLivePreviewItem()
+    }
+
+    private func refreshLivePreviewItem() {
+        guard let coordinator else {
+            livePreviewItem.isHidden = true
+            return
+        }
+        let enabled = coordinator.config.sttSegmentation.livePreviewEnabled
+        livePreviewItem.isHidden = !enabled
+        guard enabled else {
+            return
+        }
+        if let latestSegmentPreview, !latestSegmentPreview.isEmpty {
+            livePreviewItem.title = "途中確定: \(latestSegmentPreview)"
+        } else {
+            livePreviewItem.title = "途中確定: -"
+        }
+    }
+
+    private func applyCommittedSegment(_ segment: STTCommittedSegment) {
+        guard coordinator?.config.sttSegmentation.livePreviewEnabled == true else {
+            return
+        }
+        let trimmed = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        let preview = String(trimmed.prefix(64))
+        latestSegmentPreview = preview
+        refreshLivePreviewItem()
     }
 
     private func showInfo(_ message: String) {
@@ -212,9 +254,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.onError = { [weak self] message in
             self?.showError(message)
         }
+        coordinator.onSegmentCommitted = { [weak self] segment in
+            self?.applyCommittedSegment(segment)
+        }
 
         apply(state: .idle)
         refreshAccessibilityPermissionState()
+        refreshLivePreviewItem()
         coordinator.requestAccessibilityPermissionOnLaunch()
         refreshAccessibilityPermissionState()
     }

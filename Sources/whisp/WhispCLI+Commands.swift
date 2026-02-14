@@ -7,74 +7,36 @@ extension WhispCLI {
         options: PipelineOptions,
         context: ContextInfo?
     ) async throws -> PipelineRunResult {
-        let sttCredential = try APIKeyResolver.sttCredential(config: config, provider: .deepgram)
-        guard case let .apiKey(deepgramKey) = sttCredential else {
-            throw AppError.invalidArgument("Deepgram APIキーが未設定です")
-        }
+        let sttCredential = try APIKeyResolver.sttCredential(config: config, preset: options.sttPreset)
         let model = APIKeyResolver.effectivePostProcessModel(config.llmModel)
         let llmKey = try APIKeyResolver.llmKey(config: config, model: model)
 
         let wavData = try Data(contentsOf: URL(fileURLWithPath: options.path))
         let audio = try parsePCM16MonoWAV(wavData)
-        let sampleRate = Int(audio.sampleRate)
-        let language = LanguageResolver.languageParam(config.inputLanguage)
 
-        var sttText = ""
-        var sttSource = ""
-        var sttTotalMs = 0.0
-        var sttAfterStopMs = 0.0
-        var sttSendMs = 0.0
-        var sttFinalizeMs = 0.0
+        var sttText: String
+        var sttSource: String
+        var sttTotalMs: Double
+        var sttAfterStopMs: Double
+        var sttSendMs: Double
+        var sttFinalizeMs: Double
 
         let wallStartedAt = DispatchTime.now()
-
-        switch options.sttMode {
-        case .rest:
-            let sttStartedAt = DispatchTime.now()
-            let result = try await DeepgramClient().transcribe(
-                apiKey: deepgramKey,
-                sampleRate: sampleRate,
-                audio: audio.pcmBytes,
-                language: language
-            )
-            sttText = result.transcript
-            sttSource = "rest"
-            sttTotalMs = elapsedMs(since: sttStartedAt)
-            sttAfterStopMs = sttTotalMs
-            sttFinalizeMs = sttTotalMs
-        case .stream:
-            let stream = DeepgramStreamingClient()
-            let chunkSamples = max(1, sampleRate * options.chunkMs / 1000)
-            let chunkBytes = chunkSamples * MemoryLayout<Int16>.size
-
-            try await stream.start(apiKey: deepgramKey, sampleRate: sampleRate, language: language)
-            let sendStartedAt = DispatchTime.now()
-            var offset = 0
-            while offset < audio.pcmBytes.count {
-                let end = min(offset + chunkBytes, audio.pcmBytes.count)
-                await stream.enqueueAudioChunk(audio.pcmBytes.subdata(in: offset..<end))
-
-                if options.realtime {
-                    let frameCount = (end - offset) / MemoryLayout<Int16>.size
-                    let seconds = Double(frameCount) / Double(sampleRate)
-                    let nanoseconds = UInt64(seconds * 1_000_000_000)
-                    if nanoseconds > 0 {
-                        try? await Task.sleep(nanoseconds: nanoseconds)
-                    }
-                }
-                offset = end
-            }
-            sttSendMs = elapsedMs(since: sendStartedAt)
-
-            let finalizeStartedAt = DispatchTime.now()
-            let result = try await stream.finish()
-            sttFinalizeMs = elapsedMs(since: finalizeStartedAt)
-
-            sttText = result.transcript
-            sttSource = "stream"
-            sttTotalMs = sttSendMs + sttFinalizeMs
-            sttAfterStopMs = sttFinalizeMs
-        }
+        let sttResult = try await runSTTInference(
+            preset: options.sttPreset,
+            credential: sttCredential,
+            audio: audio,
+            languageHint: config.inputLanguage,
+            chunkMs: options.chunkMs,
+            realtime: options.realtime,
+            segmentation: config.sttSegmentation
+        )
+        sttText = sttResult.transcript
+        sttSource = options.sttMode.rawValue
+        sttTotalMs = sttResult.totalMs
+        sttAfterStopMs = sttResult.afterStopMs
+        sttFinalizeMs = sttResult.afterStopMs
+        sttSendMs = max(0, sttResult.totalMs - sttResult.afterStopMs)
 
         let postStartedAt = DispatchTime.now()
         let postResult = try await postProcessText(

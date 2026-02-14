@@ -1,6 +1,18 @@
 import Foundation
 
 public enum APIKeyResolver {
+    public static func sttCredential(config: Config, preset: STTPresetID) throws -> STTCredential {
+        let spec = STTPresetCatalog.spec(for: preset)
+        switch spec.engine {
+        case .deepgram:
+            return .apiKey(try resolveDeepgramKey(config))
+        case .openAIWhisper:
+            return .apiKey(try resolveOpenAIKeyForWhisper(config))
+        case .appleSpeech:
+            return .none
+        }
+    }
+
     public static func sttCredential(config: Config, provider: STTProvider) throws -> STTCredential {
         switch provider {
         case .deepgram:

@@ -148,15 +148,18 @@ struct DebugEventAnalyzer {
         }
 
         let providerName: String = {
+            if let preset = STTPresetID(rawValue: log.provider) {
+                return STTPresetCatalog.spec(for: preset).displayName
+            }
             switch log.provider {
             case STTProvider.deepgram.rawValue:
-                return "Deepgram"
+                return "Deepgram (legacy)"
             case STTProvider.whisper.rawValue:
-                return "Whisper (OpenAI)"
+                return "Whisper (legacy)"
             case STTProvider.appleSpeech.rawValue:
-                return "Apple Speech"
+                return "Apple Speech (legacy)"
             default:
-                return log.provider
+                return "不明 (\(log.provider))"
             }
         }()
 

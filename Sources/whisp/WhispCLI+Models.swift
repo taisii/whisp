@@ -14,11 +14,20 @@ enum EmitMode: String {
 
 struct PipelineOptions {
     let path: String
-    let sttMode: STTMode
+    let sttPreset: STTPresetID
     let chunkMs: Int
     let realtime: Bool
     let emitMode: EmitMode
     let contextFilePath: String?
+
+    var sttMode: STTMode {
+        switch STTPresetCatalog.spec(for: sttPreset).mode {
+        case .stream:
+            return .stream
+        case .rest:
+            return .rest
+        }
+    }
 }
 
 struct PipelineRunResult {
@@ -366,9 +375,12 @@ struct VisionBenchmarkOptions {
 
 struct STTBenchmarkOptions {
     let jsonlPath: String
-    let sttMode: STTMode
+    let sttPreset: STTPresetID
     let chunkMs: Int
     let realtime: Bool
+    let silenceMs: Int
+    let maxSegmentMs: Int
+    let preRollMs: Int
     let benchmarkWorkers: Int?
     let limit: Int?
     let minAudioSeconds: Double
@@ -379,7 +391,15 @@ struct STTBenchmarkOptions {
     let evaluatorVersion: String?
     let codeVersion: String?
     let benchmarkKey: BenchmarkKey?
-    let sttProvider: STTProvider
+
+    var sttMode: STTMode {
+        switch STTPresetCatalog.spec(for: sttPreset).mode {
+        case .stream:
+            return .stream
+        case .rest:
+            return .rest
+        }
+    }
 }
 
 struct GenerationBenchmarkOptions {
@@ -472,6 +492,8 @@ struct CachedSTTResult: Codable {
     let transcript: String
     let totalMs: Double
     let afterStopMs: Double
+    let segmentCount: Int?
+    let vadSilenceCount: Int?
     let createdAt: String
 }
 

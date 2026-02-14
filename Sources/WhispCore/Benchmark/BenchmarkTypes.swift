@@ -331,6 +331,8 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
     public var latencyMs: Double?
     public var audioSeconds: Double?
     public var outputChars: Int?
+    public var segmentCount: Int?
+    public var vadSilenceCount: Int?
     public var pairwise: PairwiseCaseJudgement?
 
     public init(
@@ -351,6 +353,8 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
         latencyMs: Double? = nil,
         audioSeconds: Double? = nil,
         outputChars: Int? = nil,
+        segmentCount: Int? = nil,
+        vadSilenceCount: Int? = nil,
         pairwise: PairwiseCaseJudgement? = nil
     ) {
         self.exactMatch = exactMatch
@@ -370,6 +374,8 @@ public struct BenchmarkCaseMetrics: Codable, Equatable, Sendable {
         self.latencyMs = latencyMs
         self.audioSeconds = audioSeconds
         self.outputChars = outputChars
+        self.segmentCount = segmentCount
+        self.vadSilenceCount = vadSilenceCount
         self.pairwise = pairwise
     }
 }
@@ -476,6 +482,9 @@ public struct BenchmarkSTTRunOptions: Codable, Equatable, Sendable {
     public var chunkMs: Int?
     public var realtime: Bool?
     public var minAudioSeconds: Double?
+    public var silenceMs: Int?
+    public var maxSegmentMs: Int?
+    public var preRollMs: Int?
 
     public init(
         common: BenchmarkRunCommonOptions,
@@ -484,7 +493,10 @@ public struct BenchmarkSTTRunOptions: Codable, Equatable, Sendable {
         sttMode: String? = nil,
         chunkMs: Int? = nil,
         realtime: Bool? = nil,
-        minAudioSeconds: Double? = nil
+        minAudioSeconds: Double? = nil,
+        silenceMs: Int? = nil,
+        maxSegmentMs: Int? = nil,
+        preRollMs: Int? = nil
     ) {
         self.common = common
         self.candidateID = candidateID
@@ -493,6 +505,9 @@ public struct BenchmarkSTTRunOptions: Codable, Equatable, Sendable {
         self.chunkMs = chunkMs
         self.realtime = realtime
         self.minAudioSeconds = minAudioSeconds
+        self.silenceMs = silenceMs
+        self.maxSegmentMs = maxSegmentMs
+        self.preRollMs = preRollMs
     }
 }
 

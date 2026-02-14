@@ -48,12 +48,12 @@
 
 - `id`: candidate_id
 - `task`: `stt|generation|vision`（比較UI phase1 は `stt|generation`）
-- `model`: 例 `deepgram`, `apple_speech`, `gemini-2.5-flash-lite`, `gpt-5-nano`
+- `model`: 例 `deepgram_stream`, `apple_speech_recognizer_stream`, `apple_speech_analyzer_stream`, `gemini-2.5-flash-lite`, `gpt-5-nano`
 - `promptName`: generation 用の表示名（任意）
 - `generationPromptTemplate`: generation 用のプロンプト本文（generation では必須）
 - `generationPromptHash`: `sha256("prompt-v1|<canonical_prompt>")`
-- `options`: 実行オプション文字列辞書（`chunk_ms`, `realtime`, `require_context` など）
-  - STT では `deepgram` / `whisper` / `apple_speech` が `stt_mode=rest|stream` に対応
+- `options`: 実行オプション文字列辞書（`chunk_ms`, `silence_ms`, `max_segment_ms`, `pre_roll_ms`, `realtime`, `require_context` など）
+  - STT の実行モードは `model`（`STTPresetID`）で固定される
 
 ### Generation プロンプト変数（candidate内包テンプレート）
 

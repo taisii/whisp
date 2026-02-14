@@ -78,6 +78,8 @@ final class PipelineRunner {
 
         var debugSTTText: String?
         var debugOutputText: String?
+        var debugSegments: [STTCommittedSegment] = []
+        var debugVADIntervals: [VADInterval] = []
         var sttLog: DebugRunLog?
         var visionLog: DebugRunLog?
         var postProcessLog: DebugRunLog?
@@ -105,6 +107,8 @@ final class PipelineRunner {
                     captureID: captureID,
                     sttText: nil,
                     outputText: nil,
+                    segments: [],
+                    vadIntervals: [],
                     status: "skipped",
                     skipReason: PipelineSkipReason.emptyAudio.rawValue
                 )
@@ -144,6 +148,8 @@ final class PipelineRunner {
             var llmUsage: LLMUsage?
             let sttText: String
             let processedText: String
+            var sttSegments: [STTCommittedSegment] = []
+            var sttVADIntervals: [VADInterval] = []
 
             if resolvedGeneration.model.usesDirectAudio {
                 transition(.startPostProcessing)
@@ -213,6 +219,8 @@ final class PipelineRunner {
                 ])
                 processedText = transcription.text
                 sttText = transcription.text
+                sttSegments = []
+                sttVADIntervals = []
                 llmUsage = transcription.usage
                 sttChars = sttText.count
                 outputChars = processedText.count
@@ -273,7 +281,13 @@ final class PipelineRunner {
                     logger: logger
                 )
 
-                sttText = stt.transcript
+                sttSegments = stt.segments
+                sttVADIntervals = stt.vadIntervals
+                if sttSegments.isEmpty {
+                    sttText = stt.transcript
+                } else {
+                    sttText = sttSegments.map(\.text).joined(separator: "\n")
+                }
                 sttUsage = stt.usage
                 sttChars = sttText.count
                 if let captureID {
@@ -336,6 +350,8 @@ final class PipelineRunner {
                         captureID: captureID,
                         sttText: debugSTTText,
                         outputText: nil,
+                        segments: sttSegments,
+                        vadIntervals: sttVADIntervals,
                         status: "skipped",
                         skipReason: PipelineSkipReason.emptySTT.rawValue,
                         metrics: DebugRunMetrics(
@@ -484,6 +500,8 @@ final class PipelineRunner {
 
             debugSTTText = sttText
             debugOutputText = processedText
+            debugSegments = sttSegments
+            debugVADIntervals = sttVADIntervals
             usageStore.recordUsage(stt: sttUsage, llm: llmUsage)
 
             if isEmptySTT(processedText) {
@@ -491,6 +509,8 @@ final class PipelineRunner {
                     captureID: captureID,
                     sttText: debugSTTText,
                     outputText: debugOutputText,
+                    segments: debugSegments,
+                    vadIntervals: debugVADIntervals,
                     status: "skipped",
                     skipReason: PipelineSkipReason.emptyOutput.rawValue,
                     metrics: DebugRunMetrics(
@@ -562,6 +582,8 @@ final class PipelineRunner {
                 captureID: captureID,
                 sttText: debugSTTText,
                 outputText: debugOutputText,
+                segments: debugSegments,
+                vadIntervals: debugVADIntervals,
                 status: directInputOK ? "completed" : "completed_with_output_error",
                 metrics: DebugRunMetrics(
                     sttChars: sttChars,
@@ -633,6 +655,8 @@ final class PipelineRunner {
                 captureID: captureID,
                 sttText: debugSTTText,
                 outputText: debugOutputText,
+                segments: debugSegments,
+                vadIntervals: debugVADIntervals,
                 status: "failed",
                 failureStage: "pipeline",
                 metrics: DebugRunMetrics(
