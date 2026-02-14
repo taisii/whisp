@@ -3,6 +3,7 @@ import Foundation
 public enum BenchmarkCandidateDefaults {
     public static func ensureSeededAndNormalized(store: BenchmarkCandidateStore) throws {
         try ensureSeededIfNeeded(store: store)
+        try normalizeSTTCandidates(store: store)
         try normalizeGenerationCandidates(store: store)
     }
 
@@ -33,6 +34,14 @@ public enum BenchmarkCandidateDefaults {
     public static func normalizeGenerationCandidates(store: BenchmarkCandidateStore) throws {
         let current = try store.listCandidates()
         let normalized = normalizedGenerationCandidates(from: current)
+        if normalized.didChange {
+            try store.saveCandidates(normalized.candidates)
+        }
+    }
+
+    public static func normalizeSTTCandidates(store: BenchmarkCandidateStore) throws {
+        let current = try store.listCandidates()
+        let normalized = normalizedSTTCandidates(from: current)
         if normalized.didChange {
             try store.saveCandidates(normalized.candidates)
         }
@@ -108,6 +117,44 @@ public enum BenchmarkCandidateDefaults {
             } else {
                 updated.append(candidate)
             }
+        }
+
+        return (updated, didChange)
+    }
+
+    public static func normalizedSTTCandidates(
+        from candidates: [BenchmarkCandidate],
+        now: String = WhispTime.isoNow()
+    ) -> (candidates: [BenchmarkCandidate], didChange: Bool) {
+        let selectableSpecs = STTPresetCatalog.settingsSpecs()
+        let allowedModels = Set(selectableSpecs.map { $0.id.rawValue })
+        let defaultCandidatesByModel = Dictionary(
+            uniqueKeysWithValues: defaultSTTCandidates(now: now).map { ($0.model, $0) }
+        )
+
+        var updated: [BenchmarkCandidate] = []
+        updated.reserveCapacity(candidates.count)
+        var didChange = false
+
+        for candidate in candidates {
+            guard candidate.task == .stt else {
+                updated.append(candidate)
+                continue
+            }
+            guard allowedModels.contains(candidate.model) else {
+                didChange = true
+                continue
+            }
+            updated.append(candidate)
+        }
+
+        let existingSTTModels = Set(updated.filter { $0.task == .stt }.map(\.model))
+        for spec in selectableSpecs where !existingSTTModels.contains(spec.id.rawValue) {
+            guard let fallback = defaultCandidatesByModel[spec.id.rawValue] else {
+                continue
+            }
+            updated.append(fallback)
+            didChange = true
         }
 
         return (updated, didChange)

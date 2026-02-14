@@ -614,9 +614,78 @@ final class BenchmarkViewModelTests: XCTestCase {
         )
         viewModel.refresh()
 
-        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.model == STTPresetID.appleSpeechRecognizerStream.rawValue }))
-        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.model == STTPresetID.appleSpeechAnalyzerStream.rawValue }))
-        XCTAssertTrue(viewModel.taskCandidates.contains(where: { $0.id == "stt-apple-speech-recognizer-stream-default" }))
+        let expectedModels = Set(STTPresetCatalog.settingsSpecs().map { $0.id.rawValue })
+        let actualModels = Set(viewModel.taskCandidates.map(\.model))
+        XCTAssertEqual(actualModels, expectedModels)
+    }
+
+    func testRefreshKeepsSTTCandidateClearSelectionWithinSession() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        try Data("{}\n".utf8).write(to: casesPath, options: .atomic)
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
+        viewModel.selectedTab = .stt
+        viewModel.refresh()
+        XCTAssertFalse(viewModel.selectedCandidateIDs.isEmpty)
+
+        viewModel.selectedCandidateIDs.removeAll()
+        viewModel.refresh()
+        XCTAssertTrue(viewModel.selectedCandidateIDs.isEmpty)
+    }
+
+    func testRefreshRemovesUnregisteredSTTCandidateFromVisibleList() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        try Data("{}\n".utf8).write(to: casesPath, options: .atomic)
+
+        let now = "2026-02-12T00:00:00.000Z"
+        try candidateStore.saveCandidates([
+            BenchmarkCandidate(
+                id: "stt-google-cloud-stream-default",
+                task: .stt,
+                model: "google_cloud_stream",
+                options: [:],
+                createdAt: now,
+                updatedAt: now
+            ),
+            BenchmarkCandidate(
+                id: "stt-deepgram-stream-default",
+                task: .stt,
+                model: STTPresetID.deepgramStream.rawValue,
+                options: [:],
+                createdAt: now,
+                updatedAt: now
+            ),
+        ])
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
+        viewModel.selectedTab = .stt
+        viewModel.refresh()
+
+        XCTAssertFalse(viewModel.taskCandidates.contains(where: { $0.model == "google_cloud_stream" }))
+        let persisted = try candidateStore.listCandidates()
+        XCTAssertFalse(persisted.contains(where: { $0.model == "google_cloud_stream" }))
     }
 
     func testSavePromptCandidateModalCreatesGenerationCandidate() throws {

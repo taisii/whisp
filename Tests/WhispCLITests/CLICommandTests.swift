@@ -163,7 +163,7 @@ final class CLICommandTests: XCTestCase {
         let options = try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",
             "/tmp/manual.jsonl",
-            "--stt-preset", "apple_speech_analyzer_rest",
+            "--stt-preset", "apple_speech_recognizer_rest",
             "--chunk-ms", "200",
             "--silence-ms", "900",
             "--max-segment-ms", "30000",
@@ -184,15 +184,35 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(options.limit, 16)
         XCTAssertEqual(options.minAudioSeconds, 2.25, accuracy: 0.0001)
         XCTAssertFalse(options.useCache)
-        XCTAssertEqual(options.sttPreset, .appleSpeechAnalyzerRest)
+        XCTAssertEqual(options.sttPreset, .appleSpeechRecognizerRest)
 
         let appleStreamOptions = try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",
             "/tmp/manual.jsonl",
-            "--stt-preset", "apple_speech_analyzer_stream",
+            "--stt-preset", "apple_speech_recognizer_stream",
         ])
-        XCTAssertEqual(appleStreamOptions.sttPreset, .appleSpeechAnalyzerStream)
+        XCTAssertEqual(appleStreamOptions.sttPreset, .appleSpeechRecognizerStream)
         XCTAssertEqual(appleStreamOptions.sttMode, .stream)
+
+        if STTPresetCatalog.isAvailableOnCurrentPlatform(.appleSpeechTranscriberRest) {
+            let speechTranscriberRest = try WhispCLI.parseSTTBenchmarkOptions(args: [
+                "--benchmark-stt-cases",
+                "/tmp/manual.jsonl",
+                "--stt-preset", "apple_speech_transcriber_rest",
+            ])
+            XCTAssertEqual(speechTranscriberRest.sttPreset, .appleSpeechTranscriberRest)
+            XCTAssertEqual(speechTranscriberRest.sttMode, .rest)
+        }
+
+        if STTPresetCatalog.isAvailableOnCurrentPlatform(.appleDictationTranscriberStream) {
+            let dictationStream = try WhispCLI.parseSTTBenchmarkOptions(args: [
+                "--benchmark-stt-cases",
+                "/tmp/manual.jsonl",
+                "--stt-preset", "apple_dictation_transcriber_stream",
+            ])
+            XCTAssertEqual(dictationStream.sttPreset, .appleDictationTranscriberStream)
+            XCTAssertEqual(dictationStream.sttMode, .stream)
+        }
 
         XCTAssertThrowsError(try WhispCLI.parseSTTBenchmarkOptions(args: [
             "--benchmark-stt-cases",

@@ -31,7 +31,6 @@ final class BenchmarkCandidateDefaultsTests: XCTestCase {
 
         XCTAssertTrue(ids.contains("stt-deepgram-stream-default"))
         XCTAssertTrue(ids.contains("stt-apple-speech-recognizer-stream-default"))
-        XCTAssertTrue(ids.contains("stt-apple-speech-analyzer-stream-default"))
         XCTAssertTrue(ids.contains("stt-chatgpt-whisper-stream-default"))
     }
 
@@ -55,6 +54,52 @@ final class BenchmarkCandidateDefaultsTests: XCTestCase {
         let sttModels = Set(defaults.filter { $0.task == .stt }.map(\.model))
         let settingsModels = Set(STTPresetCatalog.settingsSpecs().map { $0.id.rawValue })
         XCTAssertEqual(sttModels, settingsModels)
+    }
+
+    func testNormalizeSTTCandidatesRemovesUnregisteredModel() {
+        let now = "2026-02-01T00:00:00.000Z"
+        let input: [BenchmarkCandidate] = [
+            BenchmarkCandidate(
+                id: "stt-google-cloud-stream-default",
+                task: .stt,
+                model: "google_cloud_stream",
+                options: [:],
+                createdAt: now,
+                updatedAt: now
+            ),
+            BenchmarkCandidate(
+                id: "stt-deepgram-stream-default",
+                task: .stt,
+                model: STTPresetID.deepgramStream.rawValue,
+                options: [:],
+                createdAt: now,
+                updatedAt: now
+            ),
+        ]
+
+        let normalized = BenchmarkCandidateDefaults.normalizedSTTCandidates(from: input, now: now)
+        XCTAssertTrue(normalized.didChange)
+        XCTAssertFalse(normalized.candidates.contains(where: { $0.model == "google_cloud_stream" }))
+        XCTAssertTrue(normalized.candidates.contains(where: { $0.model == STTPresetID.deepgramStream.rawValue }))
+    }
+
+    func testNormalizeSTTCandidatesBackfillsMissingDefaultPerModel() {
+        let now = "2026-02-01T00:00:00.000Z"
+        let seed = BenchmarkCandidate(
+            id: "stt-deepgram-stream-default",
+            task: .stt,
+            model: STTPresetID.deepgramStream.rawValue,
+            options: [:],
+            createdAt: now,
+            updatedAt: now
+        )
+
+        let normalized = BenchmarkCandidateDefaults.normalizedSTTCandidates(from: [seed], now: now)
+        let models = Set(normalized.candidates.filter { $0.task == .stt }.map(\.model))
+        let expectedModels = Set(STTPresetCatalog.settingsSpecs().map { $0.id.rawValue })
+
+        XCTAssertTrue(normalized.didChange)
+        XCTAssertEqual(models, expectedModels)
     }
 
     private func makeTempHomeDirectory() throws -> URL {

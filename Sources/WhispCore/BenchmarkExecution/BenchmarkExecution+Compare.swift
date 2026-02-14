@@ -309,6 +309,9 @@ extension BenchmarkExecutor {
         guard let preset = STTPresetID(rawValue: candidate.model) else {
             throw AppError.invalidArgument("candidate \(candidate.id): stt preset が不正です: \(candidate.model)")
         }
+        guard STTPresetCatalog.isAvailableOnCurrentPlatform(preset) else {
+            throw AppError.invalidArgument("candidate \(candidate.id): stt preset はこの環境で利用できません: \(candidate.model)")
+        }
         let chunkMs = try parseCandidateInt(candidate.options, key: "chunk_ms", defaultValue: 120)
         let realtime = true
         let minAudioSeconds = try parseCandidateDouble(candidate.options, key: "min_audio_seconds", defaultValue: 2.0)

@@ -94,9 +94,17 @@ public enum STTPresetID: String, Codable, Equatable, Sendable, CaseIterable {
     case deepgramRest = "deepgram_rest"
     case appleSpeechRecognizerStream = "apple_speech_recognizer_stream"
     case appleSpeechRecognizerRest = "apple_speech_recognizer_rest"
-    case appleSpeechAnalyzerStream = "apple_speech_analyzer_stream"
-    case appleSpeechAnalyzerRest = "apple_speech_analyzer_rest"
+    case appleSpeechTranscriberStream = "apple_speech_transcriber_stream"
+    case appleSpeechTranscriberRest = "apple_speech_transcriber_rest"
+    case appleDictationTranscriberStream = "apple_dictation_transcriber_stream"
+    case appleDictationTranscriberRest = "apple_dictation_transcriber_rest"
     case chatgptWhisperStream = "chatgpt_whisper_stream"
+}
+
+public enum AppleSTTModel: String, Codable, Equatable, Sendable {
+    case recognizer
+    case speechTranscriber = "speech_transcriber"
+    case dictationTranscriber = "dictation_transcriber"
 }
 
 public enum STTEngine: String, Codable, Equatable, Sendable {
@@ -150,6 +158,7 @@ public struct STTPresetSpec: Equatable, Sendable {
     public let id: STTPresetID
     public let displayName: String
     public let engine: STTEngine
+    public let appleModel: AppleSTTModel?
     public let mode: STTExecutionMode
     public let transport: STTTransport
     public let selectableInSettings: Bool
@@ -158,6 +167,7 @@ public struct STTPresetSpec: Equatable, Sendable {
         id: STTPresetID,
         displayName: String,
         engine: STTEngine,
+        appleModel: AppleSTTModel? = nil,
         mode: STTExecutionMode,
         transport: STTTransport,
         selectableInSettings: Bool = true
@@ -165,6 +175,7 @@ public struct STTPresetSpec: Equatable, Sendable {
         self.id = id
         self.displayName = displayName
         self.engine = engine
+        self.appleModel = appleModel
         self.mode = mode
         self.transport = transport
         self.selectableInSettings = selectableInSettings

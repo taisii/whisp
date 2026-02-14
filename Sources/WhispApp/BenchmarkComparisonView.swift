@@ -98,28 +98,66 @@ struct BenchmarkComparisonView: View {
                 }
                 .frame(width: 280)
             } else {
-                Menu {
-                    if viewModel.taskCandidates.isEmpty {
-                        Text("No candidates")
-                    } else {
-                        ForEach(viewModel.taskCandidates, id: \.id) { candidate in
-                            Button {
-                                viewModel.toggleCandidateSelection(candidate.id)
-                            } label: {
-                                Label(candidate.id, systemImage: viewModel.selectedCandidateIDs.contains(candidate.id) ? "checkmark.circle.fill" : "circle")
-                            }
-                        }
-                        Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text("Candidates \(viewModel.selectedCandidateIDs.count)/\(viewModel.taskCandidates.count)")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        Spacer(minLength: 0)
                         Button("Select All") {
                             viewModel.selectedCandidateIDs = Set(viewModel.taskCandidates.map(\.id))
                         }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(viewModel.taskCandidates.isEmpty)
                         Button("Clear") {
                             viewModel.selectedCandidateIDs.removeAll()
                         }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(viewModel.taskCandidates.isEmpty)
                     }
-                } label: {
-                    Text("Candidates \(viewModel.selectedCandidateIDs.count)/\(viewModel.taskCandidates.count)")
+
+                    if viewModel.taskCandidates.isEmpty {
+                        Text("No candidates")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(viewModel.taskCandidates, id: \.id) { candidate in
+                                    Toggle(
+                                        isOn: Binding(
+                                            get: { viewModel.selectedCandidateIDs.contains(candidate.id) },
+                                            set: { isOn in
+                                                if isOn {
+                                                    viewModel.selectedCandidateIDs.insert(candidate.id)
+                                                } else {
+                                                    viewModel.selectedCandidateIDs.remove(candidate.id)
+                                                }
+                                            }
+                                        )
+                                    ) {
+                                        Text(candidate.id)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .lineLimit(1)
+                                    }
+                                    .toggleStyle(.checkbox)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                        }
+                        .frame(width: 360, height: 124)
+                        .background(Color(NSColor.textBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
+                        }
+                    }
                 }
+                .frame(width: 370, alignment: .leading)
             }
 
             Toggle("Force rerun", isOn: $viewModel.forceRerun)

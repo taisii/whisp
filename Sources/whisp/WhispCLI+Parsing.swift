@@ -112,7 +112,9 @@ extension WhispCLI {
             }
             if item == "--stt-preset" {
                 let raw = try parser.value(for: "--stt-preset")
-                guard let parsed = STTPresetID(rawValue: raw) else {
+                guard let parsed = STTPresetID(rawValue: raw),
+                      STTPresetCatalog.isAvailableOnCurrentPlatform(parsed)
+                else {
                     throw AppError.invalidArgument("--stt-preset は \(STTPresetCatalog.allowedPresetRawValueText()) を指定してください")
                 }
                 sttPreset = parsed
@@ -234,7 +236,9 @@ extension WhispCLI {
             }
             if item == "--stt-preset" {
                 let raw = try parser.value(for: "--stt-preset")
-                guard let parsed = STTPresetID(rawValue: raw) else {
+                guard let parsed = STTPresetID(rawValue: raw),
+                      STTPresetCatalog.isAvailableOnCurrentPlatform(parsed)
+                else {
                     throw AppError.invalidArgument("--stt-preset は \(STTPresetCatalog.allowedPresetRawValueText()) を指定してください")
                 }
                 sttPreset = parsed

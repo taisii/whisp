@@ -280,6 +280,7 @@ final class BenchmarkViewModel: ObservableObject {
     private var caseAudioPollingTimer: Timer?
     private var integrityRecordsByCaseID: [String: BenchmarkDatasetCaseRecord] = [:]
     private var integrityAutoScanTask: Task<Void, Never>?
+    private var hasInitializedSTTCandidateSelection = false
 
     init(
         store: BenchmarkStore,
@@ -299,8 +300,13 @@ final class BenchmarkViewModel: ObservableObject {
     }
 
     var taskCandidates: [BenchmarkCandidate] {
-        candidates
-            .filter { $0.task == selectedTask }
+        let filtered = candidates.filter { $0.task == selectedTask }
+        if selectedTask != .stt {
+            return filtered.sorted { $0.id < $1.id }
+        }
+        let availableModels = Set(STTPresetCatalog.settingsSpecs().map { $0.id.rawValue })
+        return filtered
+            .filter { availableModels.contains($0.model) }
             .sorted { $0.id < $1.id }
     }
 
@@ -1011,8 +1017,13 @@ final class BenchmarkViewModel: ObservableObject {
         synchronizeSelectionForCurrentTab()
         let valid = Set(taskCandidates.map(\.id))
         selectedCandidateIDs = selectedCandidateIDs.intersection(valid)
-        if selectedCandidateIDs.isEmpty {
+        if selectedTask == .stt,
+           !hasInitializedSTTCandidateSelection,
+           selectedCandidateIDs.isEmpty,
+           !taskCandidates.isEmpty
+        {
             selectedCandidateIDs = Set(taskCandidates.prefix(3).map(\.id))
+            hasInitializedSTTCandidateSelection = true
         }
         try loadComparisonRows()
         try reloadGenerationPairwiseState()

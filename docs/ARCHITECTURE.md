@@ -83,8 +83,6 @@
    - `sttPreset=deepgram_rest`: Deepgram REST
    - `sttPreset=apple_speech_recognizer_stream`: Apple Speech Recognizer Streaming（Speech.framework on-device）
    - `sttPreset=apple_speech_recognizer_rest`: Apple Speech Recognizer REST（on-device URL request）
-   - `sttPreset=apple_speech_analyzer_stream`: Apple Speech Analyzer Streaming（on-device）
-   - `sttPreset=apple_speech_analyzer_rest`: Apple Speech Analyzer REST（on-device）
    - `sttPreset=chatgpt_whisper_stream`: OpenAI Realtime Streaming（gpt-4o-mini-transcribe）
    - Apple streaming は `sttSegmentation` に従って VAD区切り（`silence/max_segment/stop`）で segment commit し、セッションを回転する
    - `segments` と `vadIntervals` を保存し、後段LLMには `segments.map(\.text).joined(separator: "\n")` を渡す

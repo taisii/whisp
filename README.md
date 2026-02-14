@@ -107,7 +107,7 @@ Requirements:
 - `~/.config/whisp/config.json` に必要なAPIキーが設定されていること
   - `sttPreset=deepgram_stream|deepgram_rest` の場合: `apiKeys.deepgram`
   - `sttPreset=chatgpt_whisper_stream` の場合: `apiKeys.openai`
-  - `sttPreset=apple_speech_recognizer_stream|apple_speech_recognizer_rest|apple_speech_analyzer_stream|apple_speech_analyzer_rest` の場合: APIキー不要（音声認識権限は必要）
+  - `sttPreset=apple_speech_recognizer_stream|apple_speech_recognizer_rest` の場合: APIキー不要（音声認識権限は必要）
 
 ### STT latency benchmark example
 
@@ -208,8 +208,7 @@ swift run whisp --benchmark-compare \
   --task stt \
   --cases ~/.config/whisp/debug/manual_test_cases.jsonl \
   --candidate-id stt-deepgram-stream-default \
-  --candidate-id stt-apple-speech-recognizer-stream-default \
-  --candidate-id stt-apple-speech-analyzer-stream-default
+  --candidate-id stt-apple-speech-recognizer-stream-default
 
 # Generation比較（強制再実行）
 swift run whisp --benchmark-compare \
@@ -225,7 +224,7 @@ swift run whisp --benchmark-scan-integrity \
 ```
 
 STT candidate 設計メモ:
-- `model` は `STTPresetID` を指定（例: `deepgram_stream`, `apple_speech_recognizer_stream`, `apple_speech_analyzer_stream`）
+- `model` は `STTPresetID` を指定（例: `deepgram_stream`, `apple_speech_recognizer_stream`）
 - STT候補のモードは `model`（preset）で決まり、`stt_mode` option は不要
 - 無音区切り系は `silence_ms` / `max_segment_ms` / `pre_roll_ms` を option に保持する
 
@@ -448,7 +447,7 @@ scripts/reset_permissions.sh --open-settings
 
 Whisp requires these permissions:
 - Microphone
-- Speech Recognition (when `sttPreset=apple_speech_recognizer_stream|apple_speech_recognizer_rest|apple_speech_analyzer_stream|apple_speech_analyzer_rest`)
+- Speech Recognition (when `sttPreset=apple_speech_recognizer_stream|apple_speech_recognizer_rest`)
 - Accessibility (for direct input)
 - Screen Recording (when screenshot analysis is enabled)
 
@@ -473,7 +472,7 @@ Main fields:
 - `shortcut` (e.g. `Cmd+J`, `Ctrl+Alt+Shift+F1`)
 - `recordingMode` (`toggle` / `push_to_talk`)
 - `inputLanguage` (`auto` / `ja` / `en`)
-- `sttPreset` (`deepgram_stream` / `deepgram_rest` / `apple_speech_recognizer_stream` / `apple_speech_recognizer_rest` / `apple_speech_analyzer_stream` / `apple_speech_analyzer_rest` / `chatgpt_whisper_stream`)
+- `sttPreset` (`deepgram_stream` / `deepgram_rest` / `apple_speech_recognizer_stream` / `apple_speech_recognizer_rest` / `chatgpt_whisper_stream`)
 - `sttSegmentation.silenceMs` / `sttSegmentation.maxSegmentMs` / `sttSegmentation.preRollMs` / `sttSegmentation.livePreviewEnabled`
 - `llmModel`
 - `generationPrimary` (optional)

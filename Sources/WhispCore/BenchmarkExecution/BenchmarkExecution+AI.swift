@@ -237,6 +237,7 @@ extension BenchmarkExecutor {
                 )
             }
         case .appleSpeech:
+            let appleModel = presetSpec.appleModel ?? .recognizer
             switch mode {
             case .rest:
                 let replayStartedAtMs: Int64?
@@ -257,7 +258,8 @@ extension BenchmarkExecutor {
                 let transcript = try await transcribeWithAppleSpeech(
                     sampleRate: sampleRate,
                     audio: audio.pcmBytes,
-                    language: language
+                    language: language,
+                    model: appleModel
                 )
                 let total = elapsedMs(since: startedAt)
                 let attemptEndedAtMs = nowEpochMs()
@@ -278,15 +280,27 @@ extension BenchmarkExecutor {
                 )
             case .stream:
 #if canImport(Speech)
-                return try await runAppleSpeechSegmentedInference(
-                    preset: preset,
-                    audio: audio,
-                    sampleRate: sampleRate,
-                    language: language,
-                    chunkMs: chunkMs,
-                    realtime: realtime,
-                    segmentation: segmentation
-                )
+                switch appleModel {
+                case .recognizer:
+                    return try await runAppleSpeechSegmentedInference(
+                        audio: audio,
+                        sampleRate: sampleRate,
+                        language: language,
+                        chunkMs: chunkMs,
+                        realtime: realtime,
+                        segmentation: segmentation
+                    )
+                case .speechTranscriber, .dictationTranscriber:
+                    return try await runAppleSpeechModernSegmentedInference(
+                        model: appleModel,
+                        audio: audio,
+                        sampleRate: sampleRate,
+                        language: language,
+                        chunkMs: chunkMs,
+                        realtime: realtime,
+                        segmentation: segmentation
+                    )
+                }
 #else
                 throw AppError.invalidArgument("この環境では Speech.framework が利用できません")
 #endif
@@ -692,7 +706,6 @@ extension BenchmarkExecutor {
     }
 
     private static func runAppleSpeechSegmentedInference(
-        preset _: STTPresetID,
         audio: AudioData,
         sampleRate: Int,
         language: String?,
@@ -924,12 +937,270 @@ extension BenchmarkExecutor {
         return rms >= 0.015
     }
 
+    private static func runAppleSpeechModernSegmentedInference(
+        model: AppleSTTModel,
+        audio: AudioData,
+        sampleRate: Int,
+        language: String?,
+        chunkMs: Int,
+        realtime: Bool,
+        segmentation: STTSegmentationConfig
+    ) async throws -> (
+        transcript: String,
+        totalMs: Double,
+        afterStopMs: Double,
+        replayStartedAtMs: Int64?,
+        replayEndedAtMs: Int64?,
+        attempts: [BenchmarkSTTAttempt],
+        segmentCount: Int?,
+        vadSilenceCount: Int?
+    ) {
+#if canImport(Speech)
+        let chunkSamples = max(1, sampleRate * chunkMs / 1_000)
+        let chunkBytes = chunkSamples * MemoryLayout<Int16>.size
+        let silenceMs = max(segmentation.silenceMs, 100)
+        let maxSegmentMs = max(segmentation.maxSegmentMs, 1_000)
+        let preRollMs = max(segmentation.preRollMs, 0)
+        let preRollByteLimit = max(0, (sampleRate * preRollMs / 1_000) * MemoryLayout<Int16>.size)
+
+        let replayStartedAtMs = nowEpochMs()
+        var replayEndedAtMs = replayStartedAtMs
+        var attempts: [BenchmarkSTTAttempt] = []
+        var committedSegments: [STTCommittedSegment] = []
+        var vadIntervals: [VADInterval] = []
+
+        var preRollBuffer = Data()
+        var pendingPreRoll = Data()
+        var segmentAudio = Data()
+        var segmentStarted = false
+        var segmentStartMs: Int64 = 0
+        var segmentDurationMs = 0
+        var silenceAccumulatedMs = 0
+        var segmentHasSpeech = false
+        var timelineMs: Int64 = 0
+        var activeVADKind: String?
+        var activeVADStartMs: Int64 = 0
+
+        func appendPreRoll(_ chunk: Data) {
+            guard preRollByteLimit > 0 else {
+                return
+            }
+            preRollBuffer.append(chunk)
+            if preRollBuffer.count > preRollByteLimit {
+                preRollBuffer = Data(preRollBuffer.suffix(preRollByteLimit))
+            }
+        }
+
+        func updateVAD(kind: String, startMs: Int64) {
+            if activeVADKind == kind {
+                return
+            }
+            if let activeKind = activeVADKind {
+                let interval = VADInterval(startMs: activeVADStartMs, endMs: startMs, kind: activeKind)
+                if interval.endMs > interval.startMs {
+                    vadIntervals.append(interval)
+                }
+            }
+            activeVADKind = kind
+            activeVADStartMs = startMs
+        }
+
+        func closeVAD(endMs: Int64) {
+            guard let activeKind = activeVADKind else {
+                return
+            }
+            let interval = VADInterval(startMs: activeVADStartMs, endMs: endMs, kind: activeKind)
+            if interval.endMs > interval.startMs {
+                vadIntervals.append(interval)
+            }
+            activeVADKind = nil
+        }
+
+        func ensureSegmentStarted() {
+            guard !segmentStarted else {
+                return
+            }
+            let rewind = Int64(min(preRollMs, Int(timelineMs)))
+            segmentStartMs = max(0, timelineMs - rewind)
+            segmentDurationMs = 0
+            silenceAccumulatedMs = 0
+            segmentHasSpeech = false
+            segmentAudio = pendingPreRoll
+            pendingPreRoll.removeAll(keepingCapacity: false)
+            segmentStarted = true
+        }
+
+        func commitSegment(reason: String, endMs: Int64) async throws {
+            guard segmentStarted else {
+                return
+            }
+            let audioForSegment = segmentAudio
+            segmentStarted = false
+            pendingPreRoll = preRollBuffer
+            segmentAudio = Data()
+            segmentDurationMs = 0
+            silenceAccumulatedMs = 0
+            segmentHasSpeech = false
+
+            guard !audioForSegment.isEmpty else {
+                return
+            }
+
+            let commitStartedAtMs = nowEpochMs()
+            let transcript = try await transcribeWithAppleSpeech(
+                sampleRate: sampleRate,
+                audio: audioForSegment,
+                language: language,
+                model: model
+            )
+            let commitEndedAtMs = nowEpochMs()
+            attempts.append(BenchmarkSTTAttempt(
+                kind: "segment_commit",
+                status: .ok,
+                startedAtMs: commitStartedAtMs,
+                endedAtMs: commitEndedAtMs
+            ))
+
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                committedSegments.append(STTCommittedSegment(
+                    index: committedSegments.count,
+                    startMs: segmentStartMs,
+                    endMs: max(segmentStartMs, endMs),
+                    text: trimmed,
+                    reason: reason
+                ))
+            }
+        }
+
+        var offset = 0
+        while offset < audio.pcmBytes.count {
+            let end = min(offset + chunkBytes, audio.pcmBytes.count)
+            let chunk = audio.pcmBytes.subdata(in: offset..<end)
+            let durationMs = max(1, chunkDurationMs(byteCount: chunk.count, sampleRate: sampleRate))
+            let chunkStartMs = timelineMs
+            timelineMs += Int64(durationMs)
+
+            appendPreRoll(chunk)
+            ensureSegmentStarted()
+            segmentAudio.append(chunk)
+            segmentDurationMs += durationMs
+
+            let speech = isSpeechChunk(chunk)
+            updateVAD(kind: speech ? "speech" : "silence", startMs: chunkStartMs)
+            if speech {
+                segmentHasSpeech = true
+                silenceAccumulatedMs = 0
+            } else {
+                silenceAccumulatedMs += durationMs
+            }
+
+            if !speech, segmentHasSpeech, silenceAccumulatedMs >= silenceMs {
+                try await commitSegment(reason: "silence", endMs: timelineMs)
+            } else if segmentDurationMs >= maxSegmentMs {
+                try await commitSegment(reason: "max_segment", endMs: timelineMs)
+            }
+
+            if realtime {
+                let frameCount = (end - offset) / MemoryLayout<Int16>.size
+                let seconds = Double(frameCount) / Double(sampleRate)
+                let nanoseconds = UInt64(seconds * 1_000_000_000)
+                if nanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: nanoseconds)
+                }
+            }
+            offset = end
+        }
+        replayEndedAtMs = nowEpochMs()
+        attempts.insert(BenchmarkSTTAttempt(
+            kind: "stream_send",
+            status: .ok,
+            startedAtMs: replayStartedAtMs,
+            endedAtMs: replayEndedAtMs
+        ), at: 0)
+
+        let finalizeStartedAt = DispatchTime.now()
+        let finalizeAttemptStartedAtMs = nowEpochMs()
+        try await commitSegment(reason: "stop", endMs: timelineMs)
+        let finalizeMs = elapsedMs(since: finalizeStartedAt)
+        let finalizeAttemptEndedAtMs = nowEpochMs()
+        attempts.append(BenchmarkSTTAttempt(
+            kind: "stream_finalize",
+            status: .ok,
+            startedAtMs: finalizeAttemptStartedAtMs,
+            endedAtMs: finalizeAttemptEndedAtMs
+        ))
+
+        closeVAD(endMs: timelineMs)
+        let transcript = committedSegments.map(\.text).joined(separator: "\n")
+        let vadSilenceCount = vadIntervals.filter { $0.kind == "silence" }.count
+        return (
+            transcript,
+            Double(max(0, finalizeAttemptEndedAtMs - replayStartedAtMs)),
+            finalizeMs,
+            replayStartedAtMs,
+            replayEndedAtMs,
+            attempts,
+            committedSegments.count,
+            vadSilenceCount
+        )
+#else
+        throw AppError.invalidArgument("この環境では Speech.framework が利用できません")
+#endif
+    }
+
     private static func transcribeWithAppleSpeech(
+        sampleRate: Int,
+        audio: Data,
+        language: String?,
+        model: AppleSTTModel
+    ) async throws -> String {
+#if canImport(Speech)
+        switch model {
+        case .recognizer:
+            return try await transcribeWithAppleSpeechRecognizer(
+                sampleRate: sampleRate,
+                audio: audio,
+                language: language
+            )
+        case .speechTranscriber:
+            #if os(macOS)
+                if #available(macOS 26.0, *) {
+                    return try await transcribeWithSpeechTranscriber(
+                        sampleRate: sampleRate,
+                        audio: audio,
+                        language: language
+                    )
+                }
+                throw AppError.invalidArgument("Apple Speech Transcriber は macOS 26 以降で利用できます")
+            #else
+                throw AppError.invalidArgument("Apple Speech Transcriber はこのOSで利用できません")
+            #endif
+        case .dictationTranscriber:
+            #if os(macOS)
+                if #available(macOS 26.0, *) {
+                    return try await transcribeWithDictationTranscriber(
+                        sampleRate: sampleRate,
+                        audio: audio,
+                        language: language
+                    )
+                }
+                throw AppError.invalidArgument("Apple Dictation Transcriber は macOS 26 以降で利用できます")
+            #else
+                throw AppError.invalidArgument("Apple Dictation Transcriber はこのOSで利用できません")
+            #endif
+        }
+#else
+        throw AppError.invalidArgument("この環境では Speech.framework が利用できません")
+#endif
+    }
+
+#if canImport(Speech)
+    private static func transcribeWithAppleSpeechRecognizer(
         sampleRate: Int,
         audio: Data,
         language: String?
     ) async throws -> String {
-#if canImport(Speech)
         let recognizer = try await resolveSpeechRecognizer(language: language)
 
         let normalizedSampleRate = max(sampleRate, 1)
@@ -952,12 +1223,97 @@ extension BenchmarkExecutor {
         } catch {
             throw AppError.io("Apple Speech 文字起こしに失敗: \(error.localizedDescription)")
         }
-#else
-        throw AppError.invalidArgument("この環境では Speech.framework が利用できません")
-#endif
     }
 
-#if canImport(Speech)
+    @available(macOS 26.0, *)
+    private static func transcribeWithSpeechTranscriber(
+        sampleRate: Int,
+        audio: Data,
+        language: String?
+    ) async throws -> String {
+        let locale = localeForSpeechLanguage(language)
+        let module = SpeechTranscriber(locale: locale, preset: .transcription)
+        return try await transcribeWithSpeechModule(
+            sampleRate: sampleRate,
+            audio: audio,
+            module: module
+        ) { result in
+            String(result.text.characters)
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private static func transcribeWithDictationTranscriber(
+        sampleRate: Int,
+        audio: Data,
+        language: String?
+    ) async throws -> String {
+        let locale = localeForSpeechLanguage(language)
+        let module = DictationTranscriber(locale: locale, preset: .longDictation)
+        return try await transcribeWithSpeechModule(
+            sampleRate: sampleRate,
+            audio: audio,
+            module: module
+        ) { result in
+            String(result.text.characters)
+        }
+    }
+
+    @available(macOS 26.0, *)
+    private static func transcribeWithSpeechModule<Module: SpeechModule>(
+        sampleRate: Int,
+        audio: Data,
+        module: Module,
+        extractText: @escaping @Sendable (Module.Result) -> String
+    ) async throws -> String {
+        let normalizedSampleRate = max(sampleRate, 1)
+        let wavData = buildWAVBytes(sampleRate: UInt32(normalizedSampleRate), pcmData: audio)
+        let tmpURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("whisp-apple-modern-stt-\(UUID().uuidString)")
+            .appendingPathExtension("wav")
+        try wavData.write(to: tmpURL, options: [.atomic])
+        defer { try? FileManager.default.removeItem(at: tmpURL) }
+
+        let audioFile = try AVAudioFile(forReading: tmpURL)
+        let analyzer = SpeechAnalyzer(modules: [module])
+
+        let resultsTask = Task<[String], Error> {
+            var parts: [String] = []
+            for try await result in module.results {
+                let text = extractText(result).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty {
+                    parts.append(text)
+                }
+            }
+            return parts
+        }
+
+        do {
+            try await analyzer.start(inputAudioFile: audioFile, finishAfterFile: true)
+        } catch {
+            resultsTask.cancel()
+            throw AppError.io("Apple Speech 文字起こしに失敗: \(error.localizedDescription)")
+        }
+        let parts = try await resultsTask.value
+        return normalizedTranscript(parts: parts)
+    }
+
+    private static func normalizedTranscript(parts: [String]) -> String {
+        var normalized: [String] = []
+        normalized.reserveCapacity(parts.count)
+        for part in parts {
+            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                continue
+            }
+            if normalized.last == trimmed {
+                continue
+            }
+            normalized.append(trimmed)
+        }
+        return normalized.joined(separator: "\n")
+    }
+
     private static func recognizeSpeechTranscript(
         request: SFSpeechURLRecognitionRequest,
         recognizer: SFSpeechRecognizer
