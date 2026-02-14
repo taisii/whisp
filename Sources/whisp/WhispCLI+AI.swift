@@ -265,31 +265,8 @@ extension WhispCLI {
         \(hypothesisText)
         """
 
-        let responseText: String
-        guard let provider = LLMModelCatalog.spec(for: model)?.provider else {
-            throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
-        }
-        if provider == .gemini {
-            let body = GeminiTextRequest(contents: [
-                GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
-            ])
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
-            guard let url = URL(string: endpoint) else {
-                throw AppError.invalidArgument("Gemini URL生成に失敗")
-            }
-            let data = try await sendJSONRequest(url: url, headers: [:], body: body)
-            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-            responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } else {
-            let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
-            guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
-                throw AppError.invalidArgument("OpenAI URL生成に失敗")
-            }
-            let headers = ["Authorization": "Bearer \(apiKey)"]
-            let data = try await sendJSONRequest(url: url, headers: headers, body: body)
-            let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
-            responseText = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        }
+        let response = try await LLMGateway().postProcess(apiKey: apiKey, model: model, prompt: prompt)
+        let responseText = response.text
 
         let jsonText = extractedJSONObjectText(from: responseText)
         guard let data = jsonText.data(using: .utf8) else {
@@ -329,31 +306,8 @@ extension WhispCLI {
         \(contextSnippet)
         """
 
-        let responseText: String
-        guard let provider = LLMModelCatalog.spec(for: model)?.provider else {
-            throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
-        }
-        if provider == .gemini {
-            let body = GeminiTextRequest(contents: [
-                GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
-            ])
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
-            guard let url = URL(string: endpoint) else {
-                throw AppError.invalidArgument("Gemini URL生成に失敗")
-            }
-            let data = try await sendJSONRequest(url: url, headers: [:], body: body)
-            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-            responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        } else {
-            let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
-            guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
-                throw AppError.invalidArgument("OpenAI URL生成に失敗")
-            }
-            let headers = ["Authorization": "Bearer \(apiKey)"]
-            let data = try await sendJSONRequest(url: url, headers: headers, body: body)
-            let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
-            responseText = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        }
+        let response = try await LLMGateway().postProcess(apiKey: apiKey, model: model, prompt: prompt)
+        let responseText = response.text
 
         let jsonText = extractedJSONObjectText(from: responseText)
         guard let data = jsonText.data(using: .utf8) else {
@@ -389,48 +343,19 @@ extension WhispCLI {
             normalizedMimeType: mimeType
         )
 
-        let responseText: String
-        guard let provider = LLMModelCatalog.spec(for: model)?.provider else {
-            throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
-        }
-        if provider == .gemini {
-            var parts: [GeminiMultimodalPart] = [.text(prompt)]
-            if hasImage, let visionImageData, let mimeType {
-                parts.append(.inlineData(GeminiInlineData(
-                    mimeType: mimeType,
-                    data: visionImageData.base64EncodedString()
-                )))
-            }
-            let body = GeminiMultimodalRequest(contents: [
-                GeminiMultimodalContent(role: "user", parts: parts),
-            ])
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
-            guard let url = URL(string: endpoint) else {
-                throw AppError.invalidArgument("Gemini URL生成に失敗")
-            }
-            let data = try await sendJSONRequest(url: url, headers: [:], body: body)
-            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-            responseText = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let response: PostProcessResult
+        if hasImage, let visionImageData, let mimeType {
+            response = try await LLMGateway().judgeWithImage(
+                apiKey: apiKey,
+                model: model,
+                prompt: prompt,
+                imageData: visionImageData,
+                imageMimeType: mimeType
+            )
         } else {
-            let content: OpenAIChatMessageContent
-            if hasImage, let visionImageData, let mimeType {
-                let dataURL = "data:\(mimeType);base64,\(visionImageData.base64EncodedString())"
-                content = .parts([
-                    .text(prompt),
-                    .imageURL(OpenAIImageURLContent(url: dataURL)),
-                ])
-            } else {
-                content = .text(prompt)
-            }
-            let body = OpenAIChatRequest(model: model.modelName, messages: [OpenAIChatMessage(role: "user", content: content)])
-            guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
-                throw AppError.invalidArgument("OpenAI URL生成に失敗")
-            }
-            let headers = ["Authorization": "Bearer \(apiKey)"]
-            let data = try await sendJSONRequest(url: url, headers: headers, body: body)
-            let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
-            responseText = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            response = try await LLMGateway().postProcess(apiKey: apiKey, model: model, prompt: prompt)
         }
+        let responseText = response.text
 
         let jsonText = extractedJSONObjectText(from: responseText)
         guard let data = jsonText.data(using: .utf8) else {
@@ -575,59 +500,7 @@ extension WhispCLI {
             ]
         )
 
-        guard let provider = LLMModelCatalog.spec(for: model)?.provider else {
-            throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
-        }
-        if provider == .gemini {
-            let body = GeminiTextRequest(contents: [
-                GeminiTextContent(role: "user", parts: [GeminiTextPart(text: prompt)]),
-            ])
-            let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelName):generateContent?key=\(apiKey)"
-            guard let url = URL(string: endpoint) else {
-                throw AppError.invalidArgument("Gemini URL生成に失敗")
-            }
-            let data = try await sendJSONRequest(url: url, headers: [:], body: body)
-            let decoded = try JSONDecoder().decode(GeminiResponse.self, from: data)
-            let text = decoded.candidates.first?.content.joinedText.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let usage = decoded.usageMetadata.map {
-                LLMUsage(
-                    model: model.modelName,
-                    promptTokens: $0.promptTokenCount,
-                    completionTokens: $0.candidatesTokenCount,
-                    provider: "gemini"
-                )
-            }
-            return PostProcessResult(text: text, usage: usage)
-        }
-
-        if provider == .openai {
-            let body = OpenAITextRequest(model: model.modelName, messages: [OpenAITextMessage(role: "user", content: prompt)])
-            guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
-                throw AppError.invalidArgument("OpenAI URL生成に失敗")
-            }
-            let headers = ["Authorization": "Bearer \(apiKey)"]
-            let data = try await sendJSONRequest(url: url, headers: headers, body: body)
-            let decoded = try JSONDecoder().decode(OpenAIResponse.self, from: data)
-            let text = decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let usage = decoded.usage.map {
-                LLMUsage(model: model.modelName, promptTokens: $0.promptTokens, completionTokens: $0.completionTokens, provider: "openai")
-            }
-            return PostProcessResult(text: text, usage: usage)
-        }
-
-        throw AppError.invalidArgument("LLM provider が未対応です: \(model.rawValue)")
-    }
-    static func sendJSONRequest<T: Encodable>(
-        url: URL,
-        headers: [String: String],
-        body: T
-    ) async throws -> Data {
-        try await HTTPJSONClient().sendJSONRequest(
-            url: url,
-            method: "POST",
-            headers: headers,
-            body: body
-        )
+        return try await LLMGateway().postProcess(apiKey: apiKey, model: model, prompt: prompt)
     }
 
     private static func normalizeOCRLines(_ observations: [VNRecognizedTextObservation]) -> [String] {

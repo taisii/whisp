@@ -59,6 +59,7 @@ struct SettingsView: View {
                     APIKeyRow(title: "Deepgram API Key", text: binding(\.apiKeys.deepgram))
                     APIKeyRow(title: "Gemini API Key", text: binding(\.apiKeys.gemini))
                     APIKeyRow(title: "OpenAI API Key", text: binding(\.apiKeys.openai))
+                    APIKeyRow(title: "Moonshot API Key", text: binding(\.apiKeys.moonshot))
                 }
 
                 Section("入力") {

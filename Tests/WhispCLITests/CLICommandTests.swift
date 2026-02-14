@@ -326,6 +326,18 @@ final class CLICommandTests: XCTestCase {
         ]))
     }
 
+    func testParseBenchmarkCompareOptionsAcceptsKimiJudgeModel() throws {
+        let options = try WhispCLI.parseBenchmarkCompareOptions(args: [
+            "--benchmark-compare",
+            "--task", "generation-battle",
+            "--cases", "/tmp/manual.jsonl",
+            "--candidate-id", "gen-a",
+            "--candidate-id", "gen-b",
+            "--judge-model", "kimi-k2.5",
+        ])
+        XCTAssertEqual(options.judgeModel, .kimiK25)
+    }
+
     func testParseBenchmarkIntegrityScanOptions() throws {
         let options = try WhispCLI.parseBenchmarkIntegrityScanOptions(args: [
             "--benchmark-scan-integrity",

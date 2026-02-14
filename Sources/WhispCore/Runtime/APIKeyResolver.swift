@@ -4,13 +4,13 @@ public enum APIKeyResolver {
     public static func sttKey(config: Config, provider: STTProvider) throws -> String {
         switch provider {
         case .deepgram:
-            let key = config.apiKeys.deepgram.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = config.apiKeys.value(for: .deepgram)
             guard !key.isEmpty else {
                 throw AppError.invalidArgument("Deepgram APIキーが未設定です")
             }
             return key
         case .whisper:
-            let key = config.apiKeys.openai.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = config.apiKeys.value(for: .openai)
             guard !key.isEmpty else {
                 throw AppError.invalidArgument("OpenAI APIキーが未設定です（Whisper STT）")
             }
@@ -24,21 +24,11 @@ public enum APIKeyResolver {
         guard let spec = LLMModelCatalog.spec(for: model) else {
             throw AppError.invalidArgument("LLM model が未登録です: \(model.rawValue)")
         }
-
-        switch spec.provider {
-        case .gemini:
-            let key = config.apiKeys.gemini.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else {
-                throw AppError.invalidArgument("Gemini APIキーが未設定です")
-            }
-            return key
-        case .openai:
-            let key = config.apiKeys.openai.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !key.isEmpty else {
-                throw AppError.invalidArgument("OpenAI APIキーが未設定です")
-            }
-            return key
+        let key = config.apiKeys.value(for: spec.provider)
+        guard !key.isEmpty else {
+            throw AppError.invalidArgument("\(displayName(for: spec.provider)) APIキーが未設定です")
         }
+        return key
     }
 
     public static func effectivePostProcessModel(_ model: LLMModel) -> LLMModel {
@@ -72,49 +62,44 @@ public enum APIKeyResolver {
         }
 
         if requiresVision {
-            let openAIKey = config.apiKeys.openai.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !openAIKey.isEmpty {
-                if let openAIJudge = selectModel(for: .cliJudge, provider: .openai) {
-                    return (openAIJudge.id, openAIKey)
-                }
+            if let resolved = autoSelectJudge(config: config, surface: .cliJudge) {
+                return resolved
             }
-
-            let geminiKey = config.apiKeys.gemini.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !geminiKey.isEmpty {
-                if let geminiJudge = selectModel(for: .cliJudge, provider: .gemini) {
-                    return (geminiJudge.id, geminiKey)
-                }
-            }
-
-            throw AppError.invalidArgument("画像対応の intent judge 用APIキーが未設定です（openai または gemini）")
+            throw AppError.invalidArgument("画像対応の intent judge 用APIキーが未設定です")
         }
 
-        let openAIKey = config.apiKeys.openai.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !openAIKey.isEmpty {
-            if let openAIJudge = selectModel(for: .cliLLMEval, provider: .openai) {
-                return (openAIJudge.id, openAIKey)
-            }
+        if let resolved = autoSelectJudge(config: config, surface: .cliLLMEval) {
+            return resolved
         }
-
-        let geminiKey = config.apiKeys.gemini.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !geminiKey.isEmpty {
-            if let geminiJudge = selectModel(for: .cliLLMEval, provider: .gemini) {
-                return (geminiJudge.id, geminiKey)
-            }
-        }
-
-        throw AppError.invalidArgument("intent judge 用のAPIキーが未設定です（openai または gemini）")
+        throw AppError.invalidArgument("intent judge 用のAPIキーが未設定です")
     }
 
-    private static func selectModel(for surface: LLMSelectionSurface, provider: LLMProvider) -> LLMModelSpec? {
+    private static func autoSelectJudge(
+        config: Config,
+        surface: LLMSelectionSurface
+    ) -> (model: LLMModel, apiKey: String)? {
         let selectable = LLMModelCatalog.selectableModels(for: surface)
-        let defaultModel = LLMModelCatalog.defaultModel(for: surface)
-        if let defaultSpec = LLMModelCatalog.spec(for: defaultModel),
-           defaultSpec.provider == provider,
-           selectable.contains(where: { $0.id == defaultSpec.id })
-        {
-            return defaultSpec
+        for spec in selectable {
+            let key = config.apiKeys.value(for: spec.provider)
+            if !key.isEmpty {
+                return (spec.id, key)
+            }
         }
-        return selectable.first(where: { $0.provider == provider })
+        return nil
+    }
+
+    private static func displayName(for provider: LLMProviderID) -> String {
+        switch provider {
+        case .gemini:
+            return "Gemini"
+        case .openai:
+            return "OpenAI"
+        case .moonshot:
+            return "Moonshot"
+        case .deepgram:
+            return "Deepgram"
+        default:
+            return provider.rawValue
+        }
     }
 }

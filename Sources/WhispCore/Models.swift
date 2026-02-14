@@ -1,14 +1,58 @@
 import Foundation
 
 public struct APIKeys: Codable, Equatable, Sendable {
-    public var deepgram: String
-    public var gemini: String
-    public var openai: String
+    public var values: [String: String]
 
-    public init(deepgram: String = "", gemini: String = "", openai: String = "") {
+    public init(values: [String: String] = [:]) {
+        self.values = values
+    }
+
+    public init(
+        deepgram: String = "",
+        gemini: String = "",
+        openai: String = "",
+        moonshot: String = ""
+    ) {
+        values = [:]
         self.deepgram = deepgram
         self.gemini = gemini
         self.openai = openai
+        self.moonshot = moonshot
+    }
+
+    public var deepgram: String {
+        get { value(for: .deepgram) }
+        set { setValue(newValue, for: .deepgram) }
+    }
+
+    public var gemini: String {
+        get { value(for: .gemini) }
+        set { setValue(newValue, for: .gemini) }
+    }
+
+    public var openai: String {
+        get { value(for: .openai) }
+        set { setValue(newValue, for: .openai) }
+    }
+
+    public var moonshot: String {
+        get { value(for: .moonshot) }
+        set { setValue(newValue, for: .moonshot) }
+    }
+
+    public func value(for provider: LLMProviderID) -> String {
+        let key = provider.rawValue
+        return values[key]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    public mutating func setValue(_ rawValue: String, for provider: LLMProviderID) {
+        let key = provider.rawValue
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            values.removeValue(forKey: key)
+        } else {
+            values[key] = trimmed
+        }
     }
 }
 
@@ -21,6 +65,41 @@ public enum STTProvider: String, Codable, Equatable, Sendable, CaseIterable {
 public enum RecordingMode: String, Codable, Equatable, Sendable {
     case toggle
     case pushToTalk = "push_to_talk"
+}
+
+public struct LLMProviderID: Hashable, Codable, Sendable, RawRepresentable, ExpressibleByStringLiteral {
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        self.rawValue = trimmed
+    }
+
+    public init(stringLiteral value: String) {
+        self.rawValue = value
+    }
+
+    public init(uncheckedRawValue: String) {
+        self.rawValue = uncheckedRawValue
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "llm provider id is empty")
+        }
+        self.rawValue = trimmed
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public struct LLMModelID: Hashable, Codable, Sendable, RawRepresentable, ExpressibleByStringLiteral {
@@ -64,6 +143,7 @@ public extension LLMModelID {
     static let gemini3FlashPreview = LLMModelID(uncheckedRawValue: "gemini-3-flash-preview")
     static let gemini25FlashLite = LLMModelID(uncheckedRawValue: "gemini-2.5-flash-lite")
     static let gemini25FlashLiteAudio = LLMModelID(uncheckedRawValue: "gemini-2.5-flash-lite-audio")
+    static let kimiK25 = LLMModelID(uncheckedRawValue: "kimi-k2.5")
     static let gpt4oMini = LLMModelID(uncheckedRawValue: "gpt-4o-mini")
     static let gpt5Nano = LLMModelID(uncheckedRawValue: "gpt-5-nano")
 
@@ -164,6 +244,9 @@ public struct LLMUsage: Equatable, Sendable {
         let normalized = model.lowercased()
         if normalized.contains("gemini") {
             return "gemini"
+        }
+        if normalized.contains("kimi") || normalized.contains("moonshot") {
+            return "moonshot"
         }
         if normalized.contains("gpt") || normalized.contains("openai") {
             return "openai"

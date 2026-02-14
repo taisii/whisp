@@ -1,8 +1,10 @@
 import Foundation
 
-public enum LLMProvider: String, Codable, Sendable {
-    case gemini
-    case openai
+public extension LLMProviderID {
+    static let deepgram = LLMProviderID(uncheckedRawValue: "deepgram")
+    static let gemini = LLMProviderID(uncheckedRawValue: "gemini")
+    static let openai = LLMProviderID(uncheckedRawValue: "openai")
+    static let moonshot = LLMProviderID(uncheckedRawValue: "moonshot")
 }
 
 public struct LLMModelCapabilities: OptionSet, Sendable {
@@ -32,7 +34,7 @@ public enum LLMSelectionSurface: Sendable {
 public struct LLMModelSpec: Sendable {
     public let id: LLMModelID
     public let displayName: String
-    public let provider: LLMProvider
+    public let provider: LLMProviderID
     public let apiModelName: String
     public let capabilities: LLMModelCapabilities
     public let sortOrder: Int
@@ -40,7 +42,7 @@ public struct LLMModelSpec: Sendable {
     public init(
         id: LLMModelID,
         displayName: String,
-        provider: LLMProvider,
+        provider: LLMProviderID,
         apiModelName: String,
         capabilities: LLMModelCapabilities,
         sortOrder: Int
@@ -81,6 +83,14 @@ public enum LLMModelCatalog {
             sortOrder: 30
         ),
         LLMModelSpec(
+            id: .kimiK25,
+            displayName: "Kimi K2.5",
+            provider: .moonshot,
+            apiModelName: "kimi-k2.5",
+            capabilities: [.supportsVision, .selectableAsBenchmarkJudge, .selectableAsLLMEvalModel],
+            sortOrder: 35
+        ),
+        LLMModelSpec(
             id: .gpt4oMini,
             displayName: "GPT-4o mini",
             provider: .openai,
@@ -97,6 +107,22 @@ public enum LLMModelCatalog {
             sortOrder: 50
         ),
     ]
+
+    public static let specsByProviderID: [LLMProviderID: [LLMModelSpec]] = {
+        var table: [LLMProviderID: [LLMModelSpec]] = [:]
+        for spec in specs {
+            table[spec.provider, default: []].append(spec)
+        }
+        for (providerID, providerSpecs) in table {
+            table[providerID] = providerSpecs.sorted { lhs, rhs in
+                if lhs.sortOrder == rhs.sortOrder {
+                    return lhs.id.rawValue < rhs.id.rawValue
+                }
+                return lhs.sortOrder < rhs.sortOrder
+            }
+        }
+        return table
+    }()
 
     private static let specsByID: [LLMModelID: LLMModelSpec] = {
         var table: [LLMModelID: LLMModelSpec] = [:]
@@ -200,5 +226,9 @@ public enum LLMModelCatalog {
 
     public static func allowedModelRawValueText(for surface: LLMSelectionSurface) -> String {
         allowedModelRawValues(for: surface).joined(separator: "|")
+    }
+
+    public static func models(for provider: LLMProviderID) -> [LLMModelSpec] {
+        specsByProviderID[provider] ?? []
     }
 }

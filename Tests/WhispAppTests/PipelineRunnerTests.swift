@@ -397,13 +397,27 @@ final class PipelineRunnerTests: XCTestCase {
         config: Config,
         runtimeStatsStore: RuntimeStatsStore
     ) {
-        let postProcessor = PostProcessorService(providers: [
-            FakeLLMProvider(
+        let llmGateway = LLMGateway(registry: LLMProviderRegistry(clients: [
+            FakeLLMProviderClient(
+                providerID: .gemini,
                 postProcessText: postProcessText,
                 audioTranscribeText: audioTranscribeText,
                 echoPostProcessPrompt: echoPostProcessPrompt
             ),
-        ])
+            FakeLLMProviderClient(
+                providerID: .openai,
+                postProcessText: postProcessText,
+                audioTranscribeText: audioTranscribeText,
+                echoPostProcessPrompt: echoPostProcessPrompt
+            ),
+            FakeLLMProviderClient(
+                providerID: .moonshot,
+                postProcessText: postProcessText,
+                audioTranscribeText: audioTranscribeText,
+                echoPostProcessPrompt: echoPostProcessPrompt
+            ),
+        ]))
+        let postProcessor = PostProcessorService(llmGateway: llmGateway)
         let sttService = FakeSTTService(transcript: sttTranscript)
         let contextService = ContextService(
             accessibilityProvider: FakeAccessibilityProvider(),
@@ -461,30 +475,22 @@ final class PipelineRunnerTests: XCTestCase {
     }
 }
 
-private struct FakeLLMProvider: LLMAPIProvider, @unchecked Sendable {
+private struct FakeLLMProviderClient: LLMProviderClient, Sendable {
+    let providerID: LLMProviderID
     let postProcessText: String
     let audioTranscribeText: String
     let echoPostProcessPrompt: Bool
 
-    func supports(model _: LLMModel) -> Bool { true }
-
-    func postProcess(
-        apiKey _: String,
-        model _: LLMModel,
-        prompt: String
-    ) async throws -> PostProcessResult {
-        let text = echoPostProcessPrompt ? prompt : postProcessText
-        return PostProcessResult(text: text, usage: nil)
-    }
-
-    func transcribeAudio(
-        apiKey _: String,
-        model _: LLMModel,
-        prompt _: String,
-        wavData _: Data,
-        mimeType _: String
-    ) async throws -> PostProcessResult {
-        PostProcessResult(text: audioTranscribeText, usage: nil)
+    func send(request: LLMRequest) async throws -> LLMProviderResponse {
+        switch request.payload {
+        case let .text(prompt):
+            let text = echoPostProcessPrompt ? prompt : postProcessText
+            return LLMProviderResponse(text: text, usage: nil)
+        case .textWithImage:
+            return LLMProviderResponse(text: postProcessText, usage: nil)
+        case .audio:
+            return LLMProviderResponse(text: audioTranscribeText, usage: nil)
+        }
     }
 }
 

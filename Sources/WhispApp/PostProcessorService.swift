@@ -2,7 +2,7 @@ import Foundation
 import WhispCore
 
 final class PostProcessorService: @unchecked Sendable {
-    private let providers: [any LLMAPIProvider]
+    private let llmGateway: LLMGateway
 
     private let accessibilitySummaryPromptHeader = """
     次のアプリ本文を、音声整形に使うコンテキストとして要約してください。出力はJSONのみ。
@@ -14,8 +14,8 @@ final class PostProcessorService: @unchecked Sendable {
     - JSON以外は出力しない
     """
 
-    init(providers: [any LLMAPIProvider] = [GeminiLLMAPIProvider(), OpenAILLMAPIProvider()]) {
-        self.providers = providers
+    init(llmGateway: LLMGateway = LLMGateway()) {
+        self.llmGateway = llmGateway
     }
 
     func postProcess(
@@ -62,11 +62,7 @@ final class PostProcessorService: @unchecked Sendable {
         )
 
         do {
-            let response = try await resolveProvider(model: model).postProcess(
-                apiKey: apiKey,
-                model: model,
-                prompt: prompt
-            )
+            let response = try await llmGateway.postProcess(apiKey: apiKey, model: model, prompt: prompt)
             PromptTrace.writeResponse(response.text, usage: response.usage, reference: traceReference)
             return response
         } catch {
@@ -111,11 +107,11 @@ final class PostProcessorService: @unchecked Sendable {
         )
 
         do {
-            let response = try await resolveProvider(model: model).transcribeAudio(
+            let response = try await llmGateway.transcribeAudio(
                 apiKey: apiKey,
                 model: model,
                 prompt: prompt,
-                wavData: wavData,
+                audioData: wavData,
                 mimeType: mimeType
             )
             PromptTrace.writeResponse(response.text, usage: response.usage, reference: traceReference)
@@ -166,11 +162,7 @@ final class PostProcessorService: @unchecked Sendable {
         )
 
         do {
-            let response = try await resolveProvider(model: model).postProcess(
-                apiKey: apiKey,
-                model: model,
-                prompt: prompt
-            )
+            let response = try await llmGateway.postProcess(apiKey: apiKey, model: model, prompt: prompt)
             PromptTrace.writeResponse(response.text, usage: response.usage, reference: traceReference)
             guard let parsed = parseVisionContext(response.text) else {
                 return nil
@@ -197,13 +189,6 @@ final class PostProcessorService: @unchecked Sendable {
             visionTerms: context.visionTerms
         )
         return sanitized.isEmpty ? nil : sanitized
-    }
-
-    private func resolveProvider(model: LLMModel) throws -> any LLMAPIProvider {
-        guard let provider = providers.first(where: { $0.supports(model: model) }) else {
-            throw AppError.invalidArgument("model \(model.rawValue) に対応するLLM provider がありません")
-        }
-        return provider
     }
 
     private func contextPromptLines(_ context: ContextInfo) -> String {
