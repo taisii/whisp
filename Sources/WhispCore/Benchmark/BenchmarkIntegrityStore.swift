@@ -9,6 +9,7 @@ public final class BenchmarkIntegrityStore: @unchecked Sendable {
     let fileManager = FileManager.default
     let directoryURL: URL
     let exclusionsURL: URL
+    let autoScanStateURL: URL
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let paths = try? WhispPaths(environment: environment, allowTemporaryFallback: true)
@@ -17,6 +18,7 @@ public final class BenchmarkIntegrityStore: @unchecked Sendable {
             ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("whisp-benchmark-integrity", isDirectory: true)
         exclusionsURL = directoryURL.appendingPathComponent("exclusions.json", isDirectory: false)
+        autoScanStateURL = directoryURL.appendingPathComponent("auto_scan_state.json", isDirectory: false)
     }
 
     public var integrityDirectoryPath: String { directoryURL.path }
@@ -83,6 +85,46 @@ public final class BenchmarkIntegrityStore: @unchecked Sendable {
         if let index = issues.firstIndex(where: { $0.id == issueID }) {
             issues[index].excluded = excluded
             try saveIssuesWithoutLock(task: task, issues: issues)
+        }
+    }
+
+    public func loadAutoScanState() throws -> BenchmarkIntegrityAutoScanState? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureDirectoryExists()
+        guard fileManager.fileExists(atPath: autoScanStateURL.path) else {
+            return nil
+        }
+        let data = try Data(contentsOf: autoScanStateURL)
+        if data.isEmpty {
+            return nil
+        }
+        do {
+            return try JSONDecoder().decode(BenchmarkIntegrityAutoScanState.self, from: data)
+        } catch {
+            throw AppError.decode("failed to decode auto_scan_state.json: \(error.localizedDescription)")
+        }
+    }
+
+    public func saveAutoScanState(_ state: BenchmarkIntegrityAutoScanState) throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureDirectoryExists()
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(state)
+        try data.write(to: autoScanStateURL, options: [.atomic])
+    }
+
+    public func clearAutoScanState() throws {
+        lock.lock()
+        defer { lock.unlock() }
+
+        try ensureDirectoryExists()
+        if fileManager.fileExists(atPath: autoScanStateURL.path) {
+            try fileManager.removeItem(at: autoScanStateURL)
         }
     }
 

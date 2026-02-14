@@ -28,6 +28,7 @@ final class AppCoordinator {
     private let statisticsWindowController: StatisticsWindowController
     private let hotKeyMonitor: GlobalHotKeyMonitor
     private let pipelineRunner: PipelineRunner
+    private let benchmarkCandidateStore = BenchmarkCandidateStore()
 
     private var stateMachine = PipelineStateMachine()
     private var currentRun: PipelineRun?
@@ -77,7 +78,22 @@ final class AppCoordinator {
     }
 
     func openSettings() {
-        settingsWindowController.show(config: config) { [weak self] updated in
+        let generationCandidates: [BenchmarkCandidate]
+        let preserveGenerationPrimaryOnSave: Bool
+        do {
+            generationCandidates = try loadGenerationCandidatesForSettings()
+            preserveGenerationPrimaryOnSave = false
+        } catch {
+            reportError("Generation候補の読み込みに失敗: \(error.localizedDescription)")
+            generationCandidates = []
+            preserveGenerationPrimaryOnSave = true
+        }
+
+        settingsWindowController.show(
+            config: config,
+            generationCandidates: generationCandidates,
+            preserveGenerationPrimaryOnSave: preserveGenerationPrimaryOnSave
+        ) { [weak self] updated in
             self?.saveConfig(updated) ?? false
         }
     }
@@ -157,6 +173,16 @@ final class AppCoordinator {
             reportError("設定保存に失敗: \(error.localizedDescription)")
             return false
         }
+    }
+
+    private func loadGenerationCandidatesForSettings() throws -> [BenchmarkCandidate] {
+        try BenchmarkCandidateDefaults.ensureSeededAndNormalized(store: benchmarkCandidateStore)
+        return try benchmarkCandidateStore.listCandidates()
+            .filter { $0.task == .generation }
+            .filter { candidate in
+                GenerationPrimarySelectionFactory.makeSelection(candidate: candidate) != nil
+            }
+            .sorted { $0.id < $1.id }
     }
 
     private func startRecording() {

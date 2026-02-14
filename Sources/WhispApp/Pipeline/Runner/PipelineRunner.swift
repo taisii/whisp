@@ -49,6 +49,7 @@ final class PipelineRunner {
         let debugRunDirectory = input.artifacts.runDirectory
         let accessibilityContext = input.artifacts.accessibilityContext
         let logger = pipelineLogger(runID: input.run.id, captureID: captureID)
+        let resolvedGeneration = GenerationPrimaryConfigResolver.resolve(config: input.config)
         devLog("pipeline_start", runID: input.run.id, captureID: captureID, fields: [
             "request_sent_at_ms": epochMsString(pipelineStartedAtDate),
         ])
@@ -144,10 +145,10 @@ final class PipelineRunner {
             let sttText: String
             let processedText: String
 
-            if input.config.llmModel.usesDirectAudio {
+            if resolvedGeneration.model.usesDirectAudio {
                 transition(.startPostProcessing)
                 let wav = buildWAVBytes(sampleRate: UInt32(input.result.sampleRate), pcmData: input.result.pcmData)
-                let llmKey = try APIKeyResolver.llmKey(config: input.config, model: input.config.llmModel)
+                let llmKey = try APIKeyResolver.llmKey(config: input.config, model: resolvedGeneration.model)
                 if let summaryTask, shouldApplyAccessibilitySummary, contextSummaryLog == nil {
                     let summaryResolution = await resolveAccessibilitySummaryIfReady(task: summaryTask.task)
                     if summaryResolution.ready {
@@ -184,6 +185,10 @@ final class PipelineRunner {
                     summary: accessibilitySummary
                 )
                 debugCaptureService.updateContext(captureID: captureID, context: context)
+                if resolvedGeneration.requireContext && !hasUsableContext(context) {
+                    notifyWarning("Generation主設定(require_context=true)ですが、コンテキスト未取得のため実行を継続します。")
+                    devLog("generation_require_context_missing", runID: input.run.id, captureID: captureID)
+                }
                 let llmStartedAtDate = Date()
                 let llmStartedAtMs = epochMs(llmStartedAtDate)
                 devLog("audio_llm_start", runID: input.run.id, captureID: captureID, fields: [
@@ -192,7 +197,7 @@ final class PipelineRunner {
                     "request_sent_at_ms": epochMsString(llmStartedAtDate),
                 ])
                 let transcription = try await postProcessor.transcribeAudio(
-                    model: input.config.llmModel,
+                    model: resolvedGeneration.model,
                     apiKey: llmKey,
                     wavData: wav,
                     mimeType: "audio/wav",
@@ -221,7 +226,7 @@ final class PipelineRunner {
                             eventEndMs: llmResponseAtMs,
                             status: .ok
                         ),
-                        model: input.config.llmModel.rawValue,
+                        model: resolvedGeneration.model.rawValue,
                         contextPresent: context != nil,
                         sttChars: 0,
                         outputChars: processedText.count,
@@ -229,7 +234,7 @@ final class PipelineRunner {
                     ))
                 }
             } else {
-                let llmKey = try APIKeyResolver.llmKey(config: input.config, model: input.config.llmModel)
+                let llmKey = try APIKeyResolver.llmKey(config: input.config, model: resolvedGeneration.model)
                 let visionStartedAtDate = Date()
                 let visionTask = contextService.startVisionCollection(
                     config: input.config,
@@ -249,7 +254,7 @@ final class PipelineRunner {
                             eventEndMs: epochMs(now),
                             status: .cancelled
                         ),
-                        model: input.config.llmModel.rawValue,
+                        model: resolvedGeneration.model.rawValue,
                         mode: input.config.context.visionMode.rawValue,
                         contextPresent: false,
                         imageBytes: 0,
@@ -350,7 +355,7 @@ final class PipelineRunner {
                                     eventEndMs: epochMs(cancelledAt),
                                     status: .cancelled
                                 ),
-                                model: input.config.llmModel.rawValue,
+                                model: resolvedGeneration.model.rawValue,
                                 mode: input.config.context.visionMode.rawValue,
                                 contextPresent: false,
                                 imageBytes: 0,
@@ -407,7 +412,7 @@ final class PipelineRunner {
                             eventEndMs: epochMs(visionCompletedAt),
                             status: visionResult.error == nil ? .ok : .error
                         ),
-                        model: input.config.llmModel.rawValue,
+                        model: resolvedGeneration.model.rawValue,
                         mode: visionResult.mode,
                         contextPresent: visionResult.context != nil,
                         imageBytes: visionResult.imageBytes,
@@ -422,23 +427,28 @@ final class PipelineRunner {
                     summary: accessibilitySummary
                 )
                 debugCaptureService.updateContext(captureID: captureID, context: context)
+                if resolvedGeneration.requireContext && !hasUsableContext(context) {
+                    notifyWarning("Generation主設定(require_context=true)ですが、コンテキスト未取得のため実行を継続します。")
+                    devLog("generation_require_context_missing", runID: input.run.id, captureID: captureID)
+                }
 
                 let llmStartedAtDate = Date()
                 let llmStartedAtMs = epochMs(llmStartedAtDate)
                 devLog("postprocess_start", runID: input.run.id, captureID: captureID, fields: [
-                    "model": input.config.llmModel.rawValue,
+                    "model": resolvedGeneration.model.rawValue,
                     "context_present": String(context != nil),
                     "stt_chars": String(sttText.count),
                     "request_sent_at_ms": epochMsString(llmStartedAtDate),
                 ])
                 let postProcessed = try await postProcessor.postProcess(
-                    model: input.config.llmModel,
+                    model: resolvedGeneration.model,
                     apiKey: llmKey,
                     sttResult: sttText,
                     languageHint: input.config.inputLanguage,
                     appName: appName,
                     appPromptRules: input.config.appPromptRules,
                     context: context,
+                    templateOverride: resolvedGeneration.promptTemplateOverride,
                     debugRunID: input.run.id,
                     debugRunDirectory: debugRunDirectory
                 )
@@ -462,7 +472,7 @@ final class PipelineRunner {
                             eventEndMs: llmResponseAtMs,
                             status: .ok
                         ),
-                        model: input.config.llmModel.rawValue,
+                        model: resolvedGeneration.model.rawValue,
                         contextPresent: context != nil,
                         sttChars: sttText.count,
                         outputChars: postProcessed.text.count,
@@ -689,6 +699,13 @@ final class PipelineRunner {
     private func shouldApplyAccessibilitySummary(startSource: String?, stopSource: String?) -> Bool {
         guard let startSource, let stopSource else { return false }
         return startSource == stopSource
+    }
+
+    private func hasUsableContext(_ context: ContextInfo?) -> Bool {
+        guard let context else {
+            return false
+        }
+        return !context.isEmpty
     }
 
     private func applyAccessibilitySummary(base: ContextInfo?, summary: ContextInfo?) -> ContextInfo? {

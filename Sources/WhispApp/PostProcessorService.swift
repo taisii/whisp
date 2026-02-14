@@ -26,6 +26,7 @@ final class PostProcessorService: @unchecked Sendable {
         appName: String?,
         appPromptRules: [AppPromptRule],
         context: ContextInfo?,
+        templateOverride: String? = nil,
         debugRunID: String? = nil,
         debugRunDirectory: String? = nil
     ) async throws -> PostProcessResult {
@@ -35,7 +36,8 @@ final class PostProcessorService: @unchecked Sendable {
             languageHint: languageHint,
             appName: appName,
             appPromptRules: appPromptRules,
-            context: sanitizedContext
+            context: sanitizedContext,
+            templateOverride: templateOverride
         )
 
         var extra: [String: String] = [

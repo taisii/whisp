@@ -99,6 +99,105 @@ final class PipelineRunnerTests: XCTestCase {
         XCTAssertEqual(transitions, [.startPostProcessing, .startDirectInput, .finish, .reset])
     }
 
+    func testRunUsesGenerationPrimaryPromptTemplateOverride() async throws {
+        var config = baseConfig()
+        config.generationPrimary = GenerationPrimarySelection(
+            candidateID: "generation-gpt-5-nano-default",
+            snapshot: GenerationPrimarySnapshot(
+                model: .gpt5Nano,
+                promptName: "default",
+                promptTemplate: "PRIMARY TEMPLATE\n入力: {STT結果}",
+                promptHash: promptTemplateHash("PRIMARY TEMPLATE\n入力: {STT結果}"),
+                options: [:],
+                capturedAt: "2026-02-14T00:00:00.000Z"
+            ),
+            selectedAt: "2026-02-14T00:00:00.000Z"
+        )
+        config.llmModel = .gpt5Nano
+        let harness = try makeHarness(
+            config: config,
+            sttTranscript: "hello",
+            postProcessText: "ignored",
+            audioTranscribeText: "ignored",
+            outputSuccess: true,
+            echoPostProcessPrompt: true
+        )
+        let input = makeInput(config: harness.config, pcmData: Data(repeating: 1, count: 3200))
+
+        let (outcome, transitions) = await run(harness: harness, input: input)
+        guard case let .completed(_, outputText, _) = outcome else {
+            return XCTFail("expected completed")
+        }
+        XCTAssertTrue(outputText.contains("PRIMARY TEMPLATE"))
+        XCTAssertTrue(outputText.contains("hello"))
+        XCTAssertEqual(transitions, [.startPostProcessing, .startDirectInput, .finish, .reset])
+    }
+
+    func testRunFallsBackToLegacyPromptWhenGenerationPrimaryInvalid() async throws {
+        var config = baseConfig()
+        config.appPromptRules = [AppPromptRule(appName: "Xcode", template: "LEGACY TEMPLATE\n入力: {STT結果}")]
+        config.generationPrimary = GenerationPrimarySelection(
+            candidateID: "generation-invalid",
+            snapshot: GenerationPrimarySnapshot(
+                model: .gpt5Nano,
+                promptName: "broken",
+                promptTemplate: "   ",
+                promptHash: promptTemplateHash(""),
+                options: [:],
+                capturedAt: "2026-02-14T00:00:00.000Z"
+            ),
+            selectedAt: "2026-02-14T00:00:00.000Z"
+        )
+        let harness = try makeHarness(
+            config: config,
+            sttTranscript: "hello",
+            postProcessText: "ignored",
+            audioTranscribeText: "ignored",
+            outputSuccess: true,
+            echoPostProcessPrompt: true
+        )
+        let input = makeInput(config: harness.config, pcmData: Data(repeating: 1, count: 3200))
+
+        let (outcome, _) = await run(harness: harness, input: input)
+        guard case let .completed(_, outputText, _) = outcome else {
+            return XCTFail("expected completed")
+        }
+        XCTAssertTrue(outputText.contains("LEGACY TEMPLATE"))
+    }
+
+    func testRunWarnsWhenGenerationPrimaryRequiresContextButContextMissing() async throws {
+        var config = baseConfig()
+        config.generationPrimary = GenerationPrimarySelection(
+            candidateID: "generation-gpt-5-nano-default",
+            snapshot: GenerationPrimarySnapshot(
+                model: .gpt5Nano,
+                promptName: "default",
+                promptTemplate: "PRIMARY TEMPLATE\n入力: {STT結果}",
+                promptHash: promptTemplateHash("PRIMARY TEMPLATE\n入力: {STT結果}"),
+                options: ["require_context": "true"],
+                capturedAt: "2026-02-14T00:00:00.000Z"
+            ),
+            selectedAt: "2026-02-14T00:00:00.000Z"
+        )
+        config.llmModel = .gpt5Nano
+        let harness = try makeHarness(
+            config: config,
+            sttTranscript: "hello",
+            postProcessText: "processed",
+            audioTranscribeText: "ignored",
+            outputSuccess: true
+        )
+        let input = makeInput(config: harness.config, pcmData: Data(repeating: 1, count: 3200))
+        var warning: String?
+
+        let (outcome, _) = await run(harness: harness, input: input, notifyWarning: { warning = $0 })
+        guard case .completed = outcome else {
+            return XCTFail("expected completed")
+        }
+        XCTAssertNotNil(warning)
+        XCTAssertTrue(warning?.contains("require_context") ?? false)
+    }
+
     func testContextSummaryLogUsesSummaryCompletionTimeWhenReady() async throws {
         let tempHome = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -291,6 +390,7 @@ final class PipelineRunnerTests: XCTestCase {
         postProcessText: String,
         audioTranscribeText: String,
         outputSuccess: Bool,
+        echoPostProcessPrompt: Bool = false,
         debugCaptureService: DebugCaptureService = DebugCaptureService()
     ) throws -> (
         runner: PipelineRunner,
@@ -298,7 +398,11 @@ final class PipelineRunnerTests: XCTestCase {
         runtimeStatsStore: RuntimeStatsStore
     ) {
         let postProcessor = PostProcessorService(providers: [
-            FakeLLMProvider(postProcessText: postProcessText, audioTranscribeText: audioTranscribeText),
+            FakeLLMProvider(
+                postProcessText: postProcessText,
+                audioTranscribeText: audioTranscribeText,
+                echoPostProcessPrompt: echoPostProcessPrompt
+            ),
         ])
         let sttService = FakeSTTService(transcript: sttTranscript)
         let contextService = ContextService(
@@ -360,15 +464,17 @@ final class PipelineRunnerTests: XCTestCase {
 private struct FakeLLMProvider: LLMAPIProvider, @unchecked Sendable {
     let postProcessText: String
     let audioTranscribeText: String
+    let echoPostProcessPrompt: Bool
 
     func supports(model _: LLMModel) -> Bool { true }
 
     func postProcess(
         apiKey _: String,
         model _: LLMModel,
-        prompt _: String
+        prompt: String
     ) async throws -> PostProcessResult {
-        PostProcessResult(text: postProcessText, usage: nil)
+        let text = echoPostProcessPrompt ? prompt : postProcessText
+        return PostProcessResult(text: text, usage: nil)
     }
 
     func transcribeAudio(

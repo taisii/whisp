@@ -93,38 +93,89 @@ final class BenchmarkViewModelTests: XCTestCase {
         XCTAssertEqual(row.sttAfterStopP95, 90)
     }
 
-    func testExcludeIssueTogglesPersistence() throws {
+    func testIntegrityAutoScanAggregatesSttAndGenerationIssues() throws {
         let home = tempHome()
         let env = ["HOME": home.path]
         let store = BenchmarkStore(environment: env)
         let candidateStore = BenchmarkCandidateStore(environment: env)
         let integrityStore = BenchmarkIntegrityStore(environment: env)
 
-        let issue = BenchmarkIntegrityIssue(
-            id: "issue-1",
-            caseID: "case-1",
-            task: .generation,
-            issueType: "missing_stt_text",
-            missingFields: ["stt_text"],
-            sourcePath: "/tmp/manual.jsonl",
-            excluded: false,
-            detectedAt: "2026-02-12T00:00:00.000Z"
-        )
-        try integrityStore.saveIssues(task: .generation, issues: [issue])
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"","stt_text":"","ground_truth_text":""}
+        """
+        try Data((jsonl + "\n").utf8).write(to: casesPath, options: .atomic)
 
-        let viewModel = BenchmarkViewModel(store: store, candidateStore: candidateStore, integrityStore: integrityStore)
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
         viewModel.selectedTab = .integrity
-        viewModel.selectedTask = .generation
         viewModel.refresh()
 
-        guard let loaded = viewModel.integrityIssues.first else {
-            return XCTFail("issue missing")
-        }
-        viewModel.selectIntegrityIssue(loaded.id)
-        viewModel.setIssueExcluded(loaded, excluded: true)
+        let sttIssues = viewModel.integrityIssues.filter { $0.task == .stt && $0.caseID == "case-1" }
+        let generationIssues = viewModel.integrityIssues.filter { $0.task == .generation && $0.caseID == "case-1" }
+        XCTAssertFalse(sttIssues.isEmpty)
+        XCTAssertFalse(generationIssues.isEmpty)
+    }
 
-        let after = try integrityStore.loadIssues(task: .generation)
-        XCTAssertEqual(after.first?.excluded, true)
+    func testIntegrityAutoScanFirstRunClearsLegacyIssuesWithoutState() throws {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let store = BenchmarkStore(environment: env)
+        let candidateStore = BenchmarkCandidateStore(environment: env)
+        let integrityStore = BenchmarkIntegrityStore(environment: env)
+
+        let audioURL = home.appendingPathComponent("audio.wav", isDirectory: false)
+        try Data("ok".utf8).write(to: audioURL, options: .atomic)
+
+        let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
+        let jsonl = """
+        {"id":"case-1","audio_file":"\(audioURL.path)","stt_text":"入力","ground_truth_text":"正解"}
+        """
+        try Data((jsonl + "\n").utf8).write(to: casesPath, options: .atomic)
+
+        let staleIssue = BenchmarkIntegrityIssue(
+            id: "legacy-issue",
+            caseID: "legacy-case",
+            task: .stt,
+            issueType: "missing_audio_file",
+            missingFields: ["audio_file"],
+            sourcePath: "/tmp/legacy.jsonl",
+            excluded: false,
+            detectedAt: "2026-02-14T00:00:00.000Z"
+        )
+        try integrityStore.saveIssues(task: .stt, issues: [staleIssue])
+
+        let viewModel = BenchmarkViewModel(
+            store: store,
+            candidateStore: candidateStore,
+            integrityStore: integrityStore,
+            datasetPathOverride: casesPath.path
+        )
+        viewModel.selectedTab = .integrity
+        viewModel.selectedTask = .stt
+        viewModel.refresh()
+
+        XCTAssertFalse(viewModel.integrityIssues.contains(where: { $0.caseID == "legacy-case" }))
+        XCTAssertFalse(viewModel.integrityCaseRows.contains(where: { $0.id == "legacy-case" }))
+        XCTAssertTrue((try integrityStore.loadIssues(task: .stt)).isEmpty)
+    }
+
+    func testCopyIntegrityCaseIDUpdatesStatusMessage() {
+        let home = tempHome()
+        let env = ["HOME": home.path]
+        let viewModel = BenchmarkViewModel(
+            store: BenchmarkStore(environment: env),
+            candidateStore: BenchmarkCandidateStore(environment: env),
+            integrityStore: BenchmarkIntegrityStore(environment: env)
+        )
+
+        viewModel.copyIntegrityCaseID("case-1")
+        XCTAssertEqual(viewModel.statusMessage, "case_id をコピーしました。")
+        XCTAssertFalse(viewModel.statusIsError)
     }
 
     func testIntegrityCaseRowsShowAllCasesAndMarkIssues() throws {
@@ -134,10 +185,15 @@ final class BenchmarkViewModelTests: XCTestCase {
         let candidateStore = BenchmarkCandidateStore(environment: env)
         let integrityStore = BenchmarkIntegrityStore(environment: env)
 
+        let audio1Path = home.appendingPathComponent("audio-1.wav", isDirectory: false).path
+        let audio2Path = home.appendingPathComponent("audio-2.wav", isDirectory: false).path
+        try Data().write(to: URL(fileURLWithPath: audio1Path), options: .atomic)
+        try Data().write(to: URL(fileURLWithPath: audio2Path), options: .atomic)
+
         let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
         let jsonl = """
-        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"","ground_truth_text":"正解1"}
-        {"id":"case-2","audio_file":"/tmp/b.wav","stt_text":"入力2","ground_truth_text":"正解2"}
+        {"id":"case-1","audio_file":"\(audio1Path)","stt_text":"","ground_truth_text":"正解1"}
+        {"id":"case-2","audio_file":"\(audio2Path)","stt_text":"入力2","ground_truth_text":"正解2"}
 
         """
         try Data(jsonl.utf8).write(to: casesPath, options: .atomic)
@@ -215,9 +271,12 @@ final class BenchmarkViewModelTests: XCTestCase {
         let candidateStore = BenchmarkCandidateStore(environment: env)
         let integrityStore = BenchmarkIntegrityStore(environment: env)
 
+        let audioPath = home.appendingPathComponent("audio.wav", isDirectory: false).path
+        try Data().write(to: URL(fileURLWithPath: audioPath), options: .atomic)
+
         let casesPath = home.appendingPathComponent("cases.jsonl", isDirectory: false)
         let jsonl = """
-        {"id":"case-1","audio_file":"/tmp/a.wav","stt_text":"","ground_truth_text":"旧期待出力"}
+        {"id":"case-1","audio_file":"\(audioPath)","stt_text":"","ground_truth_text":"旧期待出力"}
         """
         try Data(jsonl.utf8).write(to: casesPath, options: .atomic)
 
@@ -237,11 +296,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             store: store,
             candidateStore: candidateStore,
             integrityStore: integrityStore,
-            datasetPathOverride: casesPath.path,
-            integrityScanRunner: { _, _ in
-                try integrityStore.saveIssues(task: .generation, issues: [])
-                return "ok"
-            }
+            datasetPathOverride: casesPath.path
         )
         viewModel.selectedTab = .integrity
         viewModel.selectedTask = .generation
@@ -281,8 +336,7 @@ final class BenchmarkViewModelTests: XCTestCase {
             store: store,
             candidateStore: candidateStore,
             integrityStore: integrityStore,
-            datasetPathOverride: casesPath.path,
-            integrityScanRunner: { _, _ in "ok" }
+            datasetPathOverride: casesPath.path
         )
         viewModel.selectedTab = .integrity
         viewModel.selectedTask = .generation

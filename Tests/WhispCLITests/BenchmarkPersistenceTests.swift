@@ -274,4 +274,26 @@ final class BenchmarkPersistenceTests: XCTestCase {
         XCTAssertEqual(orchestrator.filter { $0.stage == .caseQueued }.count, 1)
         XCTAssertEqual(orchestrator.last?.stage, .runFailed)
     }
+
+    func testWrapPairwiseLaneErrorKeepsDecodeCategory() {
+        let wrapped = WhispCLI.wrapPairwiseLaneError(
+            AppError.decode("json parse failed"),
+            failureLabel: "pairwise_judge_round2_failed"
+        )
+        guard let appError = wrapped as? AppError else {
+            return XCTFail("wrapped error should be AppError")
+        }
+        guard case .decode(let message) = appError else {
+            return XCTFail("decode category should be preserved")
+        }
+        XCTAssertTrue(message.contains("pairwise_judge_round2_failed"))
+        XCTAssertTrue(message.contains("json parse failed"))
+    }
+
+    func testIsRetryablePairwiseErrorTreatsOnlyIOAndURLErrorAsRetryable() {
+        XCTAssertTrue(WhispCLI.isRetryablePairwiseError(AppError.io("temporary")))
+        XCTAssertTrue(WhispCLI.isRetryablePairwiseError(URLError(.timedOut)))
+        XCTAssertFalse(WhispCLI.isRetryablePairwiseError(AppError.decode("invalid json")))
+        XCTAssertFalse(WhispCLI.isRetryablePairwiseError(AppError.invalidArgument("bad input")))
+    }
 }

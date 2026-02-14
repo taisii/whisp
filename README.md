@@ -482,6 +482,17 @@ Main fields:
 - `inputLanguage` (`auto` / `ja` / `en`)
 - `sttProvider` (`deepgram` / `whisper` / `apple_speech`)
 - `llmModel`
+- `generationPrimary` (optional)
+  - `candidateID`
+  - `snapshot.model`
+  - `snapshot.promptTemplate`
+  - `snapshot.promptHash`
+  - `snapshot.options`
+  - `selectedAt`
+
+`generationPrimary` is set from Settings > Generation主設定.
+When present and valid, the pipeline prioritizes `snapshot.model` and `snapshot.promptTemplate`.
+If invalid (unknown model or empty prompt), it falls back to legacy behavior (`llmModel` + `appPromptRules`).
 
 ## Current test status
 

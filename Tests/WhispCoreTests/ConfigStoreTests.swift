@@ -21,7 +21,22 @@ final class ConfigStoreTests: XCTestCase {
             sttProvider: .appleSpeech,
             appPromptRules: [AppPromptRule(appName: "Slack", template: "入力: {STT結果}")],
             llmModel: .gpt5Nano,
-            context: ContextConfig(visionEnabled: true, visionMode: .ocr)
+            context: ContextConfig(visionEnabled: true, visionMode: .ocr),
+            generationPrimary: GenerationPrimarySelection(
+                candidateID: "generation-gpt-5-nano-default",
+                snapshot: GenerationPrimarySnapshot(
+                    model: .gpt5Nano,
+                    promptName: "default",
+                    promptTemplate: "入力: {STT結果}",
+                    promptHash: promptTemplateHash("入力: {STT結果}"),
+                    options: [
+                        "require_context": "true",
+                        "use_cache": "true",
+                    ],
+                    capturedAt: "2026-02-14T00:00:00.000Z"
+                ),
+                selectedAt: "2026-02-14T00:00:00.000Z"
+            )
         )
 
         try store.save(config)

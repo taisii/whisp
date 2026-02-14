@@ -11,7 +11,8 @@ struct BenchmarkIntegrityCaseDetailModal: View {
                 Divider()
 
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        issuesSection(detail)
                         audioSection(detail)
                         transcriptsSection(detail)
                         outputSection(detail)
@@ -50,6 +51,43 @@ struct BenchmarkIntegrityCaseDetailModal: View {
         .padding(.vertical, 12)
     }
 
+    private func issuesSection(_ detail: BenchmarkIntegrityCaseDetail) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionLabel("Issue")
+            if detail.issueDetails.isEmpty {
+                Text("このケースに検出された不備はありません。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(detail.issueDetails) { issue in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text(issue.taskLabel)
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color(NSColor.controlBackgroundColor))
+                                .clipShape(Capsule())
+                            if issue.excluded {
+                                Text("除外済み")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        Text(issue.title)
+                            .font(.system(size: 12, weight: .semibold))
+                        if !issue.missingFields.isEmpty {
+                            Text("不足項目: \(issue.missingFields.joined(separator: ", "))")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
     private func audioSection(_ detail: BenchmarkIntegrityCaseDetail) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionLabel("音声")
@@ -63,20 +101,12 @@ struct BenchmarkIntegrityCaseDetailModal: View {
                     )
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(detail.audioFilePath == nil)
 
-                Text(detail.audioFilePath ?? "音声ファイルがありません")
-                    .font(.system(size: 11, design: .monospaced))
+                Text(detail.audioFilePath == nil ? "音声ファイルがありません" : "音声ファイルを再生できます")
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(2)
             }
-        }
-        .padding(12)
-        .background(Color(NSColor.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
         }
     }
 
@@ -100,13 +130,6 @@ struct BenchmarkIntegrityCaseDetailModal: View {
             sectionLabel("output_text (閲覧専用)")
             readOnlyText(detail.outputText)
         }
-        .padding(12)
-        .background(Color(NSColor.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-        }
     }
 
     private func captureSection(_ detail: BenchmarkIntegrityCaseDetail) -> some View {
@@ -119,26 +142,9 @@ struct BenchmarkIntegrityCaseDetailModal: View {
                     .frame(maxWidth: .infinity, minHeight: 180, maxHeight: 280)
                     .background(Color(NSColor.windowBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                    }
             } else {
                 readOnlyText("画像キャプチャはありません")
             }
-            if let path = detail.visionImageFilePath {
-                Text(path)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(12)
-        .background(Color(NSColor.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
         }
     }
 
@@ -209,22 +215,11 @@ struct BenchmarkIntegrityCaseDetailModal: View {
                     .padding(6)
                     .background(Color(NSColor.windowBackgroundColor))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-                    }
             } else {
                 readOnlyText(text.wrappedValue)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color(NSColor.textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-        }
     }
 
     private func readOnlyText(_ text: String) -> some View {
@@ -239,10 +234,6 @@ struct BenchmarkIntegrityCaseDetailModal: View {
         .frame(minHeight: 120)
         .background(Color(NSColor.windowBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(NSColor.separatorColor), lineWidth: 1)
-        }
     }
 
     private func sectionLabel(_ text: String) -> some View {

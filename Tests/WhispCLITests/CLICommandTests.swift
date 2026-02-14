@@ -3,6 +3,38 @@ import WhispCore
 @testable import whisp
 
 final class CLICommandTests: XCTestCase {
+    private actor AttemptCounter {
+        private var value = 0
+
+        func increment() -> Int {
+            value += 1
+            return value
+        }
+
+        func current() -> Int {
+            value
+        }
+    }
+
+    private actor ParallelStartRecorder {
+        private var timestamps: [UInt64] = []
+
+        func mark(_ timestamp: UInt64) {
+            timestamps.append(timestamp)
+        }
+
+        func absoluteDiffMs() -> Double? {
+            guard timestamps.count >= 2,
+                  let minTimestamp = timestamps.min(),
+                  let maxTimestamp = timestamps.max()
+            else {
+                return nil
+            }
+            let diffNanos = maxTimestamp - minTimestamp
+            return Double(diffNanos) / 1_000_000
+        }
+    }
+
     func testParseSelfCheckCommand() throws {
         let command = try XCTUnwrap(WhispCLI.CLICommand.parse(arguments: ["--self-check"]))
         guard case .selfCheck = command else {
@@ -485,5 +517,144 @@ final class CLICommandTests: XCTestCase {
         XCTAssertEqual(key.datasetHash, "dataset-hash")
         XCTAssertEqual(key.candidateID, "pair:gen-a__vs__gen-b")
         XCTAssertFalse(key.runtimeOptionsHash.isEmpty)
+    }
+
+    func testRunPairwiseOperationsInParallelExecutesBothOperationsConcurrently() async throws {
+        let recorder = ParallelStartRecorder()
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        let result = try await WhispCLI.runPairwiseOperationsInParallel(
+            firstLane: .generationA,
+            firstFailureLabel: "pairwise_generation_a_failed",
+            operationFirst: {
+                await recorder.mark(DispatchTime.now().uptimeNanoseconds)
+                try await Task.sleep(nanoseconds: 200_000_000)
+                return "A"
+            },
+            secondLane: .generationB,
+            secondFailureLabel: "pairwise_generation_b_failed",
+            operationSecond: {
+                await recorder.mark(DispatchTime.now().uptimeNanoseconds)
+                try await Task.sleep(nanoseconds: 200_000_000)
+                return "B"
+            }
+        )
+        let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000
+        let startDiffMaybe = await recorder.absoluteDiffMs()
+        guard let startDiffMs = startDiffMaybe else {
+            return XCTFail("parallel start timestamps should contain two entries")
+        }
+
+        XCTAssertEqual(result.first.lane, .generationA)
+        XCTAssertEqual(result.second.lane, .generationB)
+        XCTAssertEqual(result.first.outcome.value, "A")
+        XCTAssertEqual(result.second.outcome.value, "B")
+        XCTAssertFalse(result.first.outcome.retried)
+        XCTAssertFalse(result.second.outcome.retried)
+        XCTAssertLessThan(startDiffMs, 80)
+        XCTAssertLessThan(elapsedMs, 350)
+    }
+
+    func testExecuteWithImmediateRetryIfNeededRetriesOnceForIOError() async throws {
+        let counter = AttemptCounter()
+        let outcome = try await WhispCLI.executeWithImmediateRetryIfNeeded(
+            failureLabel: "pairwise_generation_a_failed"
+        ) {
+            let attempt = await counter.increment()
+            if attempt == 1 {
+                throw AppError.io("temporary backend error")
+            }
+            return "ok"
+        }
+
+        let attempts = await counter.current()
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(outcome.value, "ok")
+        XCTAssertEqual(outcome.attempts, 2)
+        XCTAssertTrue(outcome.retried)
+    }
+
+    func testExecuteWithImmediateRetryIfNeededDoesNotRetryDecodeError() async {
+        let counter = AttemptCounter()
+        do {
+            _ = try await WhispCLI.executeWithImmediateRetryIfNeeded(
+                failureLabel: "pairwise_judge_round1_failed"
+            ) {
+                _ = await counter.increment()
+                throw AppError.decode("invalid json")
+            }
+            XCTFail("decode error should be thrown")
+        } catch let error as AppError {
+            guard case .decode(let message) = error else {
+                return XCTFail("unexpected AppError: \(error)")
+            }
+            XCTAssertTrue(message.contains("pairwise_judge_round1_failed"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        let attempts = await counter.current()
+        XCTAssertEqual(attempts, 1)
+    }
+
+    func testRunPairwiseOperationsInParallelRetriesOnlyFailedSide() async throws {
+        let aCounter = AttemptCounter()
+        let bCounter = AttemptCounter()
+
+        let result = try await WhispCLI.runPairwiseOperationsInParallel(
+            firstLane: .generationA,
+            firstFailureLabel: "pairwise_generation_a_failed",
+            operationFirst: {
+                let attempt = await aCounter.increment()
+                if attempt == 1 {
+                    throw URLError(.timedOut)
+                }
+                return "A"
+            },
+            secondLane: .generationB,
+            secondFailureLabel: "pairwise_generation_b_failed",
+            operationSecond: {
+                _ = await bCounter.increment()
+                return "B"
+            }
+        )
+
+        let attemptsA = await aCounter.current()
+        let attemptsB = await bCounter.current()
+        XCTAssertEqual(attemptsA, 2)
+        XCTAssertEqual(attemptsB, 1)
+        XCTAssertEqual(result.first.outcome.value, "A")
+        XCTAssertEqual(result.second.outcome.value, "B")
+        XCTAssertTrue(result.first.outcome.retried)
+        XCTAssertFalse(result.second.outcome.retried)
+    }
+
+    func testRunPairwiseOperationsInParallelFailsAfterRetryExhausted() async {
+        let aCounter = AttemptCounter()
+
+        do {
+            _ = try await WhispCLI.runPairwiseOperationsInParallel(
+                firstLane: .generationA,
+                firstFailureLabel: "pairwise_generation_a_failed",
+                operationFirst: {
+                    _ = await aCounter.increment()
+                    throw AppError.io("backend unavailable")
+                },
+                secondLane: .generationB,
+                secondFailureLabel: "pairwise_generation_b_failed",
+                operationSecond: {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    return "B"
+                }
+            )
+            XCTFail("error should be thrown after retry exhaustion")
+        } catch let error as AppError {
+            guard case .io(let message) = error else {
+                return XCTFail("unexpected AppError: \(error)")
+            }
+            XCTAssertTrue(message.contains("pairwise_generation_a_failed"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        let attemptsA = await aCounter.current()
+        XCTAssertEqual(attemptsA, 2)
     }
 }

@@ -1,14 +1,10 @@
 import SwiftUI
-import WhispCore
 
 struct BenchmarkIntegrityView: View {
     @ObservedObject var viewModel: BenchmarkViewModel
 
     var body: some View {
         VStack(spacing: 0) {
-            controls
-            Divider()
-
             if viewModel.integrityCaseRows.isEmpty {
                 VStack(spacing: 8) {
                     Text("表示できるケースがありません")
@@ -16,13 +12,6 @@ struct BenchmarkIntegrityView: View {
                     Text("manual_test_cases.jsonl が空か、まだ作成されていません。")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
-                    Button {
-                        viewModel.scanIntegrity()
-                    } label: {
-                        Label("不備を再計算", systemImage: "magnifyingglass")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(viewModel.isExecutingBenchmark)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -32,16 +21,11 @@ struct BenchmarkIntegrityView: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(viewModel.integrityCaseRows) { row in
-                                Button {
-                                    viewModel.openIntegrityCaseDetail(caseID: row.id)
-                                } label: {
-                                    caseRow(row)
-                                        .padding(.vertical, 4)
-                                        .padding(.horizontal, 10)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .background(rowBackground(row))
-                                }
-                                .buttonStyle(.plain)
+                                caseRow(row)
+                                    .padding(.vertical, 4)
+                                    .padding(.horizontal, 10)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(rowBackground(row))
                             }
                         }
                     }
@@ -49,45 +33,6 @@ struct BenchmarkIntegrityView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private var controls: some View {
-        HStack(spacing: 10) {
-            Picker("Task", selection: $viewModel.selectedTask) {
-                Text("STT").tag(BenchmarkKind.stt)
-                Text("Generation").tag(BenchmarkKind.generation)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 220)
-
-            Button {
-                viewModel.scanIntegrity()
-            } label: {
-                Label("不備を再計算", systemImage: "magnifyingglass")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(viewModel.isExecutingBenchmark)
-
-            Button("Copy case_id") {
-                viewModel.copySelectedIssueCaseID()
-            }
-            .buttonStyle(.bordered)
-            .disabled(viewModel.selectedIntegrityCaseID == nil)
-
-            Button("Open related run dir") {
-                viewModel.openRelatedRunDirectory()
-            }
-            .buttonStyle(.bordered)
-            .disabled(viewModel.selectedIntegrityCaseID == nil)
-
-            Button(viewModel.selectedIntegrityCaseExclusionLabel) {
-                viewModel.toggleSelectedIntegrityCaseExclusion()
-            }
-            .buttonStyle(.bordered)
-            .disabled(!viewModel.canToggleSelectedIntegrityCaseExclusion)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
     }
 
     private var header: some View {
@@ -105,14 +50,42 @@ struct BenchmarkIntegrityView: View {
 
     private func caseRow(_ row: BenchmarkIntegrityCaseRow) -> some View {
         HStack(spacing: 10) {
-            cellText(row.id, width: 240, color: row.isMissingInDataset ? .orange : .primary)
-            cellText(row.sttPreview, width: 420)
-            cellText(row.referencePreview, width: 420)
-            statusBadge(row)
-                .frame(width: 170, alignment: .leading)
-            Spacer(minLength: 0)
+            caseIDBadge(row)
+                .frame(width: 240, alignment: .leading)
+
+            Button {
+                viewModel.openIntegrityCaseDetail(caseID: row.id)
+            } label: {
+                HStack(spacing: 10) {
+                    cellText(row.sttPreview, width: 420)
+                    cellText(row.referencePreview, width: 420)
+                    statusBadge(row)
+                        .frame(width: 170, alignment: .leading)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         .font(.system(size: 11, design: .monospaced))
+    }
+
+    private func caseIDBadge(_ row: BenchmarkIntegrityCaseRow) -> some View {
+        Button {
+            viewModel.copyIntegrityCaseID(row.id)
+        } label: {
+            Text(row.id)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .foregroundStyle(row.isMissingInDataset ? Color.orange : Color.primary)
+                .background(Color(NSColor.controlBackgroundColor))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("case_id をコピー")
     }
 
     @ViewBuilder

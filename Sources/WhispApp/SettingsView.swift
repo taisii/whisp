@@ -4,17 +4,42 @@ import WhispCore
 
 struct SettingsView: View {
     @State private var config: Config
+    @State private var selectedGenerationPrimaryCandidateID: String
 
     private let onSave: @MainActor (Config) -> Void
     private let onCancel: @MainActor () -> Void
+    private let generationCandidates: [BenchmarkCandidate]
+    private let preserveGenerationPrimaryOnSave: Bool
 
     private let recordingModes: [RecordingMode] = [.toggle, .pushToTalk]
     private let sttProviders: [STTProvider] = [.deepgram, .whisper, .appleSpeech]
     private let visionModes: [VisionContextMode] = VisionContextMode.allCases
     private let llmModels: [LLMModel] = LLMModelCatalog.selectableModelIDs(for: .appSettings)
+    private static let noGenerationPrimaryCandidateID = "__none__"
+    private static let keepGenerationPrimaryCandidateID = "__keep__"
 
-    init(config: Config, onSave: @escaping @MainActor (Config) -> Void, onCancel: @escaping @MainActor () -> Void) {
+    init(
+        config: Config,
+        generationCandidates: [BenchmarkCandidate],
+        preserveGenerationPrimaryOnSave: Bool = false,
+        onSave: @escaping @MainActor (Config) -> Void,
+        onCancel: @escaping @MainActor () -> Void
+    ) {
         _config = State(initialValue: config)
+        let candidateIDs = Set(generationCandidates.map(\.id))
+        let initialSelection: String
+        if let selectedID = config.generationPrimary?.candidateID,
+           candidateIDs.contains(selectedID)
+        {
+            initialSelection = selectedID
+        } else if preserveGenerationPrimaryOnSave, config.generationPrimary != nil {
+            initialSelection = Self.keepGenerationPrimaryCandidateID
+        } else {
+            initialSelection = Self.noGenerationPrimaryCandidateID
+        }
+        _selectedGenerationPrimaryCandidateID = State(initialValue: initialSelection)
+        self.generationCandidates = generationCandidates.sorted { $0.id < $1.id }
+        self.preserveGenerationPrimaryOnSave = preserveGenerationPrimaryOnSave
         self.onSave = onSave
         self.onCancel = onCancel
     }
@@ -22,6 +47,14 @@ struct SettingsView: View {
     var body: some View {
         VStack {
             Form {
+                if preserveGenerationPrimaryOnSave {
+                    Section("通知") {
+                        Text("Generation候補の読み込みに失敗したため、保存時は既存の Generation 主設定を保持します。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("API Keys") {
                     APIKeyRow(title: "Deepgram API Key", text: binding(\.apiKeys.deepgram))
                     APIKeyRow(title: "Gemini API Key", text: binding(\.apiKeys.gemini))
@@ -55,6 +88,25 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Generation主設定") {
+                    Picker("Generation candidate", selection: $selectedGenerationPrimaryCandidateID) {
+                        if shouldShowKeepExistingGenerationPrimaryOption {
+                            Text("既存設定を保持（候補読み込み失敗）")
+                                .tag(Self.keepGenerationPrimaryCandidateID)
+                        }
+                        Text("未設定（従来設定）").tag(Self.noGenerationPrimaryCandidateID)
+                        ForEach(generationCandidates, id: \.id) { candidate in
+                            Text(generationCandidateLabel(candidate))
+                                .tag(candidate.id)
+                        }
+                    }
+                    if shouldShowKeepExistingGenerationPrimaryOption {
+                        Text("候補読み込みに失敗したため、保存時は既存の Generation 主設定を保持します。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 Section("コンテキスト") {
                     Toggle("スクリーンショット解析を使う", isOn: binding(\.context.visionEnabled))
                     Picker("スクリーンショット文脈方式", selection: binding(\.context.visionMode)) {
@@ -74,7 +126,7 @@ struct SettingsView: View {
                 Spacer()
 
                 Button("保存") {
-                    onSave(config)
+                    onSave(configForSave())
                 }
                 .keyboardShortcut(.defaultAction)
             }
@@ -113,11 +165,42 @@ struct SettingsView: View {
         }
     }
 
+    private func generationCandidateLabel(_ candidate: BenchmarkCandidate) -> String {
+        let name = (candidate.promptName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptName = name.isEmpty ? candidate.id : name
+        return "\(promptName) (\(candidate.model))"
+    }
+
+    private func configForSave() -> Config {
+        var updated = config
+        if selectedGenerationPrimaryCandidateID == Self.keepGenerationPrimaryCandidateID {
+            updated.generationPrimary = config.generationPrimary
+            return updated
+        }
+        if selectedGenerationPrimaryCandidateID == Self.noGenerationPrimaryCandidateID {
+            updated.generationPrimary = nil
+            return updated
+        }
+        guard let selected = generationCandidates.first(where: { $0.id == selectedGenerationPrimaryCandidateID }),
+              let selection = GenerationPrimarySelectionFactory.makeSelection(candidate: selected)
+        else {
+            updated.generationPrimary = nil
+            return updated
+        }
+        updated.generationPrimary = selection
+        updated.llmModel = selection.snapshot.model
+        return updated
+    }
+
     private func binding<T>(_ keyPath: WritableKeyPath<Config, T>) -> Binding<T> {
         Binding(
             get: { config[keyPath: keyPath] },
             set: { config[keyPath: keyPath] = $0 }
         )
+    }
+
+    private var shouldShowKeepExistingGenerationPrimaryOption: Bool {
+        preserveGenerationPrimaryOnSave && config.generationPrimary != nil
     }
 }
 

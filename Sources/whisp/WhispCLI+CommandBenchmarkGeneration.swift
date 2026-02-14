@@ -296,6 +296,30 @@ extension WhispCLI {
         }
     }
 
+    enum PairwiseLane: Sendable {
+        case generationA
+        case generationB
+        case judgeRound1
+        case judgeRound2
+    }
+
+    struct RetryOutcome<T: Sendable>: Sendable {
+        let value: T
+        let attempts: Int
+        let retried: Bool
+    }
+
+    struct LaneResult<T: Sendable>: Sendable {
+        let lane: PairwiseLane
+        let outcome: RetryOutcome<T>
+    }
+
+    private struct PairwiseJudgeRoundOutput: Sendable {
+        let result: PairwiseJudgeResult
+        let prompt: String
+        let responseJSON: String
+    }
+
     private struct PairwiseCaseWorkerOutcome: Sendable {
         let displayLine: String
         let result: BenchmarkCaseResult
@@ -414,49 +438,77 @@ extension WhispCLI {
             let contextHash = sha256Hex(text: canonicalContextString(item.context))
             let inputHash = sha256Hex(text: input.text)
             let judgeImageInput = resolvePairwiseJudgeImageInput(item: item)
-            let generationA = try await generateForPairwiseCandidate(
-                descriptor: descriptorA,
-                config: config,
-                inputText: input.text,
-                context: item.context,
-                inputHash: inputHash,
-                contextHash: contextHash
+            let generationPair = try await runPairwiseOperationsInParallel(
+                firstLane: .generationA,
+                firstFailureLabel: "pairwise_generation_a_failed",
+                operationFirst: {
+                    try await generateForPairwiseCandidate(
+                        descriptor: descriptorA,
+                        config: config,
+                        inputText: input.text,
+                        context: item.context,
+                        inputHash: inputHash,
+                        contextHash: contextHash
+                    )
+                },
+                secondLane: .generationB,
+                secondFailureLabel: "pairwise_generation_b_failed",
+                operationSecond: {
+                    try await generateForPairwiseCandidate(
+                        descriptor: descriptorB,
+                        config: config,
+                        inputText: input.text,
+                        context: item.context,
+                        inputHash: inputHash,
+                        contextHash: contextHash
+                    )
+                }
             )
-            let generationB = try await generateForPairwiseCandidate(
-                descriptor: descriptorB,
-                config: config,
-                inputText: input.text,
-                context: item.context,
-                inputHash: inputHash,
-                contextHash: contextHash
-            )
+            let generationA = generationPair.first.outcome.value
+            let generationB = generationPair.second.outcome.value
 
-            let judgeRound1: (result: PairwiseJudgeResult, prompt: String, responseJSON: String)
-            let judgeRound2: (result: PairwiseJudgeResult, prompt: String, responseJSON: String)
-            do {
-                judgeRound1 = try await runPairwiseJudge(
-                    model: judgeModel,
-                    apiKey: judgeAPIKey,
-                    referenceText: reference,
-                    sttInputText: input.text,
-                    candidateAText: generationA.text,
-                    candidateBText: generationB.text,
-                    visionImageData: judgeImageInput.data,
-                    visionImageMimeType: judgeImageInput.mimeType
-                )
-                judgeRound2 = try await runPairwiseJudge(
-                    model: judgeModel,
-                    apiKey: judgeAPIKey,
-                    referenceText: reference,
-                    sttInputText: input.text,
-                    candidateAText: generationB.text,
-                    candidateBText: generationA.text,
-                    visionImageData: judgeImageInput.data,
-                    visionImageMimeType: judgeImageInput.mimeType
-                )
-            } catch {
-                throw AppError.io("pairwise_judge_failed: \(error.localizedDescription)")
-            }
+            let judgePair = try await runPairwiseOperationsInParallel(
+                firstLane: .judgeRound1,
+                firstFailureLabel: "pairwise_judge_round1_failed",
+                operationFirst: {
+                    let round = try await runPairwiseJudge(
+                        model: judgeModel,
+                        apiKey: judgeAPIKey,
+                        referenceText: reference,
+                        sttInputText: input.text,
+                        candidateAText: generationA.text,
+                        candidateBText: generationB.text,
+                        visionImageData: judgeImageInput.data,
+                        visionImageMimeType: judgeImageInput.mimeType
+                    )
+                    return PairwiseJudgeRoundOutput(
+                        result: round.result,
+                        prompt: round.prompt,
+                        responseJSON: round.responseJSON
+                    )
+                },
+                secondLane: .judgeRound2,
+                secondFailureLabel: "pairwise_judge_round2_failed",
+                operationSecond: {
+                    let round = try await runPairwiseJudge(
+                        model: judgeModel,
+                        apiKey: judgeAPIKey,
+                        referenceText: reference,
+                        sttInputText: input.text,
+                        candidateAText: generationB.text,
+                        candidateBText: generationA.text,
+                        visionImageData: judgeImageInput.data,
+                        visionImageMimeType: judgeImageInput.mimeType
+                    )
+                    return PairwiseJudgeRoundOutput(
+                        result: round.result,
+                        prompt: round.prompt,
+                        responseJSON: round.responseJSON
+                    )
+                }
+            )
+            let judgeRound1 = judgePair.first.outcome.value
+            let judgeRound2 = judgePair.second.outcome.value
             let judgement = aggregatePairwiseJudgement(round1: judgeRound1.result, round2Swapped: judgeRound2.result)
             let decisionJSON = encodePairwiseDecisionJSON(judgement)
 
@@ -607,7 +659,8 @@ extension WhispCLI {
             )
         } catch {
             let reason = error.localizedDescription
-            let isJudgeError = reason.contains("pairwise_judge_failed:")
+            let isJudgeError = reason.contains("pairwise_judge_round1_failed")
+                || reason.contains("pairwise_judge_round2_failed")
             let result = BenchmarkCaseResult(
                 id: item.id,
                 status: .error,
@@ -672,6 +725,87 @@ extension WhispCLI {
                 judgeError: isJudgeError
             )
         }
+    }
+
+    static func runPairwiseOperationsInParallel<First: Sendable, Second: Sendable>(
+        firstLane: PairwiseLane,
+        firstFailureLabel: String,
+        operationFirst: @escaping @Sendable () async throws -> First,
+        secondLane: PairwiseLane,
+        secondFailureLabel: String,
+        operationSecond: @escaping @Sendable () async throws -> Second
+    ) async throws -> (first: LaneResult<First>, second: LaneResult<Second>) {
+        async let firstOutcome = executeWithImmediateRetryIfNeeded(
+            failureLabel: firstFailureLabel,
+            operation: operationFirst
+        )
+        async let secondOutcome = executeWithImmediateRetryIfNeeded(
+            failureLabel: secondFailureLabel,
+            operation: operationSecond
+        )
+
+        let resolvedFirst = try await firstOutcome
+        let resolvedSecond = try await secondOutcome
+        return (
+            first: LaneResult(lane: firstLane, outcome: resolvedFirst),
+            second: LaneResult(lane: secondLane, outcome: resolvedSecond)
+        )
+    }
+
+    static func executeWithImmediateRetryIfNeeded<T: Sendable>(
+        failureLabel: String,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> RetryOutcome<T> {
+        do {
+            let value = try await operation()
+            return RetryOutcome(value: value, attempts: 1, retried: false)
+        } catch {
+            guard isRetryablePairwiseError(error) else {
+                throw wrapPairwiseLaneError(error, failureLabel: failureLabel)
+            }
+        }
+
+        do {
+            let value = try await operation()
+            return RetryOutcome(value: value, attempts: 2, retried: true)
+        } catch {
+            throw wrapPairwiseLaneError(error, failureLabel: failureLabel)
+        }
+    }
+
+    static func isRetryablePairwiseError(_ error: Error) -> Bool {
+        if error is URLError {
+            return true
+        }
+        guard let appError = error as? AppError else {
+            return false
+        }
+        if case .io = appError {
+            return true
+        }
+        return false
+    }
+
+    static func wrapPairwiseLaneError(_ error: Error, failureLabel: String) -> Error {
+        if let appError = error as? AppError {
+            switch appError {
+            case .io(let message):
+                return AppError.io("\(failureLabel): \(message)")
+            case .decode(let message):
+                return AppError.decode("\(failureLabel): \(message)")
+            case .encode(let message):
+                return AppError.encode("\(failureLabel): \(message)")
+            case .invalidArgument(let message):
+                return AppError.invalidArgument("\(failureLabel): \(message)")
+            case .configDirMissing:
+                return AppError.io("\(failureLabel): config directory not found")
+            }
+        }
+
+        if let urlError = error as? URLError {
+            return AppError.io("\(failureLabel): \(urlError.localizedDescription)")
+        }
+        return AppError.io("\(failureLabel): \(error.localizedDescription)")
     }
 
     private static func makePairwiseSkippedOutcome(

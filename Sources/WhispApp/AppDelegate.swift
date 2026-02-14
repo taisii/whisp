@@ -222,7 +222,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func presentConfigRecovery(error: Error, dependencies: AppDependencies) {
         apply(state: .idle)
         showError("設定ファイルの読み込みに失敗しました。設定を修正してください: \(error.localizedDescription)")
-        recoverySettingsWindowController.show(config: Config()) { [weak self] updated in
+        recoverySettingsWindowController.show(config: Config(), generationCandidates: []) { [weak self] updated in
             guard let self else { return false }
             do {
                 try dependencies.configStore.save(updated)

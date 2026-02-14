@@ -154,14 +154,6 @@ struct BenchmarkComparisonView: View {
             .buttonStyle(.borderedProminent)
             .disabled(viewModel.isExecutingBenchmark)
 
-            Button {
-                viewModel.scanIntegrity()
-            } label: {
-                Label("不備を再計算", systemImage: "magnifyingglass")
-            }
-            .buttonStyle(.bordered)
-            .disabled(viewModel.isExecutingBenchmark)
-
             if mode == .generationSingle || mode == .generationBattle {
                 Button {
                     viewModel.openCreatePromptCandidateModal()

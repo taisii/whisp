@@ -6,9 +6,16 @@ import WhispCore
 final class SettingsWindowController {
     private var window: NSWindow?
 
-    func show(config: Config, onSave: @escaping @MainActor (Config) -> Bool) {
+    func show(
+        config: Config,
+        generationCandidates: [BenchmarkCandidate],
+        preserveGenerationPrimaryOnSave: Bool = false,
+        onSave: @escaping @MainActor (Config) -> Bool
+    ) {
         let rootView = SettingsView(
             config: config,
+            generationCandidates: generationCandidates,
+            preserveGenerationPrimaryOnSave: preserveGenerationPrimaryOnSave,
             onSave: { [weak self] updated in
                 let saved = onSave(updated)
                 if saved {

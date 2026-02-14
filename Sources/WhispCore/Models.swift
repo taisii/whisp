@@ -110,6 +110,7 @@ public struct Config: Codable, Equatable, Sendable {
     public var appPromptRules: [AppPromptRule]
     public var llmModel: LLMModel
     public var context: ContextConfig
+    public var generationPrimary: GenerationPrimarySelection?
 
     public init(
         apiKeys: APIKeys = APIKeys(),
@@ -119,7 +120,8 @@ public struct Config: Codable, Equatable, Sendable {
         sttProvider: STTProvider = .deepgram,
         appPromptRules: [AppPromptRule] = [],
         llmModel: LLMModel = .gemini25FlashLite,
-        context: ContextConfig = ContextConfig()
+        context: ContextConfig = ContextConfig(),
+        generationPrimary: GenerationPrimarySelection? = nil
     ) {
         self.apiKeys = apiKeys
         self.shortcut = shortcut
@@ -129,6 +131,7 @@ public struct Config: Codable, Equatable, Sendable {
         self.appPromptRules = appPromptRules
         self.llmModel = llmModel
         self.context = context
+        self.generationPrimary = generationPrimary
     }
 }
 

@@ -39,4 +39,25 @@ final class BenchmarkIntegrityStoreTests: XCTestCase {
         let unexcluded = try store.loadIssues(task: .generation)
         XCTAssertEqual(unexcluded.first?.excluded, false)
     }
+
+    func testSaveLoadAndClearAutoScanState() throws {
+        let home = tempHome()
+        let store = BenchmarkIntegrityStore(environment: ["HOME": home.path])
+
+        let state = BenchmarkIntegrityAutoScanState(
+            sourcePath: "/tmp/manual.jsonl",
+            fingerprintsByCaseID: [
+                "case-1": "fp-1",
+                "case-2": "fp-2",
+            ],
+            lastScannedAt: "2026-02-14T00:00:00.000Z"
+        )
+        try store.saveAutoScanState(state)
+
+        let loaded = try store.loadAutoScanState()
+        XCTAssertEqual(loaded, state)
+
+        try store.clearAutoScanState()
+        XCTAssertNil(try store.loadAutoScanState())
+    }
 }
