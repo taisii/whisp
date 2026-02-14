@@ -329,4 +329,47 @@ final class DebugCaptureStoreTests: XCTestCase {
         XCTAssertTrue(try store.listRecords(limit: 10).isEmpty)
     }
 
+    func testListRecordsSkipsBrokenManifestAndKeepsOthers() throws {
+        let home = tempHome()
+        let store = makeStore(home: home)
+
+        let healthyCaptureID = try store.saveRecording(
+            runID: "run-healthy",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 1, count: 640),
+            llmModel: "gpt-5-nano",
+            appName: "Xcode"
+        )
+        try store.updateResult(
+            captureID: healthyCaptureID,
+            sttText: "ok",
+            outputText: "ok",
+            status: "completed"
+        )
+
+        let brokenCaptureID = try store.saveRecording(
+            runID: "run-broken",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 2, count: 640),
+            llmModel: "gpt-5-nano",
+            appName: "Xcode"
+        )
+        try store.updateResult(
+            captureID: brokenCaptureID,
+            sttText: "ng",
+            outputText: nil,
+            status: "failed",
+            errorMessage: "decode_target"
+        )
+
+        let brokenDetails = try XCTUnwrap(store.loadDetails(captureID: brokenCaptureID))
+        let brokenManifestPath = URL(fileURLWithPath: brokenDetails.record.runDirectoryPath, isDirectory: true)
+            .appendingPathComponent("manifest.json", isDirectory: false)
+        try "{ invalid json".write(to: brokenManifestPath, atomically: true, encoding: .utf8)
+
+        let records = try store.listRecords(limit: 10)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.id, healthyCaptureID)
+    }
+
 }

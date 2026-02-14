@@ -276,8 +276,16 @@ extension DebugCaptureStore {
 
         for entry in entries {
             let manifest = entry.appendingPathComponent("manifest.json", isDirectory: false)
-            guard let record = try loadRecord(path: manifest) else { continue }
-            records.append(record)
+            do {
+                guard let record = try loadRecord(path: manifest) else { continue }
+                records.append(record)
+            } catch {
+                DevLog.info("debug_capture_manifest_decode_failed", fields: [
+                    "capture_id": entry.lastPathComponent,
+                    "manifest_path": manifest.path,
+                    "error": error.localizedDescription,
+                ])
+            }
         }
 
         let sorted = records.sorted { $0.createdAt > $1.createdAt }

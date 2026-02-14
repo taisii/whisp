@@ -115,6 +115,7 @@ final class DebugViewModel: ObservableObject {
 
     private let store: DebugCaptureStore
     private let eventAnalyzer = DebugEventAnalyzer()
+    private let visibleRecordsLimit = 200
     private var persistedGroundTruthText = ""
     private var persistedSTTGroundTruthText = ""
     private var eventAnalysisCache: [String: DebugEventAnalysis] = [:]
@@ -150,7 +151,7 @@ final class DebugViewModel: ObservableObject {
     func refresh() {
         do {
             eventAnalysisCache.removeAll()
-            records = filterVisibleRecords(try store.listRecords(limit: 200))
+            records = try loadVisibleRecords()
             let detailLoadSucceeded = syncSelectionForCurrentFilter()
             if detailLoadSucceeded {
                 setStatus("最新のデータを読み込みました。", isError: false)
@@ -200,8 +201,8 @@ final class DebugViewModel: ObservableObject {
                 }
             }
 
-            if let loadedRecords = try? store.listRecords(limit: 200) {
-                records = filterVisibleRecords(loadedRecords)
+            if let loadedRecords = try? loadVisibleRecords() {
+                records = loadedRecords
             }
             _ = loadDetails(captureID: captureID)
             if hasGroundTruth(details?.record), recordFilter == .missingGroundTruth {
@@ -241,8 +242,8 @@ final class DebugViewModel: ObservableObject {
             stopAudioPlayback(showMessage: false)
             try store.deleteCapture(captureID: captureID)
             eventAnalysisCache.removeValue(forKey: captureID)
-            if let loadedRecords = try? store.listRecords(limit: 200) {
-                records = filterVisibleRecords(loadedRecords)
+            if let loadedRecords = try? loadVisibleRecords() {
+                records = loadedRecords
             }
             _ = syncSelectionForCurrentFilter()
             setStatus("ログを削除しました。", isError: false)
@@ -441,6 +442,12 @@ final class DebugViewModel: ObservableObject {
     private func hasGroundTruth(_ record: DebugCaptureRecord?) -> Bool {
         guard let text = record?.groundTruthText else { return false }
         return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func loadVisibleRecords() throws -> [DebugCaptureRecord] {
+        let allRecords = try store.listRecords(limit: Int.max)
+        let visibleRecords = filterVisibleRecords(allRecords)
+        return Array(visibleRecords.prefix(visibleRecordsLimit))
     }
 
     private func filterVisibleRecords(_ source: [DebugCaptureRecord]) -> [DebugCaptureRecord] {

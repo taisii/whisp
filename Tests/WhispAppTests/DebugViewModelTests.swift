@@ -72,4 +72,48 @@ final class DebugViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedCaptureID, completedCaptureID)
         XCTAssertEqual(viewModel.details?.record.id, completedCaptureID)
     }
+
+    func testRefreshKeepsCompletedVisibleWhenRecent200AreFailed() throws {
+        let home = tempHome()
+        let store = makeStore(home: home)
+
+        let completedCaptureID = try store.saveRecording(
+            runID: "run-completed-old",
+            sampleRate: 16_000,
+            pcmData: Data(repeating: 1, count: 320),
+            llmModel: "gpt-5-nano",
+            appName: "Xcode"
+        )
+        try store.updateResult(
+            captureID: completedCaptureID,
+            sttText: "ok",
+            outputText: "ok",
+            status: "completed"
+        )
+
+        for index in 0..<205 {
+            let failedCaptureID = try store.saveRecording(
+                runID: "run-failed-\(index)",
+                sampleRate: 16_000,
+                pcmData: Data(repeating: UInt8((index % 200) + 2), count: 320),
+                llmModel: "gpt-5-nano",
+                appName: "Xcode"
+            )
+            try store.updateResult(
+                captureID: failedCaptureID,
+                sttText: "ng",
+                outputText: nil,
+                status: "failed",
+                errorMessage: "timeout"
+            )
+        }
+
+        let viewModel = DebugViewModel(store: store)
+        viewModel.refresh()
+
+        XCTAssertEqual(viewModel.records.count, 1)
+        XCTAssertEqual(viewModel.records.first?.id, completedCaptureID)
+        XCTAssertEqual(viewModel.visibleCountText, "1 / 1")
+        XCTAssertEqual(viewModel.selectedCaptureID, completedCaptureID)
+    }
 }
