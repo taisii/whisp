@@ -107,7 +107,8 @@ private struct OpenAIResponseCreateEvent: Encodable {
 }
 
 public actor OpenAIRealtimeStreamingClient {
-    public static let defaultTranscriptionModel = "gpt-4o-mini-transcribe"
+    public static let defaultSessionModel = "gpt-realtime-mini"
+    public static let defaultTranscriptionModel = "gpt-realtime-mini"
 
     private let session: URLSession
 
@@ -139,7 +140,7 @@ public actor OpenAIRealtimeStreamingClient {
         apiKey: String,
         sampleRate: Int,
         language: String?,
-        sessionModel: String = OpenAIRealtimeStreamingClient.defaultTranscriptionModel,
+        sessionModel: String = OpenAIRealtimeStreamingClient.defaultSessionModel,
         transcriptionModel: String = OpenAIRealtimeStreamingClient.defaultTranscriptionModel
     ) async throws {
         guard !started else {
@@ -273,6 +274,7 @@ public actor OpenAIRealtimeStreamingClient {
 
         do {
             try await send(event: OpenAIInputAudioCommitEvent())
+            try await send(event: OpenAIResponseCreateEvent())
         } catch {
             finalizationError = errorDescription(error)
         }
