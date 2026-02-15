@@ -29,16 +29,16 @@ final class OpenAIRealtimeSessionPayloadTests: XCTestCase {
         XCTAssertFalse(payloadText.contains("input_audio_transcription"))
     }
 
-    func testRealtimeURLUsesTranscriptionModelByDefault() throws {
+    func testRealtimeURLUsesRealtimeModelByDefault() throws {
         let url = try XCTUnwrap(
             OpenAIRealtimeStreamingClient.makeRealtimeURL(
-                model: OpenAIRealtimeStreamingClient.defaultTranscriptionModel
+                model: OpenAIRealtimeStreamingClient.defaultSessionModel
             )
         )
         let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
         let modelQuery = components.queryItems?.first(where: { $0.name == "model" })?.value
 
-        XCTAssertEqual(modelQuery, "gpt-4o-mini-transcribe")
+        XCTAssertEqual(modelQuery, "gpt-realtime-mini")
     }
 }
 
