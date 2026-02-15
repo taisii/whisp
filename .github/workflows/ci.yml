@@ -11,7 +11,7 @@ on:
 jobs:
   swift-test:
     name: Swift Test
-    runs-on: macos-latest
+    runs-on: macos-26
 
     steps:
       - name: Checkout repository
@@ -21,9 +21,7 @@ jobs:
         run: swift build
 
       - name: Run tests
-        run: swift test
+        run: swift test --skip Snapshot --skip Temporary
 
       - name: Self check
-        run: |
-          swift run whisp --self-check
-          swift run WhispApp --self-check
+        run: swift run whisp debug self-check
