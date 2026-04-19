@@ -26,7 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         if let button = statusItem.button {
-            button.title = "○"
+            button.title = statusItemTitle(for: .idle)
+            button.toolTip = "Whisp"
         }
 
         buildMenu()
@@ -158,7 +159,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         startStopItem.isEnabled = !(state == .sttStreaming || state == .postProcessing || state == .directInput)
 
-        statusItem.button?.title = state.symbol
+        statusItem.button?.title = statusItemTitle(for: state)
+        statusItem.button?.toolTip = "Whisp (\(state.label))"
 
         if state == .idle || state == .recording {
             if state == .recording {
@@ -207,6 +209,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let preview = String(trimmed.prefix(64))
         latestSegmentPreview = preview
         refreshLivePreviewItem()
+    }
+
+    private func statusItemTitle(for state: PipelineState) -> String {
+        switch state {
+        case .idle:
+            return "Whisp"
+        case .recording:
+            return "Whisp REC"
+        case .sttStreaming, .postProcessing, .directInput:
+            return "Whisp …"
+        case .done:
+            return "Whisp ✓"
+        case .error:
+            return "Whisp !"
+        }
     }
 
     private func showInfo(_ message: String) {

@@ -28,9 +28,14 @@ final class ShortcutTests: XCTestCase {
     func testFormatShortcutDisplay() {
         XCTAssertEqual(formatShortcutDisplay("Cmd+J"), "⌘ J")
         XCTAssertEqual(formatShortcutDisplay("Ctrl+Alt+Shift+F1"), "⌃ ⌥ ⇧ F1")
+        XCTAssertEqual(formatShortcutDisplay("RightOption"), "右⌥")
     }
 
     func testFormatShortcutDisplayHandlesEmpty() {
         XCTAssertEqual(formatShortcutDisplay(""), "-")
+    }
+
+    func testCanonicalShortcutStringNormalizesRightOptionAlias() {
+        XCTAssertEqual(canonicalShortcutString(" right option "), "RightOption")
     }
 }

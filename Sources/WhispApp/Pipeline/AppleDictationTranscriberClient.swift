@@ -147,7 +147,11 @@ final class AppleDictationTranscriberClient: AppleSpeechTranscriber, @unchecked 
         defer { try? FileManager.default.removeItem(at: tmpURL) }
 
         let audioFile = try AVAudioFile(forReading: tmpURL)
-        let analyzer = SpeechAnalyzer(modules: [module])
+        let analyzer = try await SpeechAnalyzer(
+            inputAudioFile: audioFile,
+            modules: [module],
+            finishAfterFile: true
+        )
 
         let resultsTask = Task<[String], Error> {
             var parts: [String] = []
@@ -161,14 +165,13 @@ final class AppleDictationTranscriberClient: AppleSpeechTranscriber, @unchecked 
         }
 
         do {
-            try await analyzer.start(inputAudioFile: audioFile, finishAfterFile: true)
+            let parts = try await resultsTask.value
+            _ = analyzer
+            return normalizedTranscript(parts: parts)
         } catch {
             resultsTask.cancel()
             throw AppError.io("Apple Dictation Transcriber 文字起こしに失敗: \(error.localizedDescription)")
         }
-
-        let parts = try await resultsTask.value
-        return normalizedTranscript(parts: parts)
     }
 #endif
 

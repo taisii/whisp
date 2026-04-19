@@ -85,6 +85,7 @@ private let displayMap: [String: String] = [
     "Control": "⌃",
     "Alt": "⌥",
     "Option": "⌥",
+    "RightOption": "右⌥",
     "Shift": "⇧",
 ]
 

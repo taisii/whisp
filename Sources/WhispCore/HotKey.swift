@@ -15,6 +15,18 @@ public enum HotKeyParseError: Error, Equatable {
     case unsupportedKey(String)
 }
 
+public enum SingleModifierShortcut: String, Equatable, Sendable {
+    case rightOption = "RightOption"
+}
+
+public enum ParsedShortcut: Equatable, Sendable {
+    case hotKey(ParsedHotKey)
+    case singleModifier(SingleModifierShortcut)
+}
+
+public let legacyDefaultShortcutString = "Cmd+J"
+public let defaultShortcutString = SingleModifierShortcut.rightOption.rawValue
+
 public let carbonShiftModifier: UInt32 = 512
 public let carbonCommandModifier: UInt32 = 256
 public let carbonOptionModifier: UInt32 = 2048
@@ -86,6 +98,45 @@ private let keyCodeMap: [String: UInt32] = [
     "INSERT": 0x72,
     "DELETE": 0x75,
 ]
+
+private func normalizedSingleModifierShortcut(_ value: String) -> SingleModifierShortcut? {
+    let normalized = value
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "_", with: "")
+        .replacingOccurrences(of: "-", with: "")
+        .replacingOccurrences(of: " ", with: "")
+        .uppercased()
+
+    switch normalized {
+    case "RIGHTOPTION", "RIGHTALT", "ROPTION":
+        return .rightOption
+    default:
+        return nil
+    }
+}
+
+public func parseShortcut(_ value: String) throws -> ParsedShortcut {
+    if let modifier = normalizedSingleModifierShortcut(value) {
+        return .singleModifier(modifier)
+    }
+    return .hotKey(try parseHotKey(value))
+}
+
+public func canonicalShortcutString(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let modifier = normalizedSingleModifierShortcut(trimmed) {
+        return modifier.rawValue
+    }
+    return trimmed
+}
+
+public func migratedShortcutString(_ value: String) -> String {
+    let canonical = canonicalShortcutString(value)
+    if canonical.isEmpty || canonical.caseInsensitiveCompare(legacyDefaultShortcutString) == .orderedSame {
+        return defaultShortcutString
+    }
+    return canonical
+}
 
 public func parseHotKey(_ value: String) throws -> ParsedHotKey {
     let tokens = value.split(separator: "+").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

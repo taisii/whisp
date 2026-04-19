@@ -2,6 +2,11 @@ import XCTest
 @testable import WhispCore
 
 final class HotKeyTests: XCTestCase {
+    func testParseSingleRightOptionShortcut() throws {
+        let parsed = try parseShortcut("RightOption")
+        XCTAssertEqual(parsed, .singleModifier(.rightOption))
+    }
+
     func testParseSimpleShortcut() throws {
         let parsed = try parseHotKey("Cmd+J")
         XCTAssertEqual(parsed.keyCode, 0x26)

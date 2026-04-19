@@ -120,7 +120,9 @@ final class AppCoordinator {
     }
 
     func requestAccessibilityPermission(prompt: Bool = true) -> Bool {
-        DirectInput.requestAccessibilityPermission(prompt: prompt)
+        let trusted = DirectInput.requestAccessibilityPermission(prompt: prompt)
+        refreshShortcutRegistrationAfterPermissionChange()
+        return trusted
     }
 
     func isAccessibilityTrusted() -> Bool {
@@ -129,9 +131,17 @@ final class AppCoordinator {
 
     func requestAccessibilityPermissionOnLaunch() {
         _ = DirectInput.requestAccessibilityPermission(prompt: true)
+        refreshShortcutRegistrationAfterPermissionChange()
     }
 
     private func registerShortcut() throws {
+        hotKeyMonitor.unregister()
+
+        let parsed = try parseShortcut(config.shortcut)
+        if case .singleModifier = parsed, !DirectInput.isAccessibilityTrusted() {
+            return
+        }
+
         try hotKeyMonitor.register(
             shortcutString: config.shortcut,
             onPressed: { [weak self] in
@@ -145,6 +155,14 @@ final class AppCoordinator {
                 }
             }
         )
+    }
+
+    private func refreshShortcutRegistrationAfterPermissionChange() {
+        do {
+            try registerShortcut()
+        } catch {
+            reportError("ショートカット登録に失敗: \(error.localizedDescription)")
+        }
     }
 
     private func handleShortcutPressed() {
@@ -166,8 +184,10 @@ final class AppCoordinator {
 
     private func saveConfig(_ updated: Config) -> Bool {
         do {
-            try configStore.save(updated)
-            config = updated
+            var canonicalUpdated = updated
+            canonicalUpdated.shortcut = canonicalShortcutString(canonicalUpdated.shortcut)
+            try configStore.save(canonicalUpdated)
+            config = canonicalUpdated
             try registerShortcut()
             return true
         } catch {

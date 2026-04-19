@@ -65,7 +65,10 @@ struct SettingsView: View {
                 }
 
                 Section("入力") {
-                    TextField("Shortcut (例: Cmd+J)", text: binding(\.shortcut))
+                    TextField("Shortcut (例: RightOption / Cmd+J)", text: binding(\.shortcut))
+                    Text("右Option単体で起動したい場合は `RightOption` を指定します。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
                     Picker("録音モード", selection: binding(\.recordingMode)) {
                         ForEach(recordingModes, id: \.self) { mode in
                             Text(recordingModeLabel(mode)).tag(mode)

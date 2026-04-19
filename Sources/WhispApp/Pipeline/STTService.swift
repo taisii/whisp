@@ -545,7 +545,7 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
             return nil
         }
         let targetSampleRate = STTPresetCatalog.targetInputSampleRate(for: config.sttPreset)
-        let client = transcriber(for: config.sttPreset)
+        let client = transcriber(for: config.sttPreset, language: language)
         return AppleSpeechSegmentingSession(
             transcriber: client,
             sampleRate: targetSampleRate,
@@ -565,7 +565,7 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         streamingSession: (any STTStreamingSession)?,
         logger: @escaping PipelineEventLogger
     ) async throws -> STTTranscriptionResult {
-        let sourcePrefix = sourcePrefix(for: config.sttPreset)
+        let sourcePrefix = sourcePrefix(for: config.sttPreset, language: language)
 
         if let streamingSession {
             let finalizeRequestedAt = Date()
@@ -628,7 +628,7 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
             "audio_bytes": String(recording.pcmData.count),
             "request_sent_at_ms": epochMsString(requestSentAt),
         ])
-        let client = transcriber(for: config.sttPreset)
+        let client = transcriber(for: config.sttPreset, language: language)
         let stt = try await client.transcribe(
             sampleRate: recording.sampleRate,
             audio: recording.pcmData,
@@ -658,9 +658,8 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         return STTTranscriptionResult(transcript: stt.transcript, usage: stt.usage, trace: trace)
     }
 
-    private func transcriber(for preset: STTPresetID) -> any AppleSpeechTranscriber {
-        let spec = STTPresetCatalog.spec(for: preset)
-        switch spec.appleModel {
+    private func transcriber(for preset: STTPresetID, language: String?) -> any AppleSpeechTranscriber {
+        switch resolvedAppleModel(for: preset, language: language) {
         case .speechTranscriber:
             return speechTranscriberClient
         case .dictationTranscriber:
@@ -670,9 +669,8 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         }
     }
 
-    private func sourcePrefix(for preset: STTPresetID) -> String {
-        let spec = STTPresetCatalog.spec(for: preset)
-        switch spec.appleModel {
+    private func sourcePrefix(for preset: STTPresetID, language: String?) -> String {
+        switch resolvedAppleModel(for: preset, language: language) {
         case .speechTranscriber:
             return "apple_speech_transcriber"
         case .dictationTranscriber:
@@ -680,6 +678,25 @@ final class AppleSpeechSTTService: STTService, @unchecked Sendable {
         case .recognizer, .none:
             return "apple_speech_recognizer"
         }
+    }
+
+    private func resolvedAppleModel(for preset: STTPresetID, language: String?) -> AppleSTTModel? {
+        let requestedModel = STTPresetCatalog.spec(for: preset).appleModel
+        if requestedModel == .speechTranscriber, isEnglishLanguage(language) {
+            // On current macOS 26.2, SpeechTranscriber(en-US) exposes no compatible
+            // audio formats, while DictationTranscriber(en-US) works reliably.
+            return .dictationTranscriber
+        }
+        return requestedModel
+    }
+
+    private func isEnglishLanguage(_ language: String?) -> Bool {
+        guard let normalized = language?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty
+        else {
+            return false
+        }
+        return normalized == "en" || normalized.hasPrefix("en-") || normalized.hasPrefix("en_")
     }
 }
 

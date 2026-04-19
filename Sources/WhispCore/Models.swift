@@ -407,7 +407,7 @@ public struct Config: Codable, Equatable, Sendable {
 
     public init(
         apiKeys: APIKeys = APIKeys(),
-        shortcut: String = "Cmd+J",
+        shortcut: String = defaultShortcutString,
         inputLanguage: String = "ja",
         recordingMode: RecordingMode = .toggle,
         sttPreset: STTPresetID = .deepgramStream,
@@ -432,7 +432,7 @@ public struct Config: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         apiKeys = container.decodeLossy(APIKeys.self, forKey: .apiKeys, default: APIKeys())
-        shortcut = container.decodeLossy(String.self, forKey: .shortcut, default: "Cmd+J")
+        shortcut = container.decodeLossy(String.self, forKey: .shortcut, default: defaultShortcutString)
         inputLanguage = container.decodeLossy(String.self, forKey: .inputLanguage, default: "ja")
         recordingMode = container.decodeLossy(RecordingMode.self, forKey: .recordingMode, default: .toggle)
         sttPreset = container.decodeLossy(STTPresetID.self, forKey: .sttPreset, default: .deepgramStream)

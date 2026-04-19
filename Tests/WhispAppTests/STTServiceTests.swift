@@ -401,6 +401,35 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(dictationCalls, 0)
     }
 
+    func testAppleSpeechServiceRoutesEnglishSpeechTranscriberRESTToDictationClient() async throws {
+        let recognizer = FakeAppleSpeechTranscriber(transcript: "recognizer", usage: nil)
+        let speech = FakeAppleSpeechTranscriber(transcript: "speech", usage: nil)
+        let dictation = FakeAppleSpeechTranscriber(transcript: "dictation-en", usage: nil)
+        let service = AppleSpeechSTTService(
+            recognizerClient: recognizer,
+            speechTranscriberClient: speech,
+            dictationTranscriberClient: dictation
+        )
+
+        let result = try await service.transcribe(
+            config: config(sttPreset: .appleSpeechTranscriberRest),
+            recording: recording,
+            language: "en",
+            runID: "run-apple-speech-transcriber-rest-en",
+            streamingSession: nil,
+            logger: { _, _ in }
+        )
+
+        XCTAssertEqual(result.transcript, "dictation-en")
+        XCTAssertEqual(result.trace.attempts[0].source, "apple_dictation_transcriber_rest")
+        let recognizerCalls = await recognizer.callCount()
+        let speechCalls = await speech.callCount()
+        let dictationCalls = await dictation.callCount()
+        XCTAssertEqual(recognizerCalls, 0)
+        XCTAssertEqual(speechCalls, 0)
+        XCTAssertEqual(dictationCalls, 1)
+    }
+
     func testAppleSpeechServiceRoutesDictationRESTToDedicatedClient() async throws {
         let recognizer = FakeAppleSpeechTranscriber(transcript: "recognizer", usage: nil)
         let speech = FakeAppleSpeechTranscriber(transcript: "speech", usage: nil)
@@ -610,6 +639,36 @@ final class STTServiceTests: XCTestCase {
         XCTAssertEqual(startCalls, 1)
         XCTAssertEqual(finishCalls, 1)
         XCTAssertEqual(logCollector.count(for: "stt_stream_connected"), 1)
+    }
+
+    func testAppleSpeechStartStreamingSessionRoutesEnglishSpeechTranscriberToDictationClient() async throws {
+        let recognizer = FakeAppleSpeechTranscriber(transcript: "recognizer", usage: nil)
+        let speech = FakeAppleSpeechTranscriber(transcript: "speech", usage: nil)
+        let dictation = FakeAppleSpeechTranscriber(transcript: "dictation", usage: nil)
+        let service = AppleSpeechSTTService(
+            recognizerClient: recognizer,
+            speechTranscriberClient: speech,
+            dictationTranscriberClient: dictation
+        )
+
+        let session = service.startStreamingSessionIfNeeded(
+            config: config(sttPreset: .appleSpeechTranscriberStream),
+            runID: "run-apple-builder-en",
+            language: "en",
+            logger: { _, _ in },
+            onSegmentCommitted: nil
+        )
+
+        XCTAssertNotNil(session)
+        session?.submit(chunk: Data(repeating: 1, count: 320))
+        _ = try await session?.finish()
+
+        let recognizerStarts = await recognizer.streamingStartCallCount()
+        let speechStarts = await speech.streamingStartCallCount()
+        let dictationStarts = await dictation.streamingStartCallCount()
+        XCTAssertEqual(recognizerStarts, 0)
+        XCTAssertEqual(speechStarts, 0)
+        XCTAssertEqual(dictationStarts, 1)
     }
 
     func testAppleSpeechStartStreamingSessionReturnsNilForDirectAudioModel() {

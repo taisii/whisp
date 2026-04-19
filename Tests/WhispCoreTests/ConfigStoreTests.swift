@@ -81,7 +81,7 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(loaded.apiKeys.deepgram, "dg")
         XCTAssertEqual(loaded.apiKeys.gemini, "gm")
         XCTAssertEqual(loaded.apiKeys.openai, "oa")
-        XCTAssertEqual(loaded.shortcut, "Cmd+J")
+        XCTAssertEqual(loaded.shortcut, defaultShortcutString)
         XCTAssertEqual(loaded.inputLanguage, "ja")
         XCTAssertEqual(loaded.recordingMode, .toggle)
         XCTAssertEqual(loaded.llmModel, .gpt5Nano)
@@ -122,6 +122,34 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(loaded.context.visionMode, .saveOnly)
     }
 
+    func testLoadCanonicalizesRightOptionAlias() throws {
+        let path = tempFile("config.json")
+        let json = """
+        {
+          "apiKeys" : {},
+          "appPromptRules" : [],
+          "context" : {
+            "visionEnabled" : false,
+            "visionMode" : "save_only"
+          },
+          "inputLanguage" : "ja",
+          "llmModel" : "gpt-5-nano",
+          "recordingMode" : "toggle",
+          "shortcut" : "right option",
+          "sttPreset" : "deepgram_stream"
+        }
+        """
+        guard let data = json.data(using: .utf8) else {
+            XCTFail("JSON文字列のエンコードに失敗")
+            return
+        }
+        try data.write(to: path)
+
+        let store = try ConfigStore(path: path)
+        let loaded = try store.load()
+        XCTAssertEqual(loaded.shortcut, defaultShortcutString)
+    }
+
     func testLossyDecodeKeepsValidSTTSegmentationValues() throws {
         let path = tempFile("config.json")
         let json = """
@@ -157,5 +185,56 @@ final class ConfigStoreTests: XCTestCase {
         XCTAssertEqual(loaded.sttSegmentation.maxSegmentMs, 11_000)
         XCTAssertEqual(loaded.sttSegmentation.preRollMs, 150)
         XCTAssertEqual(loaded.sttSegmentation.livePreviewEnabled, true)
+    }
+
+    func testSavePreservesUnknownTopLevelAndNestedKeys() throws {
+        let path = tempFile("config.json")
+        let original = """
+        {
+          "apiKeys" : {
+            "values" : {
+              "deepgram" : "dg"
+            },
+            "legacyProvider" : "keep-me"
+          },
+          "appPromptRules" : [],
+          "context" : {
+            "visionEnabled" : true,
+            "visionMode" : "save_only",
+            "extraMode" : "legacy"
+          },
+          "customSection" : {
+            "enabled" : true
+          },
+          "inputLanguage" : "ja",
+          "llmModel" : "gpt-5-nano",
+          "recordingMode" : "toggle",
+          "shortcut" : "Cmd+J",
+          "sttPreset" : "deepgram_stream"
+        }
+        """
+        guard let originalData = original.data(using: .utf8) else {
+            XCTFail("JSON文字列のエンコードに失敗")
+            return
+        }
+        try originalData.write(to: path)
+
+        let store = try ConfigStore(path: path)
+        var config = try store.load()
+        config.inputLanguage = "en"
+        config.recordingMode = .pushToTalk
+
+        try store.save(config)
+
+        let savedData = try Data(contentsOf: path)
+        let savedText = String(decoding: savedData, as: UTF8.self)
+        XCTAssertTrue(savedText.contains("\"customSection\""))
+        XCTAssertTrue(savedText.contains("\"legacyProvider\""))
+        XCTAssertTrue(savedText.contains("\"extraMode\""))
+
+        let reloaded = try store.load()
+        XCTAssertEqual(reloaded.inputLanguage, "en")
+        XCTAssertEqual(reloaded.recordingMode, .pushToTalk)
+        XCTAssertEqual(reloaded.apiKeys.deepgram, "dg")
     }
 }
